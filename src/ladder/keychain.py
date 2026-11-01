@@ -28,3 +28,8 @@ def get_or_create_dcss_password(username: str) -> tuple[str, bool]:
     password = _secrets.token_urlsafe(24)
     set(account, password)
     return password, True
+
+
+def get_item(service: str, account: str | None) -> str | None:
+    """Any Keychain generic password, for profiles that name their own item."""
+    return keyring.get_password(service, account or "")

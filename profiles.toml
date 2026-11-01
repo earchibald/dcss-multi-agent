@@ -1,0 +1,14 @@
+# Model profiles and which tier uses which. No secrets here: each profile names
+# the macOS Keychain item that holds its key.
+#
+# Styles: "systemone" (TypeSafe), "anthropic" (Messages API), "openai" (Chat
+# Completions-compatible). Only systemone is wired up so far.
+
+[profiles.typesafe]
+style = "systemone"
+base_url = "https://api.typesafe.ai"
+model = "jev-latest"
+keychain = { service = "dcss-ladder", account = "typesafe" }
+
+[tiers]
+jev = "typesafe"

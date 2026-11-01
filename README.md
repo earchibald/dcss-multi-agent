@@ -41,6 +41,23 @@ Each run writes `runs/<timestamp>/`:
   `ladder` = our detector), decision type, details, a state snapshot and the last messages
 - `summary.json`: games, and counts by kind, source and place
 
+## Jev routing (offline)
+
+`profiles.toml` maps tiers to model profiles; each profile names a Keychain item, never a key.
+Jev uses `dcss-ladder / typesafe`. Add your TypeSafe key once (prompts for the value):
+
+```bash
+security add-generic-password -s dcss-ladder -a typesafe -w
+```
+
+Then run Jev over a logged run and see where the routing policy sends each interrupt:
+
+```bash
+uv run ladder jev-eval runs/<dir> --dry-run      # plan only: requests built, rule 1 applied, no calls
+uv run ladder jev-eval runs/<dir> --limit 40     # ask Jev; answers saved to runs/<dir>/jev.jsonl
+uv run ladder retune runs/<dir> --threat 1.5     # re-route stored answers, no new calls, plus a threshold sweep
+```
+
 ## Test
 
 ```bash
