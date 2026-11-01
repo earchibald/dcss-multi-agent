@@ -1,0 +1,29 @@
+[project]
+name = "dcss-ladder"
+version = "0.1.0"
+description = "Decision-ladder DCSS player: Reflex prototype (walks, stops, logs interrupts)"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "dcss-api==0.4.1",
+    "keyring>=25",
+]
+
+[project.scripts]
+ladder = "ladder.cli:main"
+
+[dependency-groups]
+dev = ["pytest>=8"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/ladder"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "integration: needs the DCSS webtiles server from docker-compose.yml (ws://localhost:8080)",
+]
+addopts = "-m 'not integration'"

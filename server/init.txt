@@ -1,0 +1,3 @@
+# Default rc for new webtiles accounts. The ladder client replaces this with
+# ladder/crawlrc.txt at the start of each run.
+save_dir = /data/saves

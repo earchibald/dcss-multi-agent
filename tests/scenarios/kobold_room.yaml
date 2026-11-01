@@ -1,0 +1,26 @@
+# One lit room: a kobold in view to the east, a scroll to the north-east, downstairs south.
+options:
+  default_feature: "floor"
+
+levels:
+  - level:
+      name: D:1
+      features:
+        - '< = exit_dungeon'
+        - '> = stone_stairs_down_i'
+        - '# = rock_wall'
+        - '. = floor'
+      items:
+        - 'x = Scroll of identify'
+      monsters:
+        - 'k = Kobold'
+      map: |-
+          #############
+          #...........#
+          #.<.......x.#
+          #...........#
+          #.@.......k.#
+          #...........#
+          #.....>.....#
+          #...........#
+          #############

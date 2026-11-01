@@ -1,0 +1,25 @@
+# crawlrc shipped by the ladder. Part of the Reflex tier is configuration:
+# DCSS's own explore/travel/rest stops do most of the interrupt detection.
+# Option reference: crawl-ref/docs/options_guide.txt
+
+save_dir = /data/saves
+
+# Prompts the bot has no use for
+show_more = false
+default_manual_training = false
+
+# No animation delays; the bot doesn't watch
+travel_delay = -1
+explore_delay = -1
+rest_delay = -1
+
+# Native explore stops (these are the defaults, stated explicitly)
+explore_stop = items,stairs,shops,altars,portals,branches,runed_doors
+explore_stop += greedy_pickup_smart,greedy_visited_item_stack
+
+# Message-shaped events that should stop travel and rest
+runrest_stop_message += god:wrath finds you
+runrest_stop_message += LOW HITPOINT WARNING
+runrest_stop_message += You feel a little less (mighty|clever|agile)
+runrest_stop_message += trap
+hp_warning = 25

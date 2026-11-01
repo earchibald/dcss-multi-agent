@@ -1,0 +1,17 @@
+services:
+  dcss:
+    build: ./server
+    image: dcss-ladder/webtiles:0.34.0
+    ports:
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - dcss-data:/data
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/')"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+volumes:
+  dcss-data:
