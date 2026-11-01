@@ -58,6 +58,25 @@ uv run ladder jev-eval runs/<dir> --limit 40     # ask Jev; answers saved to run
 uv run ladder retune runs/<dir> --threat 1.5     # re-route stored answers, no new calls, plus a threshold sweep
 ```
 
+## Models
+
+`profiles.toml` puts Tactics and Strategy on `claude-opus-5` through the Anthropic adapter
+(official SDK, server-side refusal fallbacks on). `src/ladder/llm.py` also has an
+OpenAI-compatible adapter (official OpenAI SDK, any base URL); the DeepSeek profiles are
+spares that show both styles. Keys go in Keychain the same way:
+
+```bash
+security add-generic-password -s dcss-ladder -a anthropic -w
+security add-generic-password -s dcss-ladder -a deepseek -w     # only if you use the spares
+```
+
+## Who decides
+
+`src/ladder/authority.py`: in assisted mode the player decides every decision type that
+isn't deferred; in autonomous mode Strategy decides everything, pinned types included.
+The idle switch hands a waiting decision to Strategy after a whole number of minutes
+(`0` = never) and flips the session to autonomous.
+
 ## Test
 
 ```bash
@@ -79,6 +98,9 @@ Integration tests use their own account (`laddertest`) and dcss-api's scenario b
 | `src/ladder/travel.py` | Stepwise BFS travel, so every step passes through the detectors |
 | `src/ladder/reflex.py` | The loop, plus `StubTiers` (placeholder decisions) |
 | `src/ladder/crawlrc.txt` | The rc file we ship: part of Reflex is DCSS configuration |
+| `src/ladder/jev.py`, `routing.py`, `jeveval.py` | Jev questions, the routing rules, and the offline evaluator |
+| `src/ladder/llm.py`, `profiles.py` | Anthropic and OpenAI-compatible adapters; profiles with capability flags |
+| `src/ladder/authority.py` | Assisted vs autonomous decisions and the idle switch |
 
 ## Notes from building it
 

@@ -23,6 +23,9 @@ class Profile:
     model: str
     keychain_service: str | None = None
     keychain_account: str | None = None
+    supports: tuple[str, ...] = ()
+    effort: str | None = None
+    fallbacks: str | None = None
 
     def api_key(self) -> str | None:
         """The profile's key from Keychain. Local endpoints may have none."""
@@ -45,10 +48,19 @@ def load(path: str | Path = DEFAULT_PATH) -> tuple[dict[str, Profile], dict[str,
         kc = p.get("keychain") or {}
         profiles[name] = Profile(name=name, style=p["style"], base_url=p["base_url"].rstrip("/"),
                                  model=p["model"], keychain_service=kc.get("service"),
-                                 keychain_account=kc.get("account"))
+                                 keychain_account=kc.get("account"), supports=tuple(p.get("supports", ())),
+                                 effort=p.get("effort"), fallbacks=p.get("fallbacks"))
     return profiles, dict(data.get("tiers", {}))
+
+
+# What each LLM tier needs from its profile (see llm.CAPABILITIES)
+TIER_NEEDS = {"tactics": {"json"}, "strategy": {"json"}}
 
 
 def for_tier(tier: str, path: str | Path = DEFAULT_PATH) -> Profile:
     profiles, tiers = load(path)
-    return profiles[tiers[tier]]
+    profile = profiles[tiers[tier]]
+    if tier in TIER_NEEDS:
+        from .llm import check
+        check(profile, TIER_NEEDS[tier])
+    return profile

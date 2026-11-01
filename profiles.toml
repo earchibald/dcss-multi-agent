@@ -1,8 +1,9 @@
 # Model profiles and which tier uses which. No secrets here: each profile names
-# the macOS Keychain item that holds its key.
+# the macOS Keychain item that holds its key (service, account).
 #
-# Styles: "systemone" (TypeSafe), "anthropic" (Messages API), "openai" (Chat
-# Completions-compatible). Only systemone is wired up so far.
+# style:    "systemone" (TypeSafe), "anthropic" (Messages API via the Anthropic SDK),
+#           "openai" (Chat Completions-compatible, via the OpenAI SDK)
+# supports: tools, json_schema, json_object, effort, fallbacks  (see ladder/llm.py)
 
 [profiles.typesafe]
 style = "systemone"
@@ -10,5 +11,30 @@ base_url = "https://api.typesafe.ai"
 model = "jev-latest"
 keychain = { service = "dcss-ladder", account = "typesafe" }
 
+[profiles.anthropic]
+style = "anthropic"
+base_url = "https://api.anthropic.com"
+model = "claude-opus-5"
+keychain = { service = "dcss-ladder", account = "anthropic" }
+supports = ["tools", "json_schema", "effort", "fallbacks"]
+fallbacks = "default"          # re-run a refused request on Anthropic's recommended fallback model
+
+# Spares: the same DeepSeek key reaches either API style.
+[profiles.deepseek-oai]
+style = "openai"
+base_url = "https://api.deepseek.com"
+model = "deepseek-chat"
+keychain = { service = "dcss-ladder", account = "deepseek" }
+supports = ["tools", "json_object"]
+
+[profiles.deepseek-anth]
+style = "anthropic"
+base_url = "https://api.deepseek.com/anthropic"
+model = "deepseek-chat"
+keychain = { service = "dcss-ladder", account = "deepseek" }
+supports = ["tools"]
+
 [tiers]
 jev = "typesafe"
+tactics = "anthropic"
+strategy = "anthropic"

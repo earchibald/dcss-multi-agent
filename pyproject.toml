@@ -4,8 +4,10 @@ version = "0.1.0"
 description = "Decision-ladder DCSS player: Reflex prototype (walks, stops, logs interrupts)"
 requires-python = ">=3.12,<3.13"
 dependencies = [
+    "anthropic>=2.3.0",
     "dcss-api==0.4.1",
     "keyring>=25",
+    "openai>=3.42.1",
 ]
 
 [project.scripts]
