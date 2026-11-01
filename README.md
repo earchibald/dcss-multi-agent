@@ -3,10 +3,11 @@
 A decision-ladder player for Dungeon Crawl Stone Soup. Concept and open questions:
 [DCSS Decision Ladder](https://claude.ai/artifact/Ya5MnWtmtUYGAQGQV9tATv).
 
-This repo currently holds the **Reflex tier prototype**: a loop that walks, stops on
-every interrupt, and logs it. No models yet. A small deterministic stub stands in for
-Jev, Tactics and Strategy so games keep moving; when it has no safe answer it ends the
-game and logs an `escalation`, which marks where the higher tiers will take over.
+This repo currently holds the **Reflex tier prototype** and a first **web cockpit**.
+Reflex walks, stops on every interrupt, and logs it. A small deterministic stub stands
+in for Tactics and Strategy so games keep moving; when it has no safe answer it raises
+an `escalation`, which marks where the higher tiers will take over. Jev runs live in the
+cockpit as shadow routing (it shows where each interrupt would go; Reflex still acts).
 
 ## Setup
 
@@ -39,7 +40,36 @@ uv run ladder spike --record ...    # also saves raw protocol messages per game
 Each run writes `runs/<timestamp>/`:
 - `interrupts.jsonl`: one line per interrupt, with kind, source (`dcss` = DCSS's own stop,
   `ladder` = our detector), decision type, details, a state snapshot and the last messages
-- `summary.json`: games, and counts by kind, source and place
+- `decisions.jsonl`: one line per decision point: options, recommendation, choice, who decided
+- `summary.json`: games, and counts by kind, source, place and decider
+
+## Cockpit
+
+```bash
+uv run ladder cockpit --seed 1 --max-steps 300 --open
+uv run ladder cockpit --mode autonomous --idle-minutes 10 --jev
+```
+
+A local web app on `http://127.0.0.1:8090/`, beside webtiles (its "Watch in webtiles"
+link spectates the bot). It shows:
+- **Escalation stream**: every interrupt as it happens, with the tier the routing policy
+  sends it to. With `--jev`, Jev is asked about each one in the background and the row
+  shows its answers and latency; without it, only decision types and bookkeeping are routed.
+- **Your call**: decision points (stairs, altars, uniques, the level-up stat prompt,
+  escalations) wait for you when `Authority` says the player decides. Each card offers
+  only what Reflex can carry out, marks the stub's recommendation, and has two ways out:
+  *Take the wheel* (stop, game left saved) and *End game*. Number keys answer.
+- **Control**: Assisted / Autonomous, the idle switch (whole minutes, `0` = never, with a
+  countdown on the card), *Hold at next event*, and *Take the wheel*.
+
+To take the wheel, log in to webtiles as the bot with the password from Keychain
+(`security find-generic-password -s dcss-ladder -a dcss-account/ladderbot -w`). The
+next `ladder cockpit` or `ladder spike` resumes the saved game.
+
+The game runs in a child process: dcss-api's `read_until` blocks with no timeout and
+holds the GIL, so a server in the same process would freeze with it. If the game goes
+quiet for 45 s while nothing is waiting on you, the stream says so; Ctrl-C leaves the
+game saved and the next start resumes it. Decisions are logged to `runs/<dir>/decisions.jsonl`.
 
 ## Jev routing (offline)
 
@@ -96,7 +126,10 @@ Integration tests use their own account (`laddertest`) and dcss-api's scenario b
 | `src/ladder/state.py` | Folds webtiles' partial `player`/`map`/`msgs` updates into a game state and snapshot |
 | `src/ladder/interrupts.py` | Native-stop classification and our detectors: HP slope, status change, no progress, prompts, junctions |
 | `src/ladder/travel.py` | Stepwise BFS travel, so every step passes through the detectors |
-| `src/ladder/reflex.py` | The loop, plus `StubTiers` (placeholder decisions) |
+| `src/ladder/reflex.py` | The loop, `Hooks` (how it reaches the tiers and the cockpit), and `StubTiers` (placeholder decisions) |
+| `src/ladder/decisions.py` | Decision requests: the options Reflex can carry out, the stub's recommendation, Authority's context |
+| `src/ladder/games.py` | Plays a run of games; shared by `spike` and the cockpit |
+| `src/ladder/cockpit.py`, `static/` | The cockpit: game process, hub, HTTP + server-sent events on 127.0.0.1 |
 | `src/ladder/crawlrc.txt` | The rc file we ship: part of Reflex is DCSS configuration |
 | `src/ladder/jev.py`, `routing.py`, `jeveval.py` | Jev questions, the routing rules, and the offline evaluator |
 | `src/ladder/llm.py`, `profiles.py` | Anthropic and OpenAI-compatible adapters; profiles with capability flags |

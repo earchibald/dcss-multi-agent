@@ -1,0 +1,127 @@
+:root {
+  --bg:#EDF0F3; --surface:#F9FAFB; --sunk:#E3E7EC; --ink:#18202B; --muted:#586374; --line:#CDD4DD;
+  --reflex:#5F6B7C; --jev:#0B7F74; --tactics:#A8650F; --strategy:#6445B8; --player:#B8323A;
+  --reflex-bg:#E4E8ED; --jev-bg:#DCEFEC; --tactics-bg:#F4E8D6; --strategy-bg:#E8E2F6; --player-bg:#F6E0E1;
+  --ok:#2F7D4A; --warn:#B8323A;
+  --body: system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: ui-monospace, "SF Mono", Menlo, monospace;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg:#11151B; --surface:#181E26; --sunk:#0D1015; --ink:#E3E8EF; --muted:#97A2B2; --line:#2B333F;
+    --reflex:#A3AEBD; --jev:#3CC4B5; --tactics:#E3A04A; --strategy:#A88CF0; --player:#F06B72;
+    --reflex-bg:#232A34; --jev-bg:#12302D; --tactics-bg:#33260F; --strategy-bg:#271F3D; --player-bg:#3A1A1D;
+    --ok:#5CC283; --warn:#F06B72;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg:#11151B; --surface:#181E26; --sunk:#0D1015; --ink:#E3E8EF; --muted:#97A2B2; --line:#2B333F;
+  --reflex:#A3AEBD; --jev:#3CC4B5; --tactics:#E3A04A; --strategy:#A88CF0; --player:#F06B72;
+  --reflex-bg:#232A34; --jev-bg:#12302D; --tactics-bg:#33260F; --strategy-bg:#271F3D; --player-bg:#3A1A1D;
+  --ok:#5CC283; --warn:#F06B72;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.5 var(--body); padding: 0 16px 48px; }
+h1, h2, h3 { margin: 0; line-height: 1.2; }
+h1 { font-size: 1.15rem; }
+h3 { font-size: 1.05rem; }
+p { margin: 0; }
+a { color: var(--strategy); }
+button, input { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--strategy); outline-offset: 2px; }
+.mono { font-family: var(--mono); font-size: .88em; }
+.muted { color: var(--muted); }
+.small { font-size: .86rem; }
+.lbl { font: 600 .7rem/1 var(--mono); letter-spacing: .1em; text-transform: uppercase; color: var(--muted); }
+.k { color: var(--muted); font-size: .8rem; }
+.row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.between { justify-content: space-between; }
+
+.top { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px 16px;
+       padding: 16px 0; border-bottom: 1px solid var(--line); margin-bottom: 16px; }
+.brand { display: flex; align-items: center; gap: 10px; }
+.glyphs { display: flex; gap: 3px; }
+.glyphs b { width: 22px; height: 22px; display: grid; place-items: center; border-radius: 4px; font: 700 12px var(--mono);
+            color: var(--surface); background: var(--reflex); }
+.glyphs b[data-t=jev] { background: var(--jev); } .glyphs b[data-t=tactics] { background: var(--tactics); }
+.glyphs b[data-t=strategy] { background: var(--strategy); } .glyphs b[data-t=player] { background: var(--player); }
+.meta { display: flex; gap: 8px 14px; align-items: center; flex-wrap: wrap; font-size: .88rem; }
+.pill { padding: 2px 10px; border-radius: 999px; background: var(--sunk); font: 600 .78rem var(--mono); }
+.pill[data-s=running] { background: var(--jev-bg); color: var(--jev); }
+.pill[data-s=error] { background: var(--player-bg); color: var(--player); }
+.pill[data-s=finished], .pill[data-s=stopping] { background: var(--tactics-bg); color: var(--tactics); }
+
+.grid { display: grid; gap: 16px; grid-template-columns: minmax(0, 1fr); }
+@media (min-width: 960px) {
+  .grid { grid-template-columns: minmax(0, 5fr) minmax(0, 6fr); align-items: start; }
+  .stream-panel { position: sticky; top: 12px; }
+  .stream { max-height: calc(100vh - 160px); overflow-y: auto; }
+}
+.col { display: grid; gap: 16px; align-content: start; min-width: 0; }
+.panel { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 14px; display: grid; gap: 10px; }
+
+.dial { display: inline-flex; border: 1.5px solid var(--line); border-radius: 6px; overflow: hidden; }
+.dial button { border: 0; background: none; padding: 6px 14px; cursor: pointer; font-weight: 600; }
+.dial button + button { border-left: 1.5px solid var(--line); }
+.dial button[aria-pressed=true] { background: var(--ink); color: var(--bg); }
+.badge { font: 600 .72rem var(--mono); color: var(--tactics); background: var(--tactics-bg); padding: 2px 8px; border-radius: 4px; }
+#idle { width: 4.5em; padding: 4px 6px; border: 1.5px solid var(--line); border-radius: 4px; background: var(--bg); }
+button.ghost, .opts button, .exits button { border: 1.5px solid var(--line); background: var(--bg); border-radius: 5px;
+                padding: 6px 12px; cursor: pointer; }
+button.ghost:hover, .opts button:hover { border-color: var(--ink); }
+button.ghost[aria-pressed=true] { background: var(--tactics-bg); border-color: var(--tactics); color: var(--tactics); }
+.toast { min-height: 1.2em; font-size: .85rem; color: var(--warn); }
+
+.card { background: var(--surface); border: 2px solid var(--player); border-radius: 8px; padding: 14px; display: grid; gap: 10px; }
+.opts { display: grid; gap: 6px; }
+.opts button { text-align: left; display: flex; justify-content: space-between; gap: 12px; align-items: center; padding: 10px 12px; }
+.opts button.rec { border-color: var(--strategy); }
+.opts .n { font: 600 .75rem var(--mono); color: var(--muted); margin-right: 8px; }
+.rec-tag { font: 600 .72rem var(--mono); color: var(--strategy); white-space: nowrap; }
+#card-exits button { border: 1px dashed var(--line); background: none; border-radius: 5px; padding: 4px 10px; cursor: pointer; font-size: .85rem; }
+
+.stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+.stats div { display: grid; }
+.stats .v { font: 600 1rem var(--mono); }
+.hp { display: grid; grid-template-columns: auto 1fr auto; gap: 10px; align-items: center; }
+.bar { height: 8px; background: var(--sunk); border-radius: 4px; overflow: hidden; }
+.bar i { display: block; height: 100%; width: 0; background: var(--ok); transition: width .3s; }
+.bar i.low { background: var(--warn); }
+.msgs { margin: 0; padding: 8px 10px; list-style: none; background: var(--sunk); border-radius: 6px; min-height: 3em;
+        display: grid; gap: 2px; overflow-wrap: anywhere; }
+
+.list, .stream { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.list li { display: grid; grid-template-columns: 76px minmax(0, 1fr); gap: 8px; align-items: start; padding: 4px 0;
+           border-top: 1px dashed var(--line); font-size: .88rem; }
+.stream li { display: grid; grid-template-columns: 52px 96px minmax(0, 1fr); gap: 8px; align-items: start; padding: 5px 0;
+             border-top: 1px dashed var(--line); font-size: .88rem; }
+.stream li.sep { grid-template-columns: 1fr; color: var(--muted); font: 600 .75rem var(--mono); text-transform: uppercase;
+                 letter-spacing: .06em; padding-top: 10px; }
+.stream li.err { grid-template-columns: 1fr; color: var(--warn); white-space: pre-wrap; font-family: var(--mono); font-size: .78rem; }
+.stream .turn { font-family: var(--mono); color: var(--muted); font-size: .8rem; }
+.stream .what { overflow-wrap: anywhere; }
+.stream .sub { display: block; color: var(--muted); font-size: .8rem; }
+.dt { font: 600 .72rem var(--mono); color: var(--strategy); }
+.chip { display: inline-block; font: 600 .72rem/1.6 var(--mono); padding: 0 6px; border-radius: 4px; white-space: nowrap;
+        background: var(--reflex-bg); color: var(--reflex); text-align: center; }
+.chip[data-t=jev], .chip[data-t=asking] { background: var(--jev-bg); color: var(--jev); }
+.chip[data-t=tactics] { background: var(--tactics-bg); color: var(--tactics); }
+.chip[data-t=strategy] { background: var(--strategy-bg); color: var(--strategy); }
+.chip[data-t=player] { background: var(--player-bg); color: var(--player); }
+.chip[data-t=error] { background: var(--player-bg); color: var(--warn); }
+.chip[data-t=none] { background: none; color: var(--muted); border: 1px dashed var(--line); }
+.chip[data-t=asking] { animation: pulse 1.2s ease-in-out infinite; }
+@keyframes pulse { 50% { opacity: .45; } }
+@media (prefers-reduced-motion: reduce) { .chip[data-t=asking] { animation: none; } .bar i { transition: none; } }
+.hidden-routine li[data-routine] { display: none; }
+@media (max-width: 520px) {
+  .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .stream li { grid-template-columns: 44px minmax(0, 1fr); }
+  .stream li .chip { grid-column: 2; justify-self: start; }
+  .stream li .what { grid-column: 2; }
+}

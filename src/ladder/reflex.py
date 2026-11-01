@@ -6,13 +6,20 @@ Tactics and Strategy with the simplest deterministic responses that keep a
 game moving, so a run produces interrupt data across several levels. When the
 stub has no safe answer it ends the game and records an escalation: those are
 the cases the real higher tiers exist for.
+
+Decision points (stairs, altars, uniques, the stat prompt, escalations) go
+through `Hooks.decide`. The default hooks take the stub's recommendation, so
+`ladder spike` plays alone; the cockpit's hooks ask Authority, and through it
+the player or Strategy.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
+from . import decisions
 from .conn import ActResult, Connection
+from .decisions import END_GAME, Answer, DecisionRequest
 from .interrupts import Before, Detector, Interrupt
 from .runlog import RunLog
 from .state import MF_STAIR_DOWN, GameState
@@ -31,6 +38,29 @@ class Escalation(Exception):
     reason: str
 
 
+@dataclass
+class GameOver(Exception):
+    """A decision ended the game: `end_game`, or `take_over` (left saved for the player)."""
+    choice: str
+
+
+class Hooks:
+    """How Reflex reaches the tiers above and the cockpit. These defaults play alone."""
+
+    def checkpoint(self) -> bool:
+        """Called before every action; False stops the game where it is."""
+        return True
+
+    def decide(self, request: DecisionRequest) -> Answer:
+        return Answer(request.recommended, "stub", "stub recommendation")
+
+    def on_record(self, record: dict) -> None:
+        pass
+
+    def on_step(self, reflex: "Reflex", action: str) -> None:
+        pass
+
+
 class StubTiers:
     """Placeholder decisions. Every branch here is a job for a real tier later."""
 
@@ -38,13 +68,16 @@ class StubTiers:
         self.fight_hp_floor = fight_hp_floor
         self.rest_below = rest_below
         self.level_explored = False
+        self.fight_anyway = False          # set by a "fight on" answer; lasts until no hostiles are in view
         self.rest_stalled_at: tuple[int, int] | None = None
 
     def next_action(self, state: GameState) -> str:
         hostiles = state.hostiles()
         frac = state.hp / state.hp_max
+        if not hostiles:
+            self.fight_anyway = False
         if hostiles:
-            if frac > self.fight_hp_floor:
+            if frac > self.fight_hp_floor or self.fight_anyway:
                 return "fight"
             raise Escalation(f"hp {state.hp}/{state.hp_max} with hostiles in view: "
                              + ", ".join(m.name for m in hostiles[:3]))
@@ -72,27 +105,45 @@ class StubTiers:
 
 
 class Reflex:
-    def __init__(self, conn: Connection, state: GameState, log: RunLog, game_no: int = 1):
+    def __init__(self, conn: Connection, state: GameState, log: RunLog, game_no: int = 1,
+                 hooks: Hooks | None = None):
         self.conn = conn
         self.state = state
         self.log = log
         self.game_no = game_no
         self.detector = Detector()
         self.stub = StubTiers()
+        self.hooks = hooks or Hooks()
         self.steps = 0
+        self.decisions = 0
         self.escalation: str | None = None
 
     def run(self, max_steps: int = 300, max_turns: int = 20000) -> dict:
         start_turn = self.state.turn
-        try:
-            while self.steps < max_steps and self.state.turn - start_turn < max_turns:
-                if self.state.dead:
-                    break
+        ended_by = "limit"
+        while self.steps < max_steps and self.state.turn - start_turn < max_turns:
+            if self.state.dead:
+                break
+            if not self.hooks.checkpoint():
+                ended_by = "stopped"
+                break
+            try:
                 action = self.stub.next_action(self.state)
                 self.step(action)
-        except Escalation as e:
-            self.escalation = e.reason
-            self._record(Interrupt("escalation", "ladder", {"reason": e.reason}), action="stub")
+            except Escalation as e:
+                self._record(Interrupt("escalation", "ladder", {"reason": e.reason}), action="stub")
+                answer = self._ask(decisions.for_escalation(e.reason, self.state, self.stub.level_explored))
+                if answer.choice == "fight_on":
+                    self.stub.fight_anyway = True
+                    continue
+                self.escalation = e.reason
+                ended_by = answer.choice
+                break
+            except GameOver as e:
+                ended_by = e.choice
+                break
+        if self.state.dead:
+            ended_by = "died"
         return {
             "game": self.game_no,
             "steps": self.steps,
@@ -102,6 +153,8 @@ class Reflex:
             "species": self.state.player.get("species"),
             "died": self.state.dead,
             "escalation": self.escalation,
+            "ended_by": ended_by,
+            "decisions": self.decisions,
         }
 
     def step(self, action: str) -> list[Interrupt]:
@@ -117,8 +170,29 @@ class Reflex:
         interrupts = self.detector.detect(before, self.state, action, result.blocking, mode)
         for i in interrupts:
             self._record(i, action)
+        self.hooks.on_step(self, action)
         self.stub.observe(action, before, self.state, interrupts)
+        for i in interrupts:
+            request = decisions.for_interrupt(i, self.state, self.stub.level_explored) if i.decision_type else None
+            if request:
+                self._apply(self._ask(request))
         return interrupts
+
+    def _ask(self, request: DecisionRequest) -> Answer:
+        self.decisions += 1
+        request.id = f"{self.game_no}-{self.steps}-{self.decisions}"
+        answer = self.hooks.decide(request)
+        if answer.choice not in request.keys():
+            answer = Answer(request.recommended, answer.decider, f"'{answer.choice}' isn't an option; took the recommendation")
+        self.log.decision({"game": self.game_no, "step": self.steps, **request.to_dict(),
+                           "choice": answer.choice, "decider": answer.decider, "reason": answer.reason})
+        return answer
+
+    def _apply(self, answer: Answer) -> None:
+        if answer.choice in (END_GAME, decisions.TAKE_OVER):
+            raise GameOver(answer.choice)
+        if answer.choice == "descend":
+            self.stub.level_explored = True    # travel to the stairs, then descend
 
     def _answer_prompts(self, result: ActResult) -> ActResult:
         """Stub answers for prompts that would otherwise wedge the game."""
@@ -127,7 +201,8 @@ class Reflex:
                 return result
             recent = " ".join(self.state.recent_messages(3))
             if result.blocking == "text_input" and "Increase (S)trength" in recent:
-                nxt = self.conn.act("S")          # stat_choice: a Strategy decision later
+                choice = self._ask(decisions.stat_choice(self.state, self.stub.level_explored)).choice
+                nxt = self.conn.act(choice)
             else:
                 nxt = self.conn.act("key_esc")
             nxt.messages = result.messages + nxt.messages
@@ -142,3 +217,4 @@ class Reflex:
         record = {"game": self.game_no, "step": self.steps, "action": action, **interrupt.to_dict(),
                   "snapshot": self.state.snapshot(), "messages": self.state.recent_messages(4)}
         self.log.write(record)
+        self.hooks.on_record(record)

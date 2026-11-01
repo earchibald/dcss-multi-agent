@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from ladder.cli import crawlrc
+from ladder.games import crawlrc
 from ladder.conn import Connection
 from ladder.reflex import Reflex
 from ladder.runlog import RunLog

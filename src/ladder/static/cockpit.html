@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ladder Cockpit</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23B8323A'/%3E%3Ctext x='16' y='23' font-family='monospace' font-size='22' font-weight='700' text-anchor='middle' fill='white'%3E@%3C/text%3E%3C/svg%3E">
+<link rel="stylesheet" href="/cockpit.css">
+<script src="/cockpit.js" defer></script>
+</head>
+<body>
+<header class="top">
+  <div class="brand">
+    <span class="glyphs" aria-hidden="true"><b data-t="reflex">*</b><b data-t="jev">J</b><b data-t="tactics">⚔</b><b data-t="strategy">✦</b><b data-t="player">@</b></span>
+    <h1>Ladder cockpit</h1>
+  </div>
+  <div class="meta">
+    <span id="run-state" class="pill">connecting…</span>
+    <span id="run-dir" class="mono muted"></span>
+    <a id="watch" href="#" target="_blank" rel="noopener">Watch in webtiles ↗</a>
+  </div>
+</header>
+
+<main class="grid">
+  <div class="col">
+    <section class="panel" aria-labelledby="h-control">
+      <h2 id="h-control" class="lbl">Control</h2>
+      <div class="row between">
+        <div class="dial" role="group" aria-label="Who decides">
+          <button type="button" id="mode-assisted" aria-pressed="true">Assisted</button>
+          <button type="button" id="mode-autonomous" aria-pressed="false">Autonomous</button>
+        </div>
+        <span id="idle-badge" class="badge" hidden>switched by idle</span>
+      </div>
+      <p id="mode-note" class="muted small"></p>
+      <form id="idle-form" class="row">
+        <label for="idle">Go autonomous after</label>
+        <input id="idle" type="number" min="0" step="1" inputmode="numeric" value="0">
+        <span class="muted">min idle · 0 = never</span>
+        <button type="submit" class="ghost">Set</button>
+      </form>
+      <div class="row">
+        <button type="button" id="hold" class="ghost">❚❚ Hold at next event</button>
+        <button type="button" id="stop" class="ghost" title="Stop after the current action and leave the game saved for you to play in webtiles">Take the wheel</button>
+      </div>
+      <p id="toast" class="toast" role="status" aria-live="polite"></p>
+    </section>
+
+    <section id="card" class="card" aria-live="assertive" hidden>
+      <div class="row between">
+        <span class="lbl">Your call · <span id="card-type"></span></span>
+        <span id="card-clock" class="muted small mono"></span>
+      </div>
+      <h3 id="card-q"></h3>
+      <p id="card-ctx" class="muted small mono"></p>
+      <div id="card-opts" class="opts"></div>
+      <div id="card-exits" class="row"></div>
+      <p id="card-why" class="muted small"></p>
+    </section>
+
+    <section class="panel" aria-labelledby="h-game">
+      <h2 id="h-game" class="lbl">Game</h2>
+      <div class="stats">
+        <div><span class="k">Place</span><span id="s-place" class="v">–</span></div>
+        <div><span class="k">Turn</span><span id="s-turn" class="v">–</span></div>
+        <div><span class="k">XL</span><span id="s-xl" class="v">–</span></div>
+        <div><span class="k">Step</span><span id="s-step" class="v">–</span></div>
+      </div>
+      <div class="hp"><span class="k">HP</span><div class="bar"><i id="s-hpbar"></i></div><span id="s-hp" class="mono">–</span></div>
+      <p class="small"><span class="k">Reflex is doing</span> <span id="s-action" class="mono">–</span></p>
+      <p class="small"><span class="k">Hostiles</span> <span id="s-hostiles">none in view</span></p>
+      <ol id="s-msgs" class="msgs mono small"></ol>
+    </section>
+
+    <section class="panel" aria-labelledby="h-decisions">
+      <h2 id="h-decisions" class="lbl">Decisions</h2>
+      <p id="decider-counts" class="small muted"></p>
+      <ol id="decisions" class="list"></ol>
+    </section>
+  </div>
+
+  <section class="panel col stream-panel" aria-labelledby="h-stream">
+    <div class="row between">
+      <h2 id="h-stream" class="lbl">Escalation stream</h2>
+      <label class="small muted"><input type="checkbox" id="hide-routine"> hide bookkeeping</label>
+    </div>
+    <p id="tier-counts" class="small muted"></p>
+    <ol id="stream" class="stream"></ol>
+  </section>
+</main>
+</body>
+</html>
