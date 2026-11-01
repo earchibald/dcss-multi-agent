@@ -461,9 +461,17 @@ def watch_url(server: str, user: str) -> str:
     return f"{scheme}://{parts.netloc}/#watch-{user}"
 
 
+def _interrupt(signum, frame):
+    raise KeyboardInterrupt
+
+
 def serve(args: argparse.Namespace, thresholds: Thresholds = Thresholds()) -> None:
     from . import profiles
 
+    faulthandler.register(signal.SIGUSR1)            # `kill -USR1 <pid>` prints every thread's stack
+    # Ctrl-C and SIGTERM both stop cleanly, even when launched with SIGINT ignored (e.g. `cmd &` from a script).
+    signal.signal(signal.SIGINT, signal.default_int_handler)
+    signal.signal(signal.SIGTERM, _interrupt)
     authority = Authority(mode=args.mode, idle_minutes=args.idle_minutes)
     jev = Jev(profiles.for_tier("jev")) if args.jev else None
     parent_end, child_end = mp.Pipe()
