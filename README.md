@@ -97,15 +97,21 @@ Everything else (routine interrupts, status, settings) stays in the cockpit. Cla
 recent events).
 
 ```bash
-claude --dangerously-load-development-channels server:cockpit   # in this repo; approve the warning and the server
-uv run ladder cockpit --seed 1                                   # in another terminal, any time
+bin/claude-cockpit                # = claude --dangerously-load-development-channels server:cockpit; approve the warning
+uv run ladder cockpit --seed 1    # in another terminal, any time
 ```
 
 Channels are a research preview: custom channels aren't on the allowlist, so they need the development flag,
-which works in interactive sessions only (not `-p`). On a Team or Enterprise plan an admin has to enable
-channels. The channel reconnects by itself, so the cockpit can be stopped and started under one coding
-session. The panel shows *listening* while a session is attached; notes are refused when nobody is.
-Point it at another port with `ladder channel --cockpit http://127.0.0.1:<port>` in `.mcp.json`.
+which works in interactive sessions only (not `-p`, the Agent SDK or background sessions), and no setting
+replaces it. On a Team or Enterprise plan an admin has to enable channels. The channel reconnects by itself,
+so the cockpit can be stopped and started under one coding session.
+
+`.claude/settings.json` enables the server and allows its two tools, so every session in the repo can call
+`reply` and `cockpit_state`. Only a session started with the flag hears the cockpit, though: `ladder channel`
+looks at the `claude` process above it and stays off the event stream otherwise, so the panel's *listening*
+means a session that will get your notes. Notes are refused when nobody is listening. One listener is
+enough. `ladder channel --listen always|never` overrides the check; point it at another port with
+`--cockpit http://127.0.0.1:<port>`, both in `.mcp.json`.
 
 ## Jev routing (offline)
 
@@ -168,6 +174,7 @@ Integration tests use their own account (`laddertest`) and dcss-api's scenario b
 | `src/ladder/games.py` | Plays a run of games; shared by `spike` and the cockpit |
 | `src/ladder/cockpit.py`, `static/` | The cockpit: game process, hub, HTTP + server-sent events on 127.0.0.1 |
 | `src/ladder/channel.py`, `.mcp.json` | Claude Code channel: cockpit events into a coding session, `reply` and `cockpit_state` back |
+| `bin/claude-cockpit`, `.claude/settings.json`, `CLAUDE.md` | Start the listening session; the server and its tools enabled for every session; notes for Claude |
 | `src/ladder/crawlrc.txt` | The rc file we ship: part of Reflex is DCSS configuration |
 | `src/ladder/jev.py`, `routing.py`, `jeveval.py` | Jev questions, the routing rules, and the offline evaluator |
 | `src/ladder/llm.py`, `profiles.py` | Anthropic and OpenAI-compatible adapters; profiles with capability flags |
