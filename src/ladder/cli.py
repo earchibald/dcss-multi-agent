@@ -94,6 +94,9 @@ def main() -> None:
     add_threshold_args(p)
     p = sub.add_parser("channel", help="Claude Code channel: push cockpit events into a coding session (stdio MCP)")
     p.add_argument("--cockpit", default="http://127.0.0.1:8090", help="the cockpit to listen to")
+    p.add_argument("--listen", choices=("auto", "always", "never"), default="auto",
+                   help="subscribe to the cockpit's events: auto = only when the Claude Code session above was "
+                        "started with --dangerously-load-development-channels server:cockpit")
     p = sub.add_parser("jev-eval", help="ask Jev about every logged interrupt and route it")
     p.add_argument("run_dir")
     p.add_argument("--limit", type=int, default=None, help="at most this many Jev calls")

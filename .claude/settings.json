@@ -1,0 +1,9 @@
+{
+  "enabledMcpjsonServers": ["cockpit"],
+  "permissions": {
+    "allow": [
+      "mcp__cockpit__cockpit_state",
+      "mcp__cockpit__reply"
+    ]
+  }
+}

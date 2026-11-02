@@ -10,7 +10,7 @@ from http.server import ThreadingHTTPServer
 import pytest
 
 from ladder.authority import Authority
-from ladder.channel import INSTRUCTIONS, Channel, sse, to_channel
+from ladder.channel import INSTRUCTIONS, Channel, hosted_as_channel, sse, to_channel
 from ladder.cockpit import NO_CHANNEL, Hub, make_handler
 
 
@@ -195,3 +195,48 @@ def test_tools_say_when_the_cockpit_is_not_running():
     r = rpc(ch, "tools/call", {"name": "reply", "arguments": {"text": "hello"}})
     assert r["result"]["isError"] and "ladder cockpit" in r["result"]["content"][0]["text"]
     assert rpc(ch, "tools/call", {"name": "cockpit_state"})["result"]["isError"]
+
+
+# --- only a session started with the channel flag counts as listening -------------------
+
+CLAUDE = "/Users/x/.local/bin/claude"
+
+
+def tree(*procs):
+    """A fake process table: pid -> (ppid, argv), walked up from pid 10."""
+    table = {10 + i: (11 + i, argv.split()) for i, argv in enumerate(procs)}
+    return lambda pid: table.get(pid)
+
+
+@pytest.mark.parametrize("argv, heard", [
+    (f"{CLAUDE} --dangerously-load-development-channels server:cockpit", True),
+    (f"{CLAUDE} --dangerously-load-development-channels=server:cockpit", True),
+    (f"{CLAUDE} --dangerously-load-development-channels server:webhook,server:cockpit", True),
+    (f"{CLAUDE} --dangerously-load-development-channels server:webhook", False),
+    (f"{CLAUDE} --resume abc", False),
+    ("claude bg-spare --bg-spare /tmp/spare.sock", False),
+])
+def test_the_nearest_claude_decides(argv, heard):
+    ps = tree("uv run --quiet ladder channel", argv,
+              f"{CLAUDE} --dangerously-load-development-channels server:cockpit")   # a flagged ancestor further up doesn't count
+    assert hosted_as_channel(10, ps) is heard
+
+
+def test_no_claude_above_means_we_cannot_tell():
+    assert hosted_as_channel(10, tree("uv run ladder channel", "/bin/zsh -l")) is None
+    assert hosted_as_channel(10, lambda pid: None) is None
+
+
+def test_a_deaf_session_keeps_its_tools_but_stays_off_the_stream(cockpit):
+    h, srv = cockpit
+    ch = Channel(Out(), f"http://127.0.0.1:{srv.server_address[1]}", retry_max=0.2, heard=False)
+    r = rpc(ch, "initialize", {"protocolVersion": "2025-06-18", "capabilities": {}})
+    assert "was not started with" in r["result"]["instructions"]
+    ch.handle({"jsonrpc": "2.0", "method": "notifications/initialized"})
+    try:
+        time.sleep(0.3)
+        assert h.channels == 0 and ch.watcher is None
+        assert h.note("anyone there?", "player") == NO_CHANNEL
+        assert "isError" not in rpc(ch, "tools/call", {"name": "reply", "arguments": {"text": "tools still work"}})["result"]
+    finally:
+        ch.stopping.set()
