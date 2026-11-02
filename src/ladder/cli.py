@@ -85,6 +85,9 @@ def main() -> None:
     p = sub.add_parser("cockpit", help="play with the web cockpit: live stream, decisions, mode and idle switch")
     add_game_args(p)
     p.add_argument("--port", type=int, default=8090, help="cockpit port on 127.0.0.1")
+    p.add_argument("--play-port", type=int, default=None,
+                   help="port of the proxy you play webtiles through, which records your keys "
+                        "(default: --port + 10; 0 = none)")
     p.add_argument("--mode", choices=("assisted", "autonomous"), default="assisted")
     p.add_argument("--idle-minutes", type=int, default=0, help="go autonomous after this many idle minutes; 0 = never")
     p.add_argument("--jev", action="store_true", help="also ask Jev about each interrupt and show its route (shadow)")
@@ -94,6 +97,9 @@ def main() -> None:
     add_threshold_args(p)
     p = sub.add_parser("channel", help="Claude Code channel: push cockpit events into a coding session (stdio MCP)")
     p.add_argument("--cockpit", default="http://127.0.0.1:8090", help="the cockpit to listen to")
+    p.add_argument("--listen", choices=("auto", "always", "never"), default="auto",
+                   help="subscribe to the cockpit's events: auto = only when the Claude Code session above was "
+                        "started with --dangerously-load-development-channels server:cockpit")
     p = sub.add_parser("jev-eval", help="ask Jev about every logged interrupt and route it")
     p.add_argument("run_dir")
     p.add_argument("--limit", type=int, default=None, help="at most this many Jev calls")

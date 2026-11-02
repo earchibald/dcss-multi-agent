@@ -1,0 +1,6 @@
+#!/bin/sh
+# Start Claude Code in this repo as the cockpit's listener: notes and game reports
+# from `ladder cockpit` arrive as <channel source="cockpit"> events.
+# Extra arguments go to claude (e.g. --resume). Interactive only; -p ignores the flag.
+cd "$(dirname "$0")/.." || exit 1
+exec claude --dangerously-load-development-channels server:cockpit "$@"

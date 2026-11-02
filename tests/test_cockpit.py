@@ -1,5 +1,6 @@
 """Cockpit hub (who answers which decision, idle switch, shadow Jev routes) and its HTTP guard rails."""
 
+import http.client
 import json
 import threading
 import urllib.request
@@ -10,7 +11,7 @@ import pytest
 
 from helpers import add_monster, make_state
 from ladder.authority import AUTONOMOUS, Authority
-from ladder.cockpit import GAME_GONE, ChildHooks, Hub, game_links, handover_text, make_handler, watch_url
+from ladder.cockpit import GAME_GONE, ChildHooks, Hub, game_links, handover_text, make_handler, play_url, watch_url
 from ladder.decisions import END_GAME, TAKE_OVER, Answer, for_escalation, for_interrupt, stat_choice
 from ladder.interrupts import Interrupt
 from ladder.jev import Answers, JevResult
@@ -109,6 +110,59 @@ def test_controls_after_the_game_process_exits_say_so_instead_of_raising():
     assert h.hold(True) == GAME_GONE and not h.held
     assert h.stop() == GAME_GONE
     h.tick()
+
+
+def run_ends(h, ended_by="take_over"):
+    h.handle({"ev": "run_start", "dir": "runs/x", "user": "laddertest", "games": 1})
+    h.handle({"ev": "game_end", "game": 1, "ended_by": ended_by, "final_place": "D:1", "turns": 63})
+    h.handle({"ev": "run_end", "summary": {}})
+
+
+def test_hand_back_starts_a_fresh_game_process_and_ignores_the_old_one():
+    launched = []
+
+    def launch(on_message, on_exit):
+        sent = []
+        launched.append((on_message, on_exit, sent))
+        return sent.append
+
+    h = Hub(Authority(), clock=Clock(), launch=launch)
+    h.start_game()
+    first_message, first_exit, _ = launched[0]
+    assert h.resume() == "a run is already going" and len(launched) == 1
+    first_message({"ev": "run_start", "dir": "runs/x", "user": "laddertest", "games": 1})
+    first_message({"ev": "game_end", "game": 1, "ended_by": "take_over", "final_place": "D:1", "turns": 63})
+    first_message({"ev": "run_end", "summary": {}})
+    assert h.run["state"] == "finished"
+
+    assert h.resume() is None and len(launched) == 2 and h.run == {"state": "starting", "games": []}
+    first_exit()                       # the old process's pipe closes after the new one started
+    assert not h.gone and h.run["state"] == "starting"
+    assert h.hold(True) is None and launched[1][2] == [{"cmd": "hold"}]
+    launched[1][1]()
+    assert h.gone and h.run["state"] == "error"
+    assert h.resume() is None and len(launched) == 3 and not h.held    # after a crash too
+
+
+def test_hand_back_needs_a_launcher():
+    h, _, _ = hub()
+    run_ends(h)
+    assert h.resume() == "this cockpit can't start runs"
+
+
+def test_take_wheel_stops_the_run_and_waits_for_the_save():
+    h, sent, _ = hub()
+    h.handle({"ev": "run_start", "dir": "runs/x", "user": "laddertest", "games": 1})
+    threading.Timer(0.05, lambda: h.handle({"ev": "run_end", "summary": {}})).start()
+    assert h.take_wheel(timeout=2, poll=0.01) is None
+    assert sent == [{"cmd": "stop"}] and h.run["state"] == "finished"
+    assert h.take_wheel(timeout=0) is None and len(sent) == 1           # nothing running: no stop, no wait
+
+
+def test_take_wheel_gives_up_when_the_save_takes_too_long():
+    h, _, _ = hub()
+    h.handle({"ev": "run_start", "dir": "runs/x", "user": "laddertest", "games": 1})
+    assert "still saving" in h.take_wheel(timeout=0.05, poll=0.01)
 
 
 def test_step_and_speed_reach_the_game_and_validate():
@@ -241,6 +295,62 @@ def test_http_refuses_other_origins_and_hosts(server):
     assert h.authority.mode == "assisted"
 
 
+@pytest.fixture
+def play_server():
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), None)
+    port = srv.server_address[1]
+    h = Hub(Authority(), lambda m: None, clock=Clock(), links=game_links("ws://localhost:8080/socket", "laddertest", port))
+    srv.RequestHandlerClass = make_handler(h, port, login_cookie=lambda: "laddertest%20123456")
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    yield h, port
+    srv.shutdown()
+    srv.server_close()
+
+
+def raw(port, method, path, headers):
+    c = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+    c.request(method, path, body=b"", headers=headers)
+    r = c.getresponse()
+    r.read()
+    c.close()
+    return r
+
+
+def test_play_logs_the_browser_in_to_webtiles_and_goes_to_play(play_server):
+    h, port = play_server
+    run_ends(h)
+    r = raw(port, "POST", "/play", {"Host": f"localhost:{port}", "Origin": f"http://127.0.0.1:{port}",
+                                    "Content-Type": "application/x-www-form-urlencoded"})
+    assert r.status == 303
+    assert r.getheader("Location") == "http://localhost:8080/#play-dcss-0.34"
+    # as jquery.cookie stores it: webtiles' client decodes it back to "laddertest%20123456"
+    assert r.getheader("Set-Cookie").startswith("login=laddertest%2520123456; Path=/;")
+
+
+def test_play_refuses_other_sites_and_the_wrong_host(play_server):
+    h, port = play_server
+    run_ends(h)
+    assert raw(port, "POST", "/play", {"Host": f"localhost:{port}", "Origin": "http://evil.example"}).status == 403
+    r = raw(port, "POST", "/play", {"Host": f"127.0.0.1:{port}"})     # a cookie here wouldn't reach localhost:8080
+    assert r.status == 409 and r.getheader("Set-Cookie") is None
+    assert raw(port, "GET", "/play", {"Host": f"localhost:{port}"}).status == 404
+
+
+def test_page_may_post_only_to_play_and_its_redirect(play_server):
+    _, port = play_server
+    csp = raw(port, "GET", "/", {"Host": f"127.0.0.1:{port}"}).getheader("Content-Security-Policy")
+    assert f"form-action http://localhost:{port} http://localhost:8080" in csp
+
+
+def test_play_url_only_where_the_cookie_reaches_webtiles():
+    assert play_url("ws://localhost:8080/socket", 8090) == "http://localhost:8090/play"
+    assert play_url("ws://127.0.0.1:8080/socket", 8090) == "http://127.0.0.1:8090/play"
+    assert play_url("wss://crawl.example/socket", 8090) is None
+    assert "play" not in game_links("wss://crawl.example/socket", "ladderbot", 8090)
+    links = game_links("ws://localhost:8080/socket", "ladderbot", 8090)
+    assert "Play button" in handover_text(links, {"game": 1, "final_place": "D:1", "turns": 9})
+
+
 def test_watch_url():
     assert watch_url("ws://localhost:8080/socket", "ladderbot") == "http://localhost:8080/#watch-ladderbot"
 
@@ -297,3 +407,56 @@ def test_http_step_and_speed(server):
     assert call(port, "/api/speed", {"delay": 2})[0] == 200 and h.delay == 2
     assert call(port, "/api/speed", {"delay": "fast"})[0] == 409
     assert call(port, "/api/step", {"n": 5})[0] == 200 and h.held
+
+
+def test_between_runs_the_cockpit_follows_the_players_game():
+    follows = []
+
+    def spectate(run_dir, on_status, on_event):
+        stopped = []
+        follows.append((run_dir, on_status, on_event, stopped))
+        return lambda: stopped.append(True)
+
+    h = Hub(Authority(), clock=Clock(), launch=lambda on_message, on_exit: [].append, spectate=spectate)
+    h.start_game()
+    assert not follows                 # the bot's game is the user's game while a run plays
+    run_ends(h)
+    h.child_gone()
+    assert len(follows) == 1 and follows[0][0] == "runs/x"
+    q, _ = h.subscribe()
+    _, on_status, on_event, stopped = follows[0]
+    on_status({"player": True, "snapshot": {"turn": 70}, "messages": []})
+    on_event("player_game", state="watching", user="laddertest", record=None)
+    assert h.status["snapshot"]["turn"] == 70
+    assert [q.get_nowait()["ev"] for _ in range(2)] == ["status", "player_game"]
+
+    assert h.resume() is None and stopped == [True]
+    on_status({"player": True, "snapshot": {"turn": 71}, "messages": []})   # a late one from the old spectator
+    assert h.status["snapshot"]["turn"] == 70
+    run_ends(h)
+    assert len(follows) == 2
+
+
+def test_started_mid_game_the_cockpit_leaves_the_game_to_the_player():
+    follows, launched, released = [], [], []
+    h = Hub(Authority(), clock=Clock(), launch=lambda m, e: launched.append(m) or [].append,
+            spectate=lambda d, s, e: follows.append(d) or (lambda: None), release=lambda: released.append(1))
+    h.yours({"name": "laddertest", "place": "D:3", "turn": "900", "xl": "5", "char": "MiBe"})
+    assert h.run["state"] == "yours" and h.run["player"]["place"] == "D:3"
+    assert follows and not launched and not h.active()
+    assert h.stop() == GAME_GONE           # nothing of the bot's to stop
+    assert h.hand_back() is None and released == [1] and len(launched) == 1
+
+
+def test_hand_back_lets_go_of_the_players_game_only_when_no_run_is_going():
+    released = []
+    h = Hub(Authority(), clock=Clock(), launch=lambda m, e: [].append, release=lambda: released.append(1))
+    h.start_game()
+    assert h.hand_back() == "a run is already going" and not released
+
+
+def test_play_lands_in_the_recording_proxy_on_the_cookies_host():
+    links = game_links("ws://localhost:8080/socket", "laddertest", 8090, proxy_port=8100)
+    assert links["proxy"] == "http://localhost:8100/" and links["play"] == "http://localhost:8090/play"
+    assert "proxy" not in game_links("ws://localhost:8080/socket", "laddertest", 8090)
+    assert "proxy" not in game_links("wss://crawl.example/socket", "laddertest", 8090, proxy_port=8100)

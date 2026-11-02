@@ -184,6 +184,13 @@ class Connection:
         except dcss_api.APIErr:
             pass
 
+    def login_cookie(self) -> str:
+        """A token that logs a browser in as this session's user: webtiles' own "remember me" cookie.
+
+        Webtiles keeps it in memory for 7 days and forgets it once a browser has used it.
+        """
+        return self.web.request_cookie()
+
     # --- play ----------------------------------------------------------
 
     def act(self, *keys: str, max_reads: int = 40) -> ActResult:

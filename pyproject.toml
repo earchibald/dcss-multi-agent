@@ -8,6 +8,7 @@ dependencies = [
     "dcss-api==0.4.1",
     "keyring>=25",
     "openai>=3.42.1",
+    "websockets>=17.4",
 ]
 
 [project.scripts]

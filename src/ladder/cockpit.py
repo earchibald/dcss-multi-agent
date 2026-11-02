@@ -7,6 +7,13 @@ server-sent event stream on 127.0.0.1, holds `Authority`, and answers the
 child's decision requests over a pipe: Strategy (still the stub's
 recommendation) or the player, with the idle switch ticking in between.
 
+Taking the wheel and handing back need no login: `/play` stops the run, waits
+for the save, and answers with webtiles' own login cookie for the bot, so the
+browser lands in the game. `/api/resume` starts a fresh game process, which
+resumes the save; webtiles saves the player's game first if it's still open.
+Between runs the cockpit spectates the user's games (spectate.py), so the Game panel follows the
+player too, and records them in the run directory to learn from.
+
 `ladder channel` (a Claude Code channel, see channel.py) subscribes to the same
 stream as `/events?client=channel`: the page shows whether a coding session is
 listening, and notes go both ways through `/api/note`.
@@ -27,17 +34,21 @@ import signal
 import threading
 import time
 import traceback
+import urllib.request
 import uuid
+from html import escape
 from collections import Counter, deque
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib import resources
+from pathlib import Path
 from typing import Callable
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, quote, urlsplit
 
 from . import keychain
 from .authority import ASSISTED, AUTONOMOUS, Authority, Pending
+from .conn import GAME_ID, Connection
 from .decisions import TAKE_OVER, Answer, DecisionRequest
 from .games import run_games
 from .jev import Jev, build_state
@@ -45,9 +56,12 @@ from .jeveval import SeenBefore
 from .pace import pace_ms
 from .reflex import Hooks
 from .routing import Thresholds, needs_jev, route
+from .playproxy import PlayProxy
+from .spectate import Spectator
 
 STRATEGY_STUB = "stub recommendation; Strategy isn't built yet"
-GAME_GONE = "the run is over, so there is no game to send that to; start the cockpit again for a new run"
+GAME_GONE = "the run is over, so there is no game to send that to; hand the game back to start a new run"
+ACTIVE = ("starting", "running", "stopping")
 MAX_DELAY = 60           # seconds between actions
 MAX_STEPS = 1000         # actions per Step
 MAX_NOTE = 4000          # characters in a note to or from Claude
@@ -128,7 +142,8 @@ class ChildHooks(Hooks):
     def on_step(self, reflex, action: str) -> None:
         self.last_action = time.monotonic()
         self.send("step", game=reflex.game_no, step=reflex.steps, action=action,
-                  snapshot=reflex.state.snapshot(), messages=reflex.state.recent_messages(5))
+                  snapshot=reflex.state.snapshot(), messages=reflex.state.recent_messages(5),
+                  msg_total=len(reflex.state.messages))
 
 
 def child_main(pipe, args: argparse.Namespace) -> None:
@@ -143,16 +158,70 @@ def child_main(pipe, args: argparse.Namespace) -> None:
         pipe.close()
 
 
+def cookie_main(pipe, server: str, user: str) -> None:
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
+    try:
+        conn = Connection(server)
+        try:
+            conn.login(user)
+            pipe.send({"cookie": conn.login_cookie()})
+        finally:
+            conn.close()
+    except Exception as e:
+        pipe.send({"error": f"{type(e).__name__}: {e}"})
+    finally:
+        pipe.close()
+
+
+def fetch_login_cookie(server: str, user: str, timeout: float = 20.0) -> str:
+    """Webtiles' login token for `user`. It's a secret: it only ever goes into the player's browser.
+
+    A process of its own, like the game: dcss-api can block holding the GIL.
+    """
+    recv, send = mp.Pipe(duplex=False)
+    proc = mp.get_context("spawn").Process(target=cookie_main, args=(send, server, user),
+                                           name="ladder-login", daemon=True)
+    proc.start()
+    send.close()
+    try:
+        if not recv.poll(timeout):
+            raise RuntimeError("webtiles didn't answer the login")
+        out = recv.recv()
+    except EOFError:
+        raise RuntimeError("the login process exited") from None
+    finally:
+        recv.close()
+        proc.join(2)
+        if proc.is_alive():
+            proc.terminate()
+    if "error" in out:
+        raise RuntimeError(f"couldn't log in to webtiles as {user}: {out['error']}")
+    return out["cookie"]
+
+
 # --- parent process: the hub ------------------------------------------------
+
+Launch = Callable[[Callable[[dict], None], Callable[[], None]], Callable[[dict], None]]
+# Follows the player's game: (run dir or None, on_status, on_event) -> stop
+Spectate = Callable[[str | None, Callable[[dict], None], Callable[..., None]], Callable[[], None]]
+
 
 class Hub:
     """Cockpit state shared by the pipe reader, the idle ticker and the HTTP handlers."""
 
-    def __init__(self, authority: Authority, send: Callable[[dict], None], jev: Jev | None = None,
+    def __init__(self, authority: Authority, send: Callable[[dict], None] | None = None, jev: Jev | None = None,
                  thresholds: Thresholds = Thresholds(), clock: Callable[[], float] = time.time,
-                 backlog: int = 500, links: dict | None = None, stall_after: float = 45.0, delay: float = 0.0):
+                 backlog: int = 500, links: dict | None = None, stall_after: float = 45.0, delay: float = 0.0,
+                 launch: Launch | None = None, spectate: Spectate | None = None,
+                 release: Callable[[], None] | None = None):
         self.authority = authority
         self._send = send
+        self.launch = launch                # starts a game process: (on_message, on_exit) -> send
+        self.generation = 0                 # which game process is current; a finished one's exit is ignored
+        self.spectate = spectate
+        self.release = release              # lets go of the player's game, so a new run can resume it
+        self.unfollow: Callable[[], None] | None = None
+        self.following = 0                  # which spectator is current, as with generation
         self.jev = jev
         self.thresholds = thresholds
         self.clock = clock
@@ -267,6 +336,8 @@ class Hub:
                     self.run["state"] = "error"
                 self.publish(ev, **msg)
                 self.publish("run", keep=False, run=self.run)
+                if ev in ("run_end", "error"):
+                    self.follow()
 
     def child_gone(self) -> None:
         with self.lock:
@@ -278,6 +349,7 @@ class Hub:
                 self.run["state"] = "error"
                 self.publish("error", message="the game process exited")
                 self.publish("run", keep=False, run=self.run)
+            self.follow()
 
     def _record(self, record: dict) -> None:
         jev_state = None
@@ -463,6 +535,110 @@ class Hub:
             self.publish("run", keep=False, run=self.run)
             return None
 
+    def active(self) -> bool:
+        with self.lock:
+            return not self.gone and self.run["state"] in ACTIVE
+
+    def take_wheel(self, timeout: float = 45.0, poll: float = 0.2) -> str | None:
+        """Stop the run if one is going, and wait until it has ended with the game saved."""
+        if self.active():
+            err = self.stop()
+            if err and err != GAME_GONE:
+                return err
+        deadline = time.monotonic() + timeout
+        while self.active():
+            if time.monotonic() > deadline:
+                return "the bot is still saving the game; try again in a moment"
+            time.sleep(poll)
+        return None
+
+    def start_game(self) -> None:
+        """Start a game process. Only the newest one's messages and exit count."""
+        self.generation += 1
+        gen = self.generation
+
+        def on_message(msg: dict) -> None:
+            if gen == self.generation:
+                self.handle(msg)
+
+        def on_exit() -> None:
+            if gen == self.generation:
+                self.child_gone()
+
+        self._send = self.launch(on_message, on_exit)
+
+    def follow(self) -> None:
+        """With the bot's run over, any game of the user's is the player's: follow it, so the Game
+        panel stays live, and record it."""
+        with self.lock:
+            if self.spectate is None or self.unfollow is not None:
+                return
+            self.following += 1
+            gen = self.following
+
+            def on_status(status: dict) -> None:
+                with self.lock:
+                    if gen == self.following:
+                        self.status = status
+                        self.publish("status", keep=False, status=status)
+
+            def on_event(ev: str, **data) -> None:
+                with self.lock:
+                    if gen == self.following:
+                        self.publish(ev, **data)
+
+            self.unfollow = self.spectate(self.run.get("dir"), on_status, on_event)
+
+    def stop_following(self) -> None:
+        with self.lock:
+            self.following += 1
+            unfollow, self.unfollow = self.unfollow, None
+        if unfollow is not None:
+            unfollow()
+
+    def yours(self, game: dict) -> None:
+        """The player is in the game already (the cockpit started mid-game): don't start the bot on
+        it, which would throw them out. Follow it, and wait for them to hand it back."""
+        with self.lock:
+            self.gone = True
+            self.run = {"state": "yours", "games": [],
+                        "player": {k: game.get(k) for k in ("place", "turn", "xl", "char")}}
+            self.publish("run", keep=False, run=self.run)
+        self.follow()
+
+    def hand_back(self) -> str | None:
+        """Hand back from the cockpit: let go of the player's game, then resume it in a new run."""
+        if self.launch is None:
+            return "this cockpit can't start runs"
+        if self.active():
+            return "a run is already going"
+        if self.release is not None:
+            self.release()
+        return self.resume()
+
+    def resume(self) -> str | None:
+        """Hand the game back: a new run in a fresh game process, which resumes the saved game."""
+        with self.lock:
+            if self.launch is None:
+                return "this cockpit can't start runs"
+            if self.active():
+                return "a run is already going"
+            self.stop_following()
+            self.gone = False
+            self.pending = None
+            self.held = self.paused = self.stalled = False
+            self.last_heard = self.clock()
+            self.run = {"state": "starting", "games": []}
+            try:
+                self.start_game()
+            except Exception as e:
+                self.gone = True
+                self.run["state"] = "error"
+                self.publish("error", message=f"couldn't start the game process: {e}")
+            self._publish_settings()
+            self.publish("run", keep=False, run=self.run)
+            return None
+
 
 # --- HTTP ---------------------------------------------------------------------
 
@@ -472,9 +648,19 @@ STATIC = {"/": ("cockpit.html", "text/html; charset=utf-8"),
 CSP = "default-src 'self'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
 
 
-def make_handler(hub: Hub, port: int) -> type[BaseHTTPRequestHandler]:
+def _origin(url: str) -> str:
+    parts = urlsplit(url)
+    return f"{parts.scheme}://{parts.netloc}"
+
+
+def make_handler(hub: Hub, port: int,
+                 login_cookie: Callable[[], str] | None = None) -> type[BaseHTTPRequestHandler]:
     hosts = {f"127.0.0.1:{port}", f"localhost:{port}"}
     static = resources.files("ladder").joinpath("static")
+    play = hub.links.get("play")
+    # The page posts a form to /play, which redirects into webtiles.
+    targets = [play, hub.links["lobby"], hub.links.get("proxy")] if play else []
+    csp = CSP.replace("form-action 'none'", "form-action " + " ".join(_origin(u) for u in targets if u)) if play else CSP
 
     class Handler(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
@@ -495,7 +681,7 @@ def make_handler(hub: Hub, port: int) -> type[BaseHTTPRequestHandler]:
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Cache-Control", "no-store")
             self.send_header("X-Content-Type-Options", "nosniff")
-            self.send_header("Content-Security-Policy", CSP)
+            self.send_header("Content-Security-Policy", csp)
             for k, v in (extra or {}).items():
                 self.send_header(k, v)
             self.end_headers()
@@ -517,9 +703,39 @@ def make_handler(hub: Hub, port: int) -> type[BaseHTTPRequestHandler]:
                 return self._send(200, static.joinpath(name).read_bytes(), ctype)
             self._json(404, {"error": "not found"})
 
+        def _page(self, code: int, text: str) -> None:
+            body = (f'<!doctype html><meta charset="utf-8"><title>Ladder</title>'
+                    f'<p>{escape(text)}</p><p><a href="/">Back to the cockpit</a></p>')
+            self._send(code, body.encode(), "text/html; charset=utf-8")
+
+        def _play(self) -> None:
+            """Take the wheel, then log this browser in to webtiles as the bot and press Play.
+
+            The answer sets webtiles' own login cookie: cookies don't care about ports, so one set
+            by this server on the lobby's host is the lobby's too.
+            """
+            if not play or login_cookie is None:
+                return self._page(409, "Playing from the cockpit needs webtiles on localhost; log in by hand.")
+            if self.headers.get("Host") != urlsplit(play).netloc:
+                return self._page(409, f"Open the cockpit's play link, {play}, so the login lands on webtiles' host.")
+            err = hub.take_wheel()
+            if not err:
+                try:
+                    cookie = login_cookie()
+                except Exception as e:
+                    err = str(e)
+            if err:
+                return self._page(409, err)
+            self._send(303, b"", "text/plain", {
+                "Location": f"{hub.links.get('proxy') or hub.links['lobby']}#play-{GAME_ID}",
+                "Set-Cookie": f"login={quote(cookie, safe='')}; Path=/; Max-Age={7 * 86400}; SameSite=Lax"})
+
         def do_POST(self):
             if not self._allowed():
                 return self._json(403, {"error": "forbidden"})
+            if urlsplit(self.path).path == "/play":
+                self.rfile.read(min(int(self.headers.get("Content-Length") or 0), 4096))
+                return self._play()
             if self.headers.get("Content-Type", "").split(";")[0].strip() != "application/json":
                 return self._json(415, {"error": "send application/json"})
             path = urlsplit(self.path).path
@@ -544,6 +760,8 @@ def make_handler(hub: Hub, port: int) -> type[BaseHTTPRequestHandler]:
                 err = hub.set_speed(body.get("delay"))
             elif path == "/api/stop":
                 err = hub.stop()
+            elif path == "/api/resume":
+                err = hub.hand_back()
             elif path == "/api/note":
                 err = hub.note(body.get("text"), str(body.get("from", "player")))
             else:
@@ -590,19 +808,53 @@ def watch_url(server: str, user: str) -> str:
     return f"{lobby_url(server)}#watch-{user}"
 
 
-def game_links(server: str, user: str) -> dict:
+def players_game(server: str, user: str, timeout: float = 3.0) -> dict | None:
+    """`user`'s game if webtiles is running one (its lobby status), else None."""
+    try:
+        with urllib.request.urlopen(lobby_url(server) + "status/lobby/", timeout=timeout) as r:
+            games = json.load(r)
+    except (OSError, ValueError):
+        return None
+    return next((g for g in games if str(g.get("name", "")).lower() == user.lower()), None)
+
+
+def wait_until_saved(server: str, user: str, timeout: float = 15.0, poll: float = 0.25) -> bool:
+    deadline = time.monotonic() + timeout
+    while players_game(server, user) is not None:
+        if time.monotonic() > deadline:
+            return False
+        time.sleep(poll)
+    return True
+
+
+def play_url(server: str, port: int) -> str | None:
+    """The cockpit's /play on the lobby's host, so the login cookie it sets is webtiles' too."""
+    host = urlsplit(server).hostname
+    return f"http://{host}:{port}/play" if host in ("localhost", "127.0.0.1") else None
+
+
+def game_links(server: str, user: str, port: int | None = None, proxy_port: int | None = None) -> dict:
     """Where to watch, and what the player needs to pick up a game the cockpit left saved."""
-    return {"webtiles": watch_url(server, user), "lobby": lobby_url(server), "user": user,
-            "password_cmd": f"security find-generic-password -s {keychain.SERVICE} "
-                            f"-a {keychain.dcss_account(user)} -w | pbcopy"}
+    links = {"webtiles": watch_url(server, user), "lobby": lobby_url(server), "user": user,
+             "password_cmd": f"security find-generic-password -s {keychain.SERVICE} "
+                             f"-a {keychain.dcss_account(user)} -w | pbcopy"}
+    if port is not None and (play := play_url(server, port)):
+        links["play"] = play
+        if proxy_port:
+            # Same host as /play, so the login cookie reaches the proxy's page as well.
+            links["proxy"] = f"http://{urlsplit(play).hostname}:{proxy_port}/"
+    return links
 
 
 def handover_text(links: dict, game: dict) -> str:
-    return (f"Game {game['game']} is saved for you at {game['final_place']}, turn {game['turns']}.\n"
-            f"  1. Copy the password:  {links['password_cmd']}\n"
-            f"  2. Open {links['lobby']} and log in as {links['user']}.\n"
-            f"  3. Click Play: DCSS resumes the saved game.\n"
-            f"To hand it back, save with Ctrl-S in DCSS and start the cockpit again; it resumes the save.")
+    where = f"Game {game['game']} is saved for you at {game['final_place']}, turn {game['turns']}.\n"
+    manual = (f"  1. Copy the password:  {links['password_cmd']}\n"
+              f"  2. Open {links['lobby']} and log in as {links['user']}.\n"
+              f"  3. Click Play: DCSS resumes the saved game.\n")
+    if links.get("play"):
+        return (where + f"Play it with the cockpit's Play button: it logs webtiles in as {links['user']}. By hand:\n"
+                + manual + "To hand it back, click Hand back in the cockpit: webtiles saves your game first.")
+    return where + manual + "To hand it back, save with Ctrl-S in DCSS and click Hand back in the cockpit."
 
 
 def _interrupt(signum, frame):
@@ -618,32 +870,72 @@ def serve(args: argparse.Namespace, thresholds: Thresholds = Thresholds()) -> No
     signal.signal(signal.SIGTERM, _interrupt)
     authority = Authority(mode=args.mode, idle_minutes=args.idle_minutes)
     jev = Jev(profiles.for_tier("jev")) if args.jev else None
-    parent_end, child_end = mp.Pipe()
-    hub = Hub(authority, parent_end.send, jev=jev, thresholds=thresholds,
-              links=game_links(args.server, args.user), delay=args.delay)
-    proc = mp.get_context("spawn").Process(target=child_main, args=(child_end, args), name="ladder-game",
-                                           daemon=True)
-    proc.start()
-    child_end.close()
+    procs: list = []
 
-    def pump() -> None:
+    def launch(on_message: Callable[[dict], None], on_exit: Callable[[], None]) -> Callable[[dict], None]:
+        parent_end, child_end = mp.Pipe()
+        proc = mp.get_context("spawn").Process(target=child_main, args=(child_end, args), name="ladder-game",
+                                               daemon=True)
+        proc.start()
+        child_end.close()
+        procs.append(proc)
+
+        def pump() -> None:
+            try:
+                while True:
+                    msg = parent_end.recv()
+                    on_message(msg)
+                    if msg.get("ev") == "game_end" and msg.get("ended_by") in ("take_over", "stopped"):
+                        print(handover_text(hub.links, msg), flush=True)
+            except (EOFError, OSError):
+                on_exit()
+
+        threading.Thread(target=pump, name="pump", daemon=True).start()
+        return parent_end.send
+
+    if getattr(args, "play_port", None) is None:
+        args.play_port = args.port + 10
+    # The player's games go in the bot's last run directory, or this one before any run.
+    player_dir = Path(args.out) / (time.strftime("%Y%m%d-%H%M%S") + "-player")
+
+    def record_dir() -> Path:
+        return Path(hub.run.get("dir") or player_dir)
+
+    def spectate(run_dir: str | None, on_status: Callable[[dict], None],
+                 on_event: Callable[..., None]) -> Callable[[], None]:
+        return Spectator(args.server, args.user, on_status, on_event, record_dir=record_dir()).start()
+
+    proxy = None
+    if args.play_port and play_url(args.server, args.port):
         try:
-            while True:
-                msg = parent_end.recv()
-                hub.handle(msg)
-                if msg.get("ev") == "game_end" and msg.get("ended_by") in ("take_over", "stopped"):
-                    print(handover_text(hub.links, msg), flush=True)
-        except (EOFError, OSError):
-            hub.child_gone()
+            proxy = PlayProxy(args.server, args.play_port, record_dir,
+                              on_event=lambda ev, **data: hub.publish(ev, **data)).start()
+        except OSError as e:
+            print(f"No recording proxy on port {args.play_port} ({e}): games you play won't record your keys.")
+
+    def release() -> None:
+        """Hang up the player's game if it's played through the proxy, and wait for webtiles to save it.
+        A game played elsewhere is saved when the bot logs in, about 10 s later."""
+        if proxy is not None and proxy.hang_up(args.user):
+            wait_until_saved(args.server, args.user)
+
+    links = game_links(args.server, args.user, args.port, proxy.port if proxy else None)
+    hub = Hub(authority, jev=jev, thresholds=thresholds, links=links,
+              delay=args.delay, launch=launch, spectate=spectate, release=release)
+    if game := players_game(args.server, args.user):
+        hub.yours(game)
+        print(f"{args.user} is playing in webtiles, so the bot waits: hand it back from the cockpit.")
+    else:
+        hub.start_game()
 
     def ticker() -> None:
         while True:
             time.sleep(1)
             hub.tick()
 
-    threading.Thread(target=pump, name="pump", daemon=True).start()
     threading.Thread(target=ticker, name="idle", daemon=True).start()
-    server = ThreadingHTTPServer(("127.0.0.1", args.port), make_handler(hub, args.port))
+    server = ThreadingHTTPServer(("127.0.0.1", args.port), make_handler(
+        hub, args.port, login_cookie=lambda: fetch_login_cookie(args.server, args.user)))
     server.daemon_threads = True
     url = f"http://127.0.0.1:{args.port}/"
     print(f"Cockpit: {url}\nWatch the game: {hub.links['webtiles']}\nCtrl-C to stop (the game stays saved).")
@@ -655,8 +947,12 @@ def serve(args: argparse.Namespace, thresholds: Thresholds = Thresholds()) -> No
     except KeyboardInterrupt:
         pass
     finally:
+        hub.stop_following()
         hub.stop()
-        proc.join(timeout=20)
-        if proc.is_alive():
-            proc.terminate()
+        if proxy is not None:
+            proxy.close()
+        for proc in procs:
+            proc.join(timeout=20)
+            if proc.is_alive():
+                proc.terminate()
         server.server_close()
