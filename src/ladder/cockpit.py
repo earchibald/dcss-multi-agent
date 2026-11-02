@@ -7,6 +7,10 @@ server-sent event stream on 127.0.0.1, holds `Authority`, and answers the
 child's decision requests over a pipe: Strategy (still the stub's
 recommendation) or the player, with the idle switch ticking in between.
 
+`ladder channel` (a Claude Code channel, see channel.py) subscribes to the same
+stream as `/events?client=channel`: the page shows whether a coding session is
+listening, and notes go both ways through `/api/note`.
+
 With `--jev`, every interrupt that needs Jev is also sent to it in the
 background and routed by the policy, so the stream shows which tier would take
 it. That routing is shadow only for now: Reflex and the stub still act.
@@ -23,13 +27,14 @@ import signal
 import threading
 import time
 import traceback
+import uuid
 from collections import Counter, deque
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib import resources
 from typing import Callable
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 
 from . import keychain
 from .authority import ASSISTED, AUTONOMOUS, Authority, Pending
@@ -44,6 +49,9 @@ STRATEGY_STUB = "stub recommendation; Strategy isn't built yet"
 GAME_GONE = "the run is over, so there is no game to send that to; start the cockpit again for a new run"
 MAX_DELAY = 60           # seconds between actions
 MAX_STEPS = 1000         # actions per Step
+MAX_NOTE = 4000          # characters in a note to or from Claude
+NO_CHANNEL = ("no Claude Code session is listening; start one in this repo with "
+              "`claude --dangerously-load-development-channels server:cockpit`")
 
 
 # --- child process: the game ------------------------------------------------
@@ -163,6 +171,8 @@ class Hub:
         self.last_heard = clock()
         self.stalled = False
         self.gone = False                   # the game process has exited and its pipe is closed
+        self.boot = uuid.uuid4().hex        # tells a reconnecting channel whether this is the cockpit it knew
+        self.channels = 0                   # Claude Code channels subscribed to the stream
 
     # -- publishing --
 
@@ -176,20 +186,28 @@ class Hub:
                 q.put(event)
             return event
 
-    def subscribe(self) -> tuple[queue.Queue, dict]:
+    def subscribe(self, channel: bool = False) -> tuple[queue.Queue, dict]:
         with self.lock:
             q: queue.Queue = queue.Queue()
             self.subscribers.add(q)
-            return q, self.snapshot()
+            snapshot = self.snapshot()
+            if channel:
+                self.channels += 1
+                self.publish("settings", keep=False, settings=self.settings())
+            return q, snapshot
 
-    def unsubscribe(self, q: queue.Queue) -> None:
+    def unsubscribe(self, q: queue.Queue, channel: bool = False) -> None:
         with self.lock:
             self.subscribers.discard(q)
+            if channel:
+                self.channels -= 1
+                self.publish("settings", keep=False, settings=self.settings())
 
     def settings(self) -> dict:
         a = self.authority
         return {"mode": a.mode, "idle_minutes": a.idle_minutes, "switched_by_idle": a.switched_by_idle,
-                "held": self.held, "paused": self.paused, "delay": self.delay, "jev": self.jev is not None}
+                "held": self.held, "paused": self.paused, "delay": self.delay, "jev": self.jev is not None,
+                "channel": self.channels > 0}
 
     def pending_view(self) -> dict | None:
         if not self.pending:
@@ -202,8 +220,8 @@ class Hub:
 
     def snapshot(self) -> dict:
         with self.lock:
-            return {"settings": self.settings(), "status": self.status, "run": self.run, "links": self.links,
-                    "pending": self.pending_view(), "events": list(self.events),
+            return {"boot": self.boot, "settings": self.settings(), "status": self.status, "run": self.run,
+                    "links": self.links, "pending": self.pending_view(), "events": list(self.events),
                     "tiers": dict(self.tiers), "deciders": dict(self.deciders)}
 
     def _publish_settings(self) -> None:
@@ -407,6 +425,22 @@ class Hub:
             self.publish("settings", keep=False, settings=self.settings())
             return None
 
+    def note(self, text, by: str) -> str | None:
+        """A note between the player and Claude Code. It goes on the stream, where the channel picks it up."""
+        if by not in ("player", "claude"):
+            return "a note is from 'player' or 'claude'"
+        if not isinstance(text, str) or not text.strip():
+            return "a note needs some text"
+        if len(text) > MAX_NOTE:
+            return f"a note is at most {MAX_NOTE} characters"
+        with self.lock:
+            if by == "player" and not self.channels:
+                return NO_CHANNEL
+            status = self.status or {}
+            self.publish("note", by=by, text=text.strip(), game=status.get("game"), step=status.get("step"),
+                         turn=(status.get("snapshot") or {}).get("turn"))
+            return None
+
     def stop(self) -> str | None:
         """Stop after the current action and leave the game saved, so the player can take the wheel."""
         with self.lock:
@@ -471,7 +505,9 @@ def make_handler(hub: Hub, port: int) -> type[BaseHTTPRequestHandler]:
                 return self._json(403, {"error": "forbidden"})
             path = urlsplit(self.path).path
             if path == "/events":
-                return self._events()
+                return self._events(parse_qs(urlsplit(self.path).query).get("client") == ["channel"])
+            if path == "/api/state":
+                return self._json(200, hub.snapshot())
             if path in STATIC:
                 name, ctype = STATIC[path]
                 return self._send(200, static.joinpath(name).read_bytes(), ctype)
@@ -482,14 +518,14 @@ def make_handler(hub: Hub, port: int) -> type[BaseHTTPRequestHandler]:
                 return self._json(403, {"error": "forbidden"})
             if self.headers.get("Content-Type", "").split(";")[0].strip() != "application/json":
                 return self._json(415, {"error": "send application/json"})
+            path = urlsplit(self.path).path
             length = int(self.headers.get("Content-Length") or 0)
-            if length > 4096:
+            if length > (4 * MAX_NOTE + 1024 if path == "/api/note" else 4096):
                 return self._json(413, {"error": "too large"})
             try:
                 body = json.loads(self.rfile.read(length) or b"{}")
             except json.JSONDecodeError:
                 return self._json(400, {"error": "bad json"})
-            path = urlsplit(self.path).path
             if path == "/api/mode":
                 err = hub.set_mode(body.get("mode"))
             elif path == "/api/idle":
@@ -504,12 +540,14 @@ def make_handler(hub: Hub, port: int) -> type[BaseHTTPRequestHandler]:
                 err = hub.set_speed(body.get("delay"))
             elif path == "/api/stop":
                 err = hub.stop()
+            elif path == "/api/note":
+                err = hub.note(body.get("text"), str(body.get("from", "player")))
             else:
                 return self._json(404, {"error": "not found"})
             self._json(409 if err else 200, {"error": err} if err else {"ok": True})
 
-        def _events(self) -> None:
-            q, snapshot = hub.subscribe()
+        def _events(self, channel: bool = False) -> None:
+            q, snapshot = hub.subscribe(channel)
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream")
             self.send_header("Cache-Control", "no-store")
@@ -527,7 +565,7 @@ def make_handler(hub: Hub, port: int) -> type[BaseHTTPRequestHandler]:
             except (BrokenPipeError, ConnectionResetError):
                 pass
             finally:
-                hub.unsubscribe(q)
+                hub.unsubscribe(q, channel)
 
         def _event(self, data: dict) -> None:
             self.wfile.write(b"data: " + json.dumps(data).encode() + b"\n\n")

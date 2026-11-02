@@ -18,7 +18,7 @@ function h(tag, attrs, ...kids) {
 
 const TIER = {
   reflex: "* Reflex", asking: "J asking", jev: "J Jev", tactics: "⚔ Tactics", strategy: "✦ Strategy",
-  reflex_goal: "* goal", player: "@ Player", none: "log", error: "J error", stub: "* stub",
+  reflex_goal: "* goal", player: "@ Player", none: "log", error: "J error", stub: "* stub", claude: "✱ Claude",
 };
 const ROUTINE = new Set(["level_change", "xl_up"]);
 const rows = new Map();       // record seq → stream row, for late Jev routes
@@ -117,6 +117,10 @@ function addEvent(e) {
           "has no timeout). Ctrl-C the cockpit: the game stays saved, and the next start resumes it.", "err")
       : addNote("game responding again");
     case "error": return addNote(e.message, "err");
+    case "note": return push(h("li", null,
+      h("span", { class: "turn" }, String(e.turn ?? "")),
+      chip(e.by === "claude" ? "claude" : "player", e.by === "claude" ? "✱ Claude" : "@ you → Claude"),
+      h("span", { class: "what said" }, e.text)));
   }
 }
 
@@ -208,6 +212,10 @@ function renderSettings(s) {
   $("hold").textContent = s.held ? (s.paused ? "▶ Resume (holding)" : "▶ Resume (will hold)") : "❚❚ Hold at next event";
   if (document.activeElement !== $("delay")) $("delay").value = s.delay;
   showDelay(s.delay);
+  $("channel-state").textContent = s.channel ? "listening" : "not listening";
+  $("channel-state").dataset.s = s.channel ? "running" : "";
+  $("note-send").disabled = !s.channel;
+  $("channel-help").hidden = !!s.channel;
   renderCounts();
 }
 
@@ -275,6 +283,15 @@ $("step-form").addEventListener("submit", (ev) => {
   const n = Number($("step-n").value);
   if (!Number.isInteger(n) || n < 1 || n > 1000) return toast("step is a whole number of actions, 1 to 1000");
   post("/api/step", { n });
+});
+$("note-form").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  const text = $("note").value.trim();
+  if (!text) return;
+  if (await post("/api/note", { text, from: "player" })) $("note").value = "";
+});
+$("note").addEventListener("keydown", (ev) => {
+  if (ev.key === "Enter" && (ev.metaKey || ev.ctrlKey)) { ev.preventDefault(); $("note-form").requestSubmit(); }
 });
 $("ho-copy").addEventListener("click", async () => {
   try {

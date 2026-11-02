@@ -1,4 +1,4 @@
-"""`ladder` commands: spike, cockpit, jev-eval, retune."""
+"""`ladder` commands: spike, cockpit, channel, jev-eval, retune."""
 
 from __future__ import annotations
 
@@ -58,6 +58,11 @@ def cockpit(args: argparse.Namespace) -> None:
     serve(args, thresholds_from(args))
 
 
+def channel(args: argparse.Namespace) -> None:
+    from .channel import main as channel_main
+    channel_main(args)
+
+
 def add_game_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--games", type=int, default=1)
     p.add_argument("--max-steps", type=int, default=300, help="Reflex actions per game")
@@ -87,6 +92,8 @@ def main() -> None:
                    help="seconds to wait between Reflex actions so you can follow along; 0 = full speed")
     p.add_argument("--open", action="store_true", help="open the cockpit in a browser")
     add_threshold_args(p)
+    p = sub.add_parser("channel", help="Claude Code channel: push cockpit events into a coding session (stdio MCP)")
+    p.add_argument("--cockpit", default="http://127.0.0.1:8090", help="the cockpit to listen to")
     p = sub.add_parser("jev-eval", help="ask Jev about every logged interrupt and route it")
     p.add_argument("run_dir")
     p.add_argument("--limit", type=int, default=None, help="at most this many Jev calls")
@@ -100,7 +107,7 @@ def main() -> None:
         parser.error("--idle-minutes is 0 (never) or a positive number of minutes")
     if not 0 <= getattr(args, "delay", 0) <= 60:
         parser.error("--delay is 0 (full speed) to 60 seconds")
-    {"spike": spike, "cockpit": cockpit, "jev-eval": jev_eval, "retune": retune}[args.cmd](args)
+    {"spike": spike, "cockpit": cockpit, "channel": channel, "jev-eval": jev_eval, "retune": retune}[args.cmd](args)
 
 
 if __name__ == "__main__":

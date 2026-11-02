@@ -32,7 +32,7 @@ h1 { font-size: 1.15rem; }
 h3 { font-size: 1.05rem; }
 p { margin: 0; }
 a { color: var(--strategy); }
-button, input { font: inherit; color: inherit; }
+button, input, textarea { font: inherit; color: inherit; }
 :focus-visible { outline: 2px solid var(--strategy); outline-offset: 2px; }
 .mono { font-family: var(--mono); font-size: .88em; }
 .muted { color: var(--muted); }
@@ -76,6 +76,9 @@ button.ghost, .opts button, .exits button { border: 1.5px solid var(--line); bac
                 padding: 6px 12px; cursor: pointer; }
 button.ghost:hover, .opts button:hover { border-color: var(--ink); }
 button.ghost[aria-pressed=true] { background: var(--tactics-bg); border-color: var(--tactics); color: var(--tactics); }
+.note { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: end; }
+#note { width: 100%; min-height: 2.6em; resize: vertical; padding: 6px 8px; border: 1.5px solid var(--line); border-radius: 4px;
+        background: var(--bg); }
 .toast { min-height: 1.2em; font-size: .85rem; color: var(--warn); }
 
 .card { background: var(--surface); border: 2px solid var(--player); border-radius: 8px; padding: 14px; display: grid; gap: 10px; }
@@ -118,6 +121,8 @@ button.ghost[aria-pressed=true] { background: var(--tactics-bg); border-color: v
 .chip[data-t=strategy] { background: var(--strategy-bg); color: var(--strategy); }
 .chip[data-t=player] { background: var(--player-bg); color: var(--player); }
 .chip[data-t=error] { background: var(--player-bg); color: var(--warn); }
+.chip[data-t=claude] { background: var(--sunk); color: var(--ink); }
+.stream .said { white-space: pre-wrap; }
 .chip[data-t=none] { background: none; color: var(--muted); border: 1px dashed var(--line); }
 .chip[data-t=asking] { animation: pulse 1.2s ease-in-out infinite; }
 @keyframes pulse { 50% { opacity: .45; } }
