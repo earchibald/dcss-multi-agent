@@ -40,6 +40,27 @@ _ERROR_REASONS = [
 ]
 
 
+def reply_modes(batch: list[dict]) -> list[int]:
+    """The input modes in `batch` that answer our keys.
+
+    When a spectator joins, DCSS resends its whole UI state to every socket, the
+    player's included: a run that starts with `version` and ends with an
+    `input_mode` re-announcing the prompt it already sent. That `input_mode` is
+    not a reply. Taking it for one leaves every later act() a reply behind the
+    game, which can't recover: the bot keeps acting on a stale picture.
+    """
+    modes, resend = [], False
+    for m in batch:
+        if m.get("msg") == "version":
+            resend = True
+        elif m.get("msg") == "input_mode":
+            if resend:
+                resend = False
+            else:
+                modes.append(m.get("mode"))
+    return modes
+
+
 def classify_error(exc: Exception) -> str:
     if isinstance(exc, dcss_api.BlockingErr):
         return str(exc).lower() or "pickup"
@@ -171,7 +192,9 @@ class Connection:
         Waits on any `input_mode` message rather than only mode 1 (command
         input): a menu opens with mode 0 and never reaches mode 1, and waiting
         for 1 there blocks forever. `--more--` prompts are dismissed here; any
-        other prompt or menu is returned to the caller unanswered.
+        other prompt or menu is returned to the caller unanswered. A spectator's
+        state resend is read past (see `reply_modes`) when keys were sent; a
+        bare sync takes whatever prompt comes.
         """
         result = ActResult()
         for key in keys:
@@ -190,7 +213,8 @@ class Connection:
             if reason:
                 result.blocking = reason
                 break
-            modes = [m.get("mode") for m in batch if m.get("msg") == "input_mode"]
+            modes = (reply_modes(batch) if keys
+                     else [m.get("mode") for m in batch if m.get("msg") == "input_mode"])
             if modes and modes[-1] == 1:
                 break
             if any(m.get("msg") in ("menu", "ui-push") for m in batch):
