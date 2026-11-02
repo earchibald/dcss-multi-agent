@@ -90,14 +90,15 @@ uv run ladder retune runs/<dir> --threat 1.5     # re-route stored answers, no n
 
 ## Models
 
-`profiles.toml` puts Tactics and Strategy on `claude-opus-5` through the Anthropic adapter
-(official SDK, server-side refusal fallbacks on). `src/ladder/llm.py` also has an
-OpenAI-compatible adapter (official OpenAI SDK, any base URL); the DeepSeek profiles are
-spares that show both styles. Keys go in Keychain the same way:
+`profiles.toml` puts Strategy on `claude-opus-5` through the Anthropic adapter (official
+SDK, server-side refusal fallbacks on) and Tactics on DeepSeek V4.1 Flash (`deepseek-flash`)
+through the OpenAI-compatible adapter (official OpenAI SDK, any base URL; JSON via
+`json_object` with the schema in the prompt). The `deepseek-anth` spare reaches the same model
+through DeepSeek's Anthropic-style endpoint. Keys go in Keychain the same way:
 
 ```bash
 security add-generic-password -s dcss-ladder -a anthropic -w
-security add-generic-password -s dcss-ladder -a deepseek -w     # only if you use the spares
+security add-generic-password -s dcss-ladder -a deepseek -w
 ```
 
 ## Who decides

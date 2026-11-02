@@ -17,10 +17,10 @@ TOOL = Tool("fight_melee", "Attack one adjacent monster", {
 
 OPUS = Profile("anthropic", "anthropic", "https://api.anthropic.com", "claude-opus-5",
                supports=("tools", "json_schema", "effort", "fallbacks"), fallbacks="default")
-DS_ANTH = Profile("deepseek-anth", "anthropic", "https://api.deepseek.com/anthropic", "deepseek-chat",
+DS_ANTH = Profile("deepseek-anth", "anthropic", "https://api.deepseek.com/anthropic", "deepseek-flash",
                   supports=("tools",))
-DS_OAI = Profile("deepseek-oai", "openai", "https://api.deepseek.com", "deepseek-chat",
-                 supports=("tools", "json_object"))
+DS_OAI = Profile("deepseek-flash", "openai", "https://api.deepseek.com", "deepseek-flash",
+                 supports=("tools", "json_object", "thinking"), thinking="disabled")
 OAI_SCHEMA = Profile("local", "openai", "http://localhost:11434/v1", "qwen", supports=("tools", "json_schema"))
 
 
@@ -37,7 +37,7 @@ class FakeAnthropic:
 class FakeOpenAI:
     def __init__(self, message, finish_reason="stop"):
         self.calls = []
-        completion = NS(choices=[NS(message=message, finish_reason=finish_reason)], model="deepseek-chat",
+        completion = NS(choices=[NS(message=message, finish_reason=finish_reason)], model="deepseek-flash",
                         usage={"prompt_tokens": 100, "completion_tokens": 20})
         self.chat = NS(completions=NS(create=lambda **kw: (self.calls.append(kw), completion)[1]))
 
@@ -88,6 +88,13 @@ def test_openai_json_object_puts_schema_in_the_system_prompt():
     assert sent["response_format"] == {"type": "json_object"}
     assert sent["messages"][0]["role"] == "system" and '"pick"' in sent["messages"][0]["content"]
     assert resp.data == {"pick": "B"}
+    assert sent["extra_body"] == {"thinking": {"type": "disabled"}}
+
+
+def test_openai_sends_no_thinking_switch_unless_the_profile_has_one():
+    fake = FakeOpenAI(NS(content='{"pick": "C"}', tool_calls=None, refusal=None))
+    OpenAIAdapter(OAI_SCHEMA, fake).complete(Request("s", [{"role": "user", "content": "x"}], json_schema=SCHEMA))
+    assert "extra_body" not in fake.calls[0]
 
 
 def test_openai_json_schema_and_tool_calls():
@@ -108,11 +115,13 @@ def test_adapter_for_picks_by_style_and_rejects_systemone():
         adapter_for(Profile("typesafe", "systemone", "https://api.typesafe.ai", "jev-latest"))
 
 
-def test_repo_tiers_use_opus_5_and_spares_cover_both_styles():
+def test_repo_tiers_strategy_on_opus_5_tactics_on_deepseek_flash():
     assert for_tier("strategy").model == "claude-opus-5"
-    assert for_tier("tactics").model == "claude-opus-5"
+    tactics = for_tier("tactics")
+    assert (tactics.style, tactics.model) == ("openai", "deepseek-flash")
+    assert (tactics.keychain_service, tactics.keychain_account) == ("dcss-ladder", "deepseek")
+    assert tactics.thinking == "disabled" and "thinking" in tactics.supports
     profiles, _ = load()
     assert {p.style for p in profiles.values()} >= {"anthropic", "openai", "systemone"}
-    check(profiles["deepseek-oai"], {"json"})
     with pytest.raises(CapabilityError):
         check(profiles["deepseek-anth"], {"json"})

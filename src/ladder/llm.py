@@ -23,6 +23,7 @@ CAPABILITIES = {
     "json_object": "JSON output without a schema (schema goes in the prompt)",
     "effort": "Anthropic output_config.effort",
     "fallbacks": "Anthropic server-side refusal fallbacks",
+    "thinking": "DeepSeek-style thinking switch (extra_body thinking.type)",
 }
 FALLBACK_BETA = "server-side-fallback-2026-07-01"
 
@@ -164,6 +165,8 @@ class OpenAIAdapter:
             kwargs["tools"] = [{"type": "function", "function": {
                 "name": t.name, "description": t.description, "parameters": t.schema, "strict": True}}
                 for t in request.tools]
+        if self.profile.thinking and "thinking" in self.profile.supports:
+            kwargs["extra_body"] = {"thinking": {"type": self.profile.thinking}}
         kwargs["messages"] = [{"role": "system", "content": system}, *request.messages]
         completion = self.client.chat.completions.create(**kwargs)
 

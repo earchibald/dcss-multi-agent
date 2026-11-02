@@ -26,6 +26,7 @@ class Profile:
     supports: tuple[str, ...] = ()
     effort: str | None = None
     fallbacks: str | None = None
+    thinking: str | None = None     # "enabled" | "disabled", for models that think by default
 
     def api_key(self) -> str | None:
         """The profile's key from Keychain. Local endpoints may have none."""
@@ -49,7 +50,8 @@ def load(path: str | Path = DEFAULT_PATH) -> tuple[dict[str, Profile], dict[str,
         profiles[name] = Profile(name=name, style=p["style"], base_url=p["base_url"].rstrip("/"),
                                  model=p["model"], keychain_service=kc.get("service"),
                                  keychain_account=kc.get("account"), supports=tuple(p.get("supports", ())),
-                                 effort=p.get("effort"), fallbacks=p.get("fallbacks"))
+                                 effort=p.get("effort"), fallbacks=p.get("fallbacks"),
+                                 thinking=p.get("thinking"))
     return profiles, dict(data.get("tiers", {}))
 
 

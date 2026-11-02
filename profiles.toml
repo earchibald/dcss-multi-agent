@@ -3,7 +3,7 @@
 #
 # style:    "systemone" (TypeSafe), "anthropic" (Messages API via the Anthropic SDK),
 #           "openai" (Chat Completions-compatible, via the OpenAI SDK)
-# supports: tools, json_schema, json_object, effort, fallbacks  (see ladder/llm.py)
+# supports: tools, json_schema, json_object, effort, fallbacks, thinking  (see ladder/llm.py)
 
 [profiles.typesafe]
 style = "systemone"
@@ -19,22 +19,26 @@ keychain = { service = "dcss-ladder", account = "anthropic" }
 supports = ["tools", "json_schema", "effort", "fallbacks"]
 fallbacks = "default"          # re-run a refused request on Anthropic's recommended fallback model
 
-# Spares: the same DeepSeek key reaches either API style.
-[profiles.deepseek-oai]
+# DeepSeek V4.1 Flash (DeepSeek-V4.1-Flash-1017) over Chat Completions; JSON comes from
+# json_object mode with the schema in the prompt. DeepSeek thinks by default (effort high);
+# Tactics wants quick answers, so it's off.
+[profiles.deepseek-flash]
 style = "openai"
 base_url = "https://api.deepseek.com"
-model = "deepseek-chat"
+model = "deepseek-flash"
 keychain = { service = "dcss-ladder", account = "deepseek" }
-supports = ["tools", "json_object"]
+supports = ["tools", "json_object", "thinking"]
+thinking = "disabled"
 
+# Spare: the same DeepSeek key reaches the Anthropic-style endpoint too.
 [profiles.deepseek-anth]
 style = "anthropic"
 base_url = "https://api.deepseek.com/anthropic"
-model = "deepseek-chat"
+model = "deepseek-flash"
 keychain = { service = "dcss-ladder", account = "deepseek" }
 supports = ["tools"]
 
 [tiers]
 jev = "typesafe"
-tactics = "anthropic"
+tactics = "deepseek-flash"
 strategy = "anthropic"
