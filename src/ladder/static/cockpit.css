@@ -83,6 +83,9 @@ button.ghost[aria-pressed=true] { background: var(--tactics-bg); border-color: v
 .opts button.rec { border-color: var(--strategy); }
 .opts .n { font: 600 .75rem var(--mono); color: var(--muted); margin-right: 8px; }
 .rec-tag { font: 600 .72rem var(--mono); color: var(--strategy); white-space: nowrap; }
+.handover { border-color: var(--player); }
+.handover .steps { margin: 0; padding-left: 1.3em; display: grid; gap: 8px; }
+.handover code { display: block; overflow-wrap: anywhere; background: var(--sunk); border: 1px solid var(--line); border-radius: 4px; padding: 4px 6px; margin: 4px 0; font-size: .8rem; }
 #card-exits button { border: 1px dashed var(--line); background: none; border-radius: 5px; padding: 4px 10px; cursor: pointer; font-size: .85rem; }
 
 .stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }

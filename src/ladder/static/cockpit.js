@@ -216,10 +216,12 @@ function renderRun(run) {
   const ended = run.games?.slice(-1)[0];
   const saved = ended && (ended.ended_by === "take_over" || ended.ended_by === "stopped");
   $("stop").disabled = run.state !== "running";
-  if (saved && run.state !== "running") {
-    toast(`Game saved for you. Log in to webtiles as ${links.user}; the password is in Keychain: ` +
-      `security find-generic-password -s dcss-ladder -a dcss-account/${links.user} -w`, true);
-  }
+  $("handover").hidden = !(saved && run.state !== "running");
+  if ($("handover").hidden) return;
+  $("h-handover").textContent = `Saved for you at ${ended.final_place}, turn ${ended.turns}`;
+  $("ho-cmd").textContent = links.password_cmd;
+  $("ho-lobby").href = links.lobby;
+  $("ho-user").textContent = links.user;
 }
 
 // ---- talking to the server ---------------------------------------------------
@@ -256,6 +258,14 @@ $("idle-form").addEventListener("submit", (ev) => {
 });
 $("hold").addEventListener("click", () => post("/api/hold", { hold: !settings.held }));
 $("stop").addEventListener("click", () => post("/api/stop", {}));
+$("ho-copy").addEventListener("click", async () => {
+  try {
+    await navigator.clipboard.writeText(links.password_cmd);
+    $("ho-copy").textContent = "Copied: paste it in a terminal";
+  } catch {
+    $("ho-copy").textContent = "Select the command and copy it";
+  }
+});
 $("hide-routine").addEventListener("change", (ev) => $("stream").classList.toggle("hidden-routine", ev.target.checked));
 document.addEventListener("keydown", (ev) => {
   if (!pending || ev.target.closest("input, textarea") || ev.metaKey || ev.ctrlKey || ev.altKey) return;

@@ -10,7 +10,7 @@ import pytest
 
 from helpers import add_monster, make_state
 from ladder.authority import AUTONOMOUS, Authority
-from ladder.cockpit import ChildHooks, Hub, make_handler, watch_url
+from ladder.cockpit import ChildHooks, Hub, game_links, handover_text, make_handler, watch_url
 from ladder.decisions import TAKE_OVER, Answer, for_escalation, for_interrupt, stat_choice
 from ladder.interrupts import Interrupt
 from ladder.jev import Answers, JevResult
@@ -199,6 +199,14 @@ def test_http_refuses_other_origins_and_hosts(server):
 
 def test_watch_url():
     assert watch_url("ws://localhost:8080/socket", "ladderbot") == "http://localhost:8080/#watch-ladderbot"
+
+
+def test_handover_names_the_keychain_item_the_login_uses():
+    links = game_links("wss://crawl.example/socket", "ladderbot")
+    assert links["lobby"] == "https://crawl.example/"
+    assert "-s dcss-ladder -a dcss-account/ladderbot -w" in links["password_cmd"]
+    text = handover_text(links, {"game": 1, "final_place": "D:1", "turns": 199})
+    assert "D:1, turn 199" in text and "log in as ladderbot" in text
 
 
 def test_stall_warning_only_when_the_game_should_be_moving():

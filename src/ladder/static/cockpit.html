@@ -58,6 +58,18 @@
       <p id="card-why" class="muted small"></p>
     </section>
 
+    <section id="handover" class="card handover" aria-labelledby="h-handover" hidden>
+      <span class="lbl">Your game</span>
+      <h3 id="h-handover"></h3>
+      <ol class="steps">
+        <li>Copy the password from Keychain: <code id="ho-cmd" class="mono"></code>
+          <button type="button" id="ho-copy" class="ghost">Copy command</button></li>
+        <li>Open <a id="ho-lobby" href="#" target="_blank" rel="noopener">webtiles</a> and log in as <b id="ho-user"></b>.</li>
+        <li>Click <b>Play</b>. DCSS resumes the saved game.</li>
+      </ol>
+      <p class="muted small">To hand it back, save with Ctrl-S in DCSS and start the cockpit again. It resumes the save.</p>
+    </section>
+
     <section class="panel" aria-labelledby="h-game">
       <h2 id="h-game" class="lbl">Game</h2>
       <div class="stats">

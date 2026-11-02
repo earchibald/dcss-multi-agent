@@ -31,6 +31,7 @@ from importlib import resources
 from typing import Callable
 from urllib.parse import urlsplit
 
+from . import keychain
 from .authority import ASSISTED, AUTONOMOUS, Authority, Pending
 from .decisions import TAKE_OVER, Answer, DecisionRequest
 from .games import run_games
@@ -455,10 +456,29 @@ def make_handler(hub: Hub, port: int) -> type[BaseHTTPRequestHandler]:
 
 # --- wiring -------------------------------------------------------------------
 
-def watch_url(server: str, user: str) -> str:
+def lobby_url(server: str) -> str:
     parts = urlsplit(server)
     scheme = "https" if parts.scheme == "wss" else "http"
-    return f"{scheme}://{parts.netloc}/#watch-{user}"
+    return f"{scheme}://{parts.netloc}/"
+
+
+def watch_url(server: str, user: str) -> str:
+    return f"{lobby_url(server)}#watch-{user}"
+
+
+def game_links(server: str, user: str) -> dict:
+    """Where to watch, and what the player needs to pick up a game the cockpit left saved."""
+    return {"webtiles": watch_url(server, user), "lobby": lobby_url(server), "user": user,
+            "password_cmd": f"security find-generic-password -s {keychain.SERVICE} "
+                            f"-a {keychain.dcss_account(user)} -w | pbcopy"}
+
+
+def handover_text(links: dict, game: dict) -> str:
+    return (f"Game {game['game']} is saved for you at {game['final_place']}, turn {game['turns']}.\n"
+            f"  1. Copy the password:  {links['password_cmd']}\n"
+            f"  2. Open {links['lobby']} and log in as {links['user']}.\n"
+            f"  3. Click Play: DCSS resumes the saved game.\n"
+            f"To hand it back, save with Ctrl-S in DCSS and start the cockpit again; it resumes the save.")
 
 
 def _interrupt(signum, frame):
@@ -476,7 +496,7 @@ def serve(args: argparse.Namespace, thresholds: Thresholds = Thresholds()) -> No
     jev = Jev(profiles.for_tier("jev")) if args.jev else None
     parent_end, child_end = mp.Pipe()
     hub = Hub(authority, parent_end.send, jev=jev, thresholds=thresholds,
-              links={"webtiles": watch_url(args.server, args.user), "user": args.user})
+              links=game_links(args.server, args.user))
     proc = mp.get_context("spawn").Process(target=child_main, args=(child_end, args), name="ladder-game",
                                            daemon=True)
     proc.start()
@@ -485,7 +505,10 @@ def serve(args: argparse.Namespace, thresholds: Thresholds = Thresholds()) -> No
     def pump() -> None:
         try:
             while True:
-                hub.handle(parent_end.recv())
+                msg = parent_end.recv()
+                hub.handle(msg)
+                if msg.get("ev") == "game_end" and msg.get("ended_by") in ("take_over", "stopped"):
+                    print(handover_text(hub.links, msg), flush=True)
         except (EOFError, OSError):
             hub.child_gone()
 
