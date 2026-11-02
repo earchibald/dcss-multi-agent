@@ -85,6 +85,9 @@ def main() -> None:
     p = sub.add_parser("cockpit", help="play with the web cockpit: live stream, decisions, mode and idle switch")
     add_game_args(p)
     p.add_argument("--port", type=int, default=8090, help="cockpit port on 127.0.0.1")
+    p.add_argument("--play-port", type=int, default=None,
+                   help="port of the proxy you play webtiles through, which records your keys "
+                        "(default: --port + 10; 0 = none)")
     p.add_argument("--mode", choices=("assisted", "autonomous"), default="assisted")
     p.add_argument("--idle-minutes", type=int, default=0, help="go autonomous after this many idle minutes; 0 = never")
     p.add_argument("--jev", action="store_true", help="also ask Jev about each interrupt and show its route (shadow)")

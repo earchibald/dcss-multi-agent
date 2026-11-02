@@ -56,7 +56,7 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
 
     private static let handoverCategory = UNNotificationCategory(
         identifier: "handover",
-        actions: [UNNotificationAction(identifier: "play", title: "Sign in and play", options: [.foreground])],
+        actions: [UNNotificationAction(identifier: "play", title: "Play", options: [.foreground])],
         intentIdentifiers: [])
 
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse,

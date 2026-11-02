@@ -170,6 +170,7 @@ final class Panel: NSObject, WKScriptMessageHandler, WKNavigationDelegate, WKUID
         case "height":
             if kind == .call, let h = body["h"] as? Double { fit(CGFloat(h)) }
         case "play": app.playInWebtiles()
+        case "handback": app.handBack()
         case "start": app.startCockpit()
         default: break
         }

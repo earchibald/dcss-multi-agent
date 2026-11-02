@@ -1,5 +1,4 @@
 import AppKit
-import Security
 
 enum Prefs {
     static let d = UserDefaults.standard
@@ -38,23 +37,6 @@ enum Alerts {
     static func toast(_ text: String) {
         NSSound.beep()
         show?(text)
-    }
-}
-
-enum Keychain {
-    /// A generic password, read when needed and never kept. The cockpit stores the webtiles
-    /// account's password under service `dcss-ladder`, account `dcss-account/<user>`.
-    static func password(service: String, account: String) -> String? {
-        let q: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: account,
-            kSecReturnData as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne,
-        ]
-        var out: CFTypeRef?
-        guard SecItemCopyMatching(q as CFDictionary, &out) == errSecSuccess, let data = out as? Data else { return nil }
-        return String(data: data, encoding: .utf8)
     }
 }
 

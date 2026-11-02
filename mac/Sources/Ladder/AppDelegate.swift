@@ -46,7 +46,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
 
         cockpit.onUp = { [weak self] up in self?.connection(up) }
-        cockpit.onEvent = { [weak self] _, raw in self?.panels.values.forEach { $0.send(raw) } }
+        cockpit.onEvent = { [weak self] e, raw in
+            self?.panels.values.forEach { $0.send(raw) }
+            if e["ev"] as? String == "game_start" { self?.webtiles.watch() }
+        }
         cockpit.onPending = { [weak self] new, old in self?.pendingChanged(new, old) }
         cockpit.onGameEnd = { [weak self] e in self?.gameEnded(e) }
         cockpit.onChange = { [weak self] in self?.refresh() }
@@ -130,7 +133,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func gameEnded(_ e: JSON) {
         guard let by = e["ended_by"] as? String, by == "take_over" || by == "stopped" else { return }
         let place = e["final_place"] as? String ?? "?"
-        notifier.handover("Saved at \(place), turn \(e["turns"] ?? "?"). Sign in and play it in the webtiles window.")
+        notifier.handover("Saved at \(place), turn \(e["turns"] ?? "?"). Play it in the webtiles window.")
         panels[.call]?.window.orderFrontRegardless()
     }
 
@@ -152,7 +155,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if server.running { server.stop() } else { cockpit.takeWheel() }
     }
 
-    func playInWebtiles() { webtiles.signInAndPlay() }
+    func playInWebtiles() { webtiles.play() }
+
+    func handBack() { webtiles.handBack() }
 
     /// Links out of the panels: webtiles ones open in the webtiles window, the rest in the browser.
     func open(_ url: URL) {
@@ -370,9 +375,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             }) { [weak self] in self?.cockpit.setMode("autonomous") },
             .separator(),
             item("Take the Wheel", key: "t", mods: [.command, .shift], update: { [weak self] in
-                $0.isEnabled = self?.cockpit.runState == "running"
-            }) { [weak self] in self?.cockpit.takeWheel() },
-            item("Sign In and Play in Webtiles", key: "p", mods: [.command, .shift]) { [weak self] in self?.playInWebtiles() },
+                $0.isEnabled = self?.cockpit.up ?? false
+                $0.title = self?.cockpit.running ?? true ? "Take the Wheel" : "Play in Webtiles"
+            }) { [weak self] in self?.playInWebtiles() },
+            item("Hand Back to the Bot", key: "b", mods: [.command, .shift], update: { [weak self] in
+                $0.isEnabled = (self?.cockpit.up ?? false) && !(self?.cockpit.running ?? true)
+            }) { [weak self] in self?.handBack() },
         ]))
 
         decisionMenu.autoenablesItems = false
@@ -479,9 +487,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let step = item("Step One Action") { [weak self] in self?.cockpit.step() }
         step.isEnabled = c.running
         m.addItem(step)
-        let wheel = item("Take the Wheel") { [weak self] in self?.cockpit.takeWheel() }
-        wheel.isEnabled = c.runState == "running"
-        m.addItem(wheel)
+        if c.running || !c.up {
+            let wheel = item("Take the Wheel") { [weak self] in self?.playInWebtiles() }
+            wheel.isEnabled = c.up
+            m.addItem(wheel)
+        } else {
+            m.addItem(item("Hand Back to the Bot") { [weak self] in self?.handBack() })
+            m.addItem(item("Play in Webtiles") { [weak self] in self?.playInWebtiles() })
+        }
         m.addItem(.separator())
         m.addItem(item("Show Webtiles") { [weak self] in self?.webtiles.show() })
         m.addItem(item("Show All Panels") { [weak self] in self?.showAllPanels(); NSApp.activate() })

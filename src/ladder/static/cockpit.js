@@ -35,6 +35,8 @@ const ROUTINE = new Set(["level_change", "xl_up"]);
 const rows = new Map();       // record seq → stream row, for late Jev routes
 let settings = {}, links = {}, pending = null, clockTimer = null, deadline = null;
 let tiers = {}, deciders = {};
+const WEBTILES = "dcss-webtiles";   // the tab that watches and plays, reused by every link here
+let webtilesTab = null, watchOnStart = false;
 
 // ---- describing interrupts -------------------------------------------------
 
@@ -123,6 +125,12 @@ function addEvent(e) {
     case "game_end": return addNote(`game ${e.game} ended · ${e.ended_by} · ${e.final_place}, turn ${e.turns}, XL ${e.xl}` +
       (e.escalation ? ` · ${e.escalation}` : ""));
     case "run_end": return addNote("run finished");
+    case "player_keys": return addNote(e.state === "recording"
+      ? `@ recording your keys · ${e.record}` : `@ your keys saved · ${e.record}`);
+    case "player_game": return addNote(e.state === "watching"
+      ? `@ following your game${e.record ? ` · recording ${e.record}` : ""}`
+      : `@ your game ${e.died ? "ended in death" : "closed"} · ${e.reason}` +
+        (e.snapshot ? ` · ${e.snapshot.place}, turn ${e.snapshot.turn}, XL ${e.snapshot.xl}` : ""));
     case "stall": return e.stalled
       ? addNote(`No word from the game for ${e.seconds} s. It may be stuck waiting on the server (dcss-api's read_until ` +
           "has no timeout). Ctrl-C the cockpit: the game stays saved, and the next start resumes it.", "err")
@@ -174,7 +182,9 @@ function renderPending(p) {
     type: "button", class: o.key === p.recommended ? "rec" : null, onclick: () => decide(o.key),
   }, h("span", null, h("span", { class: "n" }, String(i + 1)), o.label),
     o.key === p.recommended ? h("span", { class: "rec-tag" }, "✦ recommended (stub)") : null)));
-  $("card-exits").replaceChildren(...exits.map((o) => h("button", { type: "button", onclick: () => decide(o.key) },
+  $("card-exits").replaceChildren(...exits.map((o) => h("button", {
+    type: "button", onclick: () => (o.key === "take_over" ? takeWheel() : decide(o.key)),
+  },
     o.label + (o.key === p.recommended ? " · recommended" : ""))));
   const why = p.why_asked === "pinned" ? `${p.decision_type} is pinned: in assisted mode it always asks you`
     : `${p.decision_type} isn't deferred to Strategy`;
@@ -209,9 +219,35 @@ function renderStatus(st) {
   const frac = s.hp_max ? s.hp / s.hp_max : 0;
   $("s-hpbar").style.width = `${Math.round(frac * 100)}%`;
   $("s-hpbar").classList.toggle("low", frac < 0.5);
-  $("s-action").textContent = st.action || "–";
+  $("s-doer").textContent = st.player ? "You have the wheel" : "Reflex is doing";
+  $("s-action").textContent = st.player ? "the cockpit is spectating" : st.action || "–";
   $("s-hostiles").textContent = s.hostiles?.length ? monsters(s.hostiles) : "none in view";
-  $("s-msgs").replaceChildren(...(st.messages || []).map((m) => h("li", null, m)));
+  renderMessages(st);
+}
+
+// Each status carries the last few messages and how many the game has had, so the page keeps the history
+// to scroll back through. A different game, or the player's instead of the bot's, starts it over.
+const MSG_KEEP = 300;
+let msgLog = [], msgTotal = 0, msgSource = null;
+
+function renderMessages(st) {
+  const msgs = st.messages || [];
+  const source = st.player ? "player" : `game ${st.game}`;
+  const total = st.msg_total ?? msgs.length;
+  if (source !== msgSource || total < msgTotal || st.msg_total == null) {
+    msgLog = [];
+    msgTotal = Math.max(0, total - msgs.length);
+    msgSource = source;
+  }
+  const fresh = Math.min(total - msgTotal, msgs.length);
+  if (fresh <= 0 && msgLog.length) return;
+  msgLog.push(...msgs.slice(msgs.length - fresh));
+  msgLog = msgLog.slice(-MSG_KEEP);
+  msgTotal = total;
+  const box = $("s-msgs");
+  const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 24;
+  box.replaceChildren(...msgLog.map((m) => h("li", null, m)));
+  if (atBottom) box.scrollTop = box.scrollHeight;
 }
 
 function renderSettings(s) {
@@ -244,18 +280,24 @@ function renderRun(run) {
   $("run-state").dataset.s = run.state;
   $("run-dir").textContent = run.dir || "";
   const ended = run.games?.slice(-1)[0];
-  const saved = ended && (ended.ended_by === "take_over" || ended.ended_by === "stopped");
+  const yours = run.state === "yours";        // the cockpit started while the player was in the game
+  const saved = yours || (ended && (ended.ended_by === "take_over" || ended.ended_by === "stopped"));
+  const active = ["starting", "running", "stopping"].includes(run.state);
   $("stop").disabled = run.state !== "running";
+  $("resume").hidden = active || run.state === "connecting…";
+  $("resume").textContent = saved ? "↩ Hand back" : "▶ New run";
   $("hold").disabled = !["starting", "running"].includes(run.state);
   $("step").disabled = $("hold").disabled;
   $("handover").hidden = !(saved && run.state !== "running");
   renderCallIdle();
   if ($("handover").hidden) return;
-  $("ho-play").hidden = !bridge;
-  $("h-handover").textContent = `Saved for you at ${ended.final_place}, turn ${ended.turns}`;
+  $("ho-play").hidden = !(bridge || links.play);
+  $("h-handover").textContent = yours
+    ? `You're playing${run.player?.place ? ` at ${run.player.place}, turn ${run.player.turn}` : ""}`
+    : `Saved for you at ${ended.final_place}, turn ${ended.turns}`;
   $("ho-cmd").textContent = links.password_cmd;
   $("ho-lobby").href = links.lobby;
-  $("ho-user").textContent = links.user;
+  document.querySelectorAll(".ho-user").forEach((el) => { el.textContent = links.user; });
 }
 
 // ---- talking to the server ---------------------------------------------------
@@ -282,6 +324,26 @@ function decide(choice) {
   if (pending) post("/api/decide", { id: pending.id, choice });
 }
 
+// Take the wheel: the cockpit stops the bot, waits for the save, logs the webtiles tab in as the bot
+// (webtiles' own login cookie) and sends it to Play. No password, no logging out.
+function takeWheel() {
+  if (bridge) return bridge.postMessage({ type: "play" });
+  if (!links.play) return post("/api/stop", {});       // webtiles isn't on localhost: the manual steps show
+  const form = h("form", { method: "post", action: links.play, target: WEBTILES, hidden: true });
+  document.body.append(form);
+  form.submit();
+  form.remove();
+}
+
+// Hand back: leaving the game in webtiles saves it (webtiles hangs up on it), and a fresh run resumes the
+// save. The tab watches the bot again once it plays.
+async function handBack() {
+  if (bridge) return bridge.postMessage({ type: "handback" });
+  webtilesTab = window.open(links.lobby, WEBTILES);
+  watchOnStart = true;
+  if (!(await post("/api/resume", {}))) watchOnStart = false;
+}
+
 $("mode-assisted").addEventListener("click", () => post("/api/mode", { mode: "assisted" }));
 $("mode-autonomous").addEventListener("click", () => post("/api/mode", { mode: "autonomous" }));
 $("idle-form").addEventListener("submit", (ev) => {
@@ -291,7 +353,8 @@ $("idle-form").addEventListener("submit", (ev) => {
   post("/api/idle", { minutes: n });
 });
 $("hold").addEventListener("click", () => post("/api/hold", { hold: !settings.held }));
-$("stop").addEventListener("click", () => post("/api/stop", {}));
+$("stop").addEventListener("click", takeWheel);
+$("resume").addEventListener("click", handBack);
 $("delay").addEventListener("input", (ev) => showDelay(ev.target.value));
 $("delay").addEventListener("change", async (ev) => {
   if (!(await post("/api/speed", { delay: Number(ev.target.value) }))) showDelay(settings.delay);
@@ -319,7 +382,8 @@ $("ho-copy").addEventListener("click", async () => {
     $("ho-copy").textContent = "Select the command and copy it";
   }
 });
-$("ho-play").addEventListener("click", () => bridge?.postMessage({ type: "play" }));
+$("ho-play").addEventListener("click", takeWheel);
+$("ho-back").addEventListener("click", handBack);
 $("hide-routine").addEventListener("change", (ev) => $("stream").classList.toggle("hidden-routine", ev.target.checked));
 document.addEventListener("keydown", (ev) => {
   if (!pending || ev.target.closest("input, textarea") || ev.metaKey || ev.ctrlKey || ev.altKey) return;
@@ -349,6 +413,10 @@ function onEvent(e) {
         if (e.route.tier !== "none" && e.route.tier !== "asking" && e.route.tier !== "reflex") {
           tiers[e.route.tier] = (tiers[e.route.tier] || 0) + 1; renderCounts();
         }
+        return addEvent(e);
+      case "game_start":
+        if (watchOnStart && webtilesTab && !webtilesTab.closed) webtilesTab.location.href = links.webtiles;
+        watchOnStart = false;
         return addEvent(e);
       default: return addEvent(e);
     }

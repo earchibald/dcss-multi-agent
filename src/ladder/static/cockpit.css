@@ -100,7 +100,8 @@ button.ghost[aria-pressed=true] { background: var(--tactics-bg); border-color: v
 .bar i { display: block; height: 100%; width: 0; background: var(--ok); transition: width .3s; }
 .bar i.low { background: var(--warn); }
 .msgs { margin: 0; padding: 8px 10px; list-style: none; background: var(--sunk); border-radius: 6px; min-height: 3em;
-        display: grid; gap: 2px; overflow-wrap: anywhere; }
+        max-height: 14em; overflow-y: auto; overscroll-behavior: contain; display: grid; align-content: start;
+        gap: 2px; overflow-wrap: anywhere; }
 
 .list, .stream { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
 .list li { display: grid; grid-template-columns: 76px minmax(0, 1fr); gap: 8px; align-items: start; padding: 4px 0;
@@ -149,3 +150,5 @@ body[data-panel] .card { margin: 0; }
 .call-idle { padding: 18px 4px; text-align: center; }
 body[data-app] { background: transparent; font-size: 13.5px; }
 body[data-app] .card { background: color-mix(in srgb, var(--surface) 85%, transparent); }
+.handover details { margin-top: 6px; }
+.handover summary { cursor: pointer; margin-bottom: 8px; }

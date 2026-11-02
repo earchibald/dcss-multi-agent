@@ -1,14 +1,12 @@
 import AppKit
 import WebKit
 
-/// The webtiles window: spectates the bot while a run plays, and signs in and plays when the
-/// cockpit hands the game over.
+/// The webtiles window: spectates the bot while a run plays, and plays when you take the wheel.
 @MainActor
 final class Webtiles: NSObject, WKNavigationDelegate, WKUIDelegate, NSWindowDelegate {
     let window: NSWindow
     let web: WKWebView
     private unowned let app: AppDelegate
-    private var afterLoad: (() -> Void)?
 
     init(app: AppDelegate) {
         self.app = app
@@ -34,12 +32,14 @@ final class Webtiles: NSObject, WKNavigationDelegate, WKUIDelegate, NSWindowDele
     var lobby: URL { URL(string: app.cockpit.links["lobby"] as? String ?? Prefs.webtiles)! }
     var user: String { app.cockpit.links["user"] as? String ?? "ladderbot" }
     var watchURL: URL? { (app.cockpit.links["webtiles"] as? String).flatMap(URL.init(string:)) }
+    var playURL: URL? { (app.cockpit.links["play"] as? String).flatMap(URL.init(string:)) }
+    /// The cockpit's recording proxy: Play lands here, so your keys are recorded with the game.
+    var proxyURL: URL? { (app.cockpit.links["proxy"] as? String).flatMap(URL.init(string:)) }
 
     /// In a game of its own (not spectating or in the lobby).
     var playing: Bool { web.url?.fragment?.hasPrefix("play-") ?? false }
 
     func load(_ url: URL) {
-        afterLoad = nil
         web.load(URLRequest(url: url))
     }
 
@@ -58,49 +58,23 @@ final class Webtiles: NSObject, WKNavigationDelegate, WKUIDelegate, NSWindowDele
         Prefs.d.set(true, forKey: "shown.webtiles")
     }
 
-    /// The cockpit left the game saved: sign in as the bot with the Keychain password and press Play.
-    func signInAndPlay() {
-        let user = self.user
-        show()
-        Task.detached {
-            let password = Keychain.password(service: "dcss-ladder", account: "dcss-account/\(user)")
-            await MainActor.run {
-                guard let password else {
-                    return Alerts.toast("No Keychain password for \(user) (service dcss-ladder, account dcss-account/\(user)).")
-                }
-                // a query, not just the fragment, so it's a full load that ends in didFinish
-                self.web.load(URLRequest(url: self.lobby.appending(queryItems: [URLQueryItem(name: "from", value: "ladder")])))
-                self.afterLoad = {
-                    self.web.evaluateJavaScript(Self.signInScript(user: user, password: password))
-                }
-            }
+    /// Take the wheel: the cockpit stops the bot, waits for the save, and answers with webtiles' login
+    /// cookie for the bot and a redirect to Play. No password passes through here.
+    func play() {
+        guard let url = playURL else {
+            return Alerts.toast("Playing from the cockpit needs webtiles on localhost; log in by hand.")
         }
+        show()
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        web.load(req)
     }
 
-    /// Fill the lobby's login form once it shows, then follow the first Play link.
-    private static func signInScript(user: String, password: String) -> String {
-        """
-        (function (user, pass) {
-          let tries = 0;
-          const shown = (el) => el && el.offsetParent !== null;
-          const t = setInterval(() => {
-            if (++tries > 120) return clearInterval(t);
-            const play = document.querySelector('a[href^="#play-"]');
-            if (shown(document.getElementById("logout_link")) && play) {
-              clearInterval(t);
-              play.click();
-              return;
-            }
-            const form = document.getElementById("login_form");
-            if (shown(form) && !form.dataset.ladder) {
-              form.dataset.ladder = "1";
-              document.getElementById("username").value = user;
-              document.getElementById("password").value = pass;
-              form.requestSubmit();
-            }
-          }, 250);
-        })(\(jsString(user)), \(jsString(password)));
-        """
+    /// Hand back: leaving the game saves it (webtiles hangs up on it), and the cockpit starts a run that
+    /// resumes the save. `watch()` follows the bot again at its game_start.
+    func handBack() {
+        if playing { load(lobby) }
+        app.cockpit.act("api/resume")
     }
 
     func zoom(_ by: Double?) {
@@ -111,16 +85,11 @@ final class Webtiles: NSObject, WKNavigationDelegate, WKUIDelegate, NSWindowDele
 
     // MARK: WebKit
 
-    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-        let run = afterLoad
-        afterLoad = nil
-        run?()
-    }
-
     func webView(_ webView: WKWebView, decidePolicyFor action: WKNavigationAction,
                  decisionHandler: @escaping @MainActor (WKNavigationActionPolicy) -> Void) {
         guard let url = action.request.url else { return decisionHandler(.cancel) }
-        if url.host == lobby.host && url.port == lobby.port || url.scheme == "about" {
+        let ours = [lobby, proxyURL].compactMap { $0 }.contains { url.host == $0.host && url.port == $0.port }
+        if ours || url.scheme == "about" || url == playURL {
             return decisionHandler(.allow)
         }
         decisionHandler(.cancel)

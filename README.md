@@ -58,9 +58,10 @@ link spectates the bot). It shows:
 - **Your call**: decision points (stairs, altars, uniques, the level-up stat prompt,
   escalations) wait for you when `Authority` says the player decides. Each card offers
   only what Reflex can carry out, marks the stub's recommendation, and has two ways out:
-  *Take the wheel* (stop, game left saved) and *End game*. Number keys answer.
+  *Take the wheel* (stop, then play it in webtiles) and *End game*. Number keys answer.
 - **Control**: Assisted / Autonomous, the idle switch (whole minutes, `0` = never, with a
-  countdown on the card), *Hold at next event*, and *Take the wheel*.
+  countdown on the card), *Hold at next event*, *Take the wheel*, and *Hand back* once the run
+  has ended.
 - **Speed**: *Pause between actions* (0–5 s on the slider; `--delay` sets it at start, up
   to 60 s) slows Reflex down so you can follow it in webtiles. *Step ▸* runs N Reflex
   actions (default 1) and holds again; from a running game it holds after the next N.
@@ -71,9 +72,37 @@ link spectates the bot). It shows:
   setter for each step to a key no command uses (`ladder/pace.py`), and Reflex sends the
   key when the speed changes.
 
-To take the wheel, log in to webtiles as the bot with the password from Keychain
-(`security find-generic-password -s dcss-ladder -a dcss-account/ladderbot -w`). The
-next `ladder cockpit` or `ladder spike` resumes the saved game.
+**Take the wheel** puts you in the game with no login. The cockpit stops the bot and waits for
+the save. Then it logs the webtiles tab in as the bot with webtiles' own "remember me" cookie
+and sends the tab to Play, which resumes the save. Cookies ignore ports, so the cookie the
+cockpit sets on `localhost` reaches webtiles on `localhost:8080`. The token comes from
+webtiles, which keeps it in memory for 7 days. It goes only into your browser, which already
+keeps webtiles' remember-me cookie the same way. The cockpit never writes it anywhere.
+**Hand back** (on the card and in Control) starts a new run in the same cockpit, and it
+resumes the save. You don't need Ctrl-S. The cockpit hangs up your game in the recording proxy
+(below) and waits for webtiles to save it, and the webtiles tab goes to the lobby. Webtiles saves
+a game when its player leaves. If you played somewhere else, webtiles saves that game itself
+about 10 s after the bot asks for it. The tab watches the bot
+again when its game starts. This needs webtiles on `localhost` or `127.0.0.1`. Elsewhere, the
+card falls back to logging in by hand with the password from Keychain
+(`security find-generic-password -s dcss-ladder -a dcss-account/ladderbot -w`).
+
+**While you play, the cockpit keeps following.** Between runs it spectates the bot's account
+from the webtiles lobby, anonymously, as any spectator can. The Game panel and the menu bar then
+show your place, HP and messages, and the stream notes when your game opens and closes. Every
+message goes to `runs/<dir>/player<n>.protocol.jsonl`, the same format as a bot game's
+`--record`. That is the record of how you played, kept to learn from.
+
+**Your keys are recorded too.** A spectator sees the game but not your keys. So *Take the wheel*
+lands you in webtiles through the cockpit's recording proxy, at `localhost:<port + 10>`
+(`--play-port`, 0 for none). The proxy forwards the page and the socket unchanged. It writes the
+game's messages and your keys, in the order they passed, to `runs/<dir>/play<n>.jsonl`, so each
+key sits between the state it answered and the state that came back. It keeps only keys from
+your side. Logins, login tokens and chat never reach the file. It listens on 127.0.0.1 and takes
+only its own Host and Origin.
+
+If the cockpit starts while you're in the game, it doesn't start the bot, which would throw you
+out. It follows your game and shows *Hand back* instead.
 
 The game runs in a child process: dcss-api's `read_until` blocks with no timeout and
 holds the GIL, so a server in the same process would freeze with it. If the game goes
@@ -85,6 +114,7 @@ game saved and the next start resumes it. Decisions are logged to `runs/<dir>/de
 ```bash
 mac/build.sh             # builds mac/build/Ladder.app (Swift, needs Xcode or its command line tools)
 mac/build.sh --install   # also copies it to ~/Applications
+mac/build.sh --notarize  # also notarizes it with Apple and staples the ticket
 open mac/build/Ladder.app
 ```
 
@@ -105,11 +135,10 @@ puts webtiles on the left and stacks the panels on the right.
   answers decisions and offers Hold, Step and Take the wheel.
 - **Keys.** ⌘. holds and resumes, ⌘' steps one action, ⌘[ and ⌘] change the pause, and ⇧⌘T
   takes the wheel.
-- **Handover.** When the cockpit leaves a game saved for you, *Sign in and play* (on the card,
-  in the notification, or ⇧⌘P) reads the bot's password from Keychain and logs in to webtiles
-  in the webtiles window, which then presses Play. The password isn't kept, and macOS asks
-  once to let Ladder read the Keychain item. While a run plays, the webtiles window spectates
-  the bot.
+- **Handover.** *Take the wheel* (⇧⌘T, the card, or the notification's *Play*) puts the
+  webtiles window in the game, logged in by the cockpit as above. *Hand back to the bot*
+  (⇧⌘B) leaves the game, which saves it, and starts the bot's next run. Neither needs a
+  password or Ctrl-S. While a run plays, the webtiles window spectates the bot.
 - **Start and stop.** Cockpit ▸ Start Cockpit (⌘R) runs `ladder cockpit` in the repo with the
   options from Settings (⌘,); Stop and Quit send it Ctrl-C, so the game stays saved. A cockpit
   started in a terminal works the same: Ladder connects to whatever answers on port 8090. The
@@ -213,6 +242,8 @@ Integration tests use their own account (`laddertest`) and dcss-api's scenario b
 | `src/ladder/decisions.py` | Decision requests: the options Reflex can carry out, the stub's recommendation, Authority's context |
 | `src/ladder/games.py` | Plays a run of games; shared by `spike` and the cockpit |
 | `src/ladder/cockpit.py`, `static/` | The cockpit: game process, hub, HTTP + server-sent events on 127.0.0.1 |
+| `src/ladder/playproxy.py` | The recording proxy you play webtiles through: your keys between the game states they answered |
+| `src/ladder/spectate.py` | Follows and records the player's games as a webtiles spectator while the player has the wheel |
 | `src/ladder/channel.py`, `.mcp.json` | Claude Code channel: cockpit events into a coding session, `reply` and `cockpit_state` back |
 | `bin/claude-cockpit`, `.claude/settings.json`, `CLAUDE.md` | Start the listening session; the server and its tools enabled for every session; notes for Claude |
 | `mac/` | The Mac app: Swift (AppKit + WebKit), built by `mac/build.sh` |

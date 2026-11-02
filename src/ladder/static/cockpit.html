@@ -17,7 +17,7 @@
   <div class="meta">
     <span id="run-state" class="pill">connecting…</span>
     <span id="run-dir" class="mono muted"></span>
-    <a id="watch" href="#" target="_blank" rel="noopener">Watch in webtiles ↗</a>
+    <a id="watch" href="#" target="dcss-webtiles">Watch in webtiles ↗</a>
   </div>
 </header>
 
@@ -41,7 +41,8 @@
       </form>
       <div class="row">
         <button type="button" id="hold" class="ghost">❚❚ Hold at next event</button>
-        <button type="button" id="stop" class="ghost" title="Stop after the current action and leave the game saved for you to play in webtiles">Take the wheel</button>
+        <button type="button" id="stop" class="ghost" title="Stop after the current action, then log webtiles in as the bot and resume the game there">Take the wheel</button>
+        <button type="button" id="resume" class="ghost" hidden></button>
       </div>
       <div class="row">
         <label for="delay">Pause between actions</label>
@@ -66,8 +67,8 @@
                   placeholder="Tell the coding session what you saw…"></textarea>
         <button type="submit" id="note-send" class="ghost" title="Send to the coding session (⌘/Ctrl-Enter)">Send</button>
       </form>
-      <p id="channel-help" class="muted small">No coding session is listening. In this repo, start one with
-        <code class="mono">claude --dangerously-load-development-channels server:cockpit</code>; it also hears
+      <p id="channel-help" class="muted small">No coding session is listening. Start one with
+        <code class="mono">bin/claude-cockpit</code> in this repo; it also hears
         errors, stalls, escalations and deaths.</p>
     </section>
 
@@ -88,14 +89,20 @@
     <section id="handover" class="card handover" data-panel="call" aria-labelledby="h-handover" hidden>
       <span class="lbl">Your game</span>
       <h3 id="h-handover"></h3>
-      <ol class="steps">
-        <li>Copy the password from Keychain: <code id="ho-cmd" class="mono"></code>
-          <button type="button" id="ho-copy" class="ghost">Copy command</button></li>
-        <li>Open <a id="ho-lobby" href="#" target="_blank" rel="noopener">webtiles</a> and log in as <b id="ho-user"></b>.</li>
-        <li>Click <b>Play</b>. DCSS resumes the saved game.</li>
-      </ol>
-      <button type="button" id="ho-play" class="ghost" hidden>▶ Sign in and play in the webtiles window</button>
-      <p class="muted small">To hand it back, save with Ctrl-S in DCSS and start the cockpit again. It resumes the save.</p>
+      <div class="row">
+        <button type="button" id="ho-play">▶ Play it in webtiles</button>
+        <button type="button" id="ho-back" class="ghost">↩ Hand back to the bot</button>
+      </div>
+      <p class="muted small">Play logs webtiles in as <b class="ho-user"></b> for you. Hand back saves your game in webtiles, then the bot picks it up.</p>
+      <details class="small">
+        <summary class="muted">Log in by hand</summary>
+        <ol class="steps">
+          <li>Copy the password from Keychain: <code id="ho-cmd" class="mono"></code>
+            <button type="button" id="ho-copy" class="ghost">Copy command</button></li>
+          <li>Open <a id="ho-lobby" href="#" target="dcss-webtiles">webtiles</a> and log in as <b class="ho-user"></b>.</li>
+          <li>Click <b>Play</b>. DCSS resumes the saved game.</li>
+        </ol>
+      </details>
     </section>
 
     <section class="panel" data-panel="game" aria-labelledby="h-game">
@@ -107,7 +114,7 @@
         <div><span class="k">Step</span><span id="s-step" class="v">–</span></div>
       </div>
       <div class="hp"><span class="k">HP</span><div class="bar"><i id="s-hpbar"></i></div><span id="s-hp" class="mono">–</span></div>
-      <p class="small"><span class="k">Reflex is doing</span> <span id="s-action" class="mono">–</span></p>
+      <p class="small"><span id="s-doer" class="k">Reflex is doing</span> <span id="s-action" class="mono">–</span></p>
       <p class="small"><span class="k">Hostiles</span> <span id="s-hostiles">none in view</span></p>
       <ol id="s-msgs" class="msgs mono small"></ol>
     </section>
