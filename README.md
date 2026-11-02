@@ -173,6 +173,10 @@ Integration tests use their own account (`laddertest`) and dcss-api's scenario b
 - dcss-api's `read_until` blocks with no timeout and holds the GIL. `act()` waits for any
   `input_mode` and treats a menu as a prompt; waiting for command mode alone hangs on menus
   such as `G` (interlevel travel).
+- Greedy explore walks into every unvisited shop and opens its menu. A menu sends no
+  `input_mode`, and here it came in a later frame than explore's busy `input_mode 0`, so
+  `act()` waited forever (seed 777, turn 39). Reflex visits shops itself first and waits
+  for the menu with `Connection.open_menu`.
 - A new game's first prompt arrives with the start messages; a resumed game's arrives
   later. `Connection._settle` handles both.
 - Webtiles keeps remembered monsters on cells that left view; visibility comes from the

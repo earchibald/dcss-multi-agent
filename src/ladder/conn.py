@@ -222,6 +222,17 @@ class Connection:
                 break
         return result
 
+    def open_menu(self, *keys: str) -> ActResult:
+        """Send keys that open a menu (entering a shop), and wait for the menu itself.
+
+        A menu sends no input_mode of its own, so act() would wait forever for one.
+        Only call this when the keys are certain to open a menu: this read has no timeout either.
+        """
+        for key in keys:
+            self.web.write_key(key)
+        self.web.read_until("menu")
+        return ActResult(blocking="menu", messages=self._drain())
+
     def sync(self) -> ActResult:
         """Wait for the game to ask for a command without sending anything."""
         return self.act()

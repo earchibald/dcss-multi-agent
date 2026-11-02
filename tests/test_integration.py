@@ -88,3 +88,18 @@ def test_caught_in_a_web_reflex_struggles_free(game, tmp_path):
             assert state.turn > before                # struggling takes a turn: no "no progress"
     assert caught_at is not None, "the ribbon worms never webbed us"
     assert freed
+
+
+def test_seeded_run_visits_the_shop_greedy_explore_would_hang_in(game, tmp_path):
+    """Seed 777's explore walks into Doito's Book Boutique at turn 39. Opened by explore, the shop
+    menu sends no input_mode and act() waits forever, so Reflex visits shops itself first."""
+    import faulthandler
+    conn, state = game
+    conn.start_game("b", "f", "b", seed=777)
+    reflex = Reflex(conn, state, RunLog(tmp_path))
+    faulthandler.dump_traceback_later(120, exit=True)   # a regression hangs: fail loudly instead
+    try:
+        reflex.run(max_steps=20)
+    finally:
+        faulthandler.cancel_dump_traceback_later()
+    assert reflex.stub.shops_seen and state.turn > 39

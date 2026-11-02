@@ -18,6 +18,7 @@ MF_STAIR_UP, MF_STAIR_DOWN, MF_STAIR_BRANCH, MF_FEATURE = 12, 13, 14, 15
 MF_WATER, MF_LAVA, MF_TRAP, MF_DEEP_WATER = 16, 17, 18, 22
 MF_PORTAL, MF_EXCL_ROOT, MF_EXCL, MF_UNEXPLORED = 23, 24, 25, 26
 
+SHOP_GLYPH = "\u2229"               # ∩, the "arch" glyph: shops and portals
 NOT_WALKABLE = {MF_UNSEEN, MF_WALL, MF_MAP_WALL, MF_LAVA, MF_DEEP_WATER, MF_UNEXPLORED}
 FEATURE_KINDS = {
     MF_STAIR_UP: "upstairs",
@@ -201,6 +202,10 @@ class GameState:
 
     def features(self) -> dict[tuple[int, int], str]:
         return {pos: FEATURE_KINDS[c["mf"]] for pos, c in self.cells.items() if c.get("mf") in FEATURE_KINDS}
+
+    def shops(self) -> set[tuple[int, int]]:
+        """Shop entrances. Portals share the arch glyph but not the minimap feature flag."""
+        return {pos for pos, c in self.cells.items() if c.get("mf") == MF_FEATURE and c.get("g") == SHOP_GLYPH}
 
     def items(self) -> set[tuple[int, int]]:
         return {pos for pos, c in self.cells.items() if c.get("mf") == MF_ITEM}

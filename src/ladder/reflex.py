@@ -23,7 +23,7 @@ from .decisions import END_GAME, Answer, DecisionRequest
 from .interrupts import Before, Detector, Interrupt
 from .runlog import RunLog
 from .state import MF_STAIR_DOWN, GameState
-from .travel import first_step
+from .travel import first_step, step_toward
 
 KEYS = {
     "explore": ("o",),
@@ -74,6 +74,13 @@ class StubTiers:
         self.level_explored = False
         self.fight_anyway = False          # set by a "fight on" answer; lasts until no hostiles are in view
         self.rest_stalled_at: tuple[int, int] | None = None
+        self.shops: set[tuple[int, int]] = set()           # shops on this level; the glyph hides under @
+        self.shops_seen: set[tuple[int, int]] = set()      # the ones we have looked inside
+        self.descend_asked = False                          # "downstairs in view" asked once per level
+
+    def unvisited_shop(self, state: GameState) -> tuple[int, int] | None:
+        self.shops |= state.shops()
+        return min(self.shops - self.shops_seen, key=state.distance, default=None)
 
     def next_action(self, state: GameState) -> str:
         hostiles = state.hostiles()
@@ -95,6 +102,10 @@ class StubTiers:
             if first_step(state, MF_STAIR_DOWN) is None:
                 raise Escalation("level explored but no known path to a downstairs")
             return "travel"
+        if self.unvisited_shop(state):
+            # Greedy explore walks into an unvisited shop and opens its menu, which sends no
+            # input_mode, so act() would wait forever. Visit it ourselves, expecting the menu.
+            return "shop"
         return "explore"
 
     def observe(self, action: str, before: Before, state: GameState, interrupts: list[Interrupt]) -> None:
@@ -104,6 +115,8 @@ class StubTiers:
         if "level_change" in kinds:
             self.level_explored = False
             self.rest_stalled_at = None
+            self.shops, self.shops_seen = set(), set()
+            self.descend_asked = False
         if action == "rest" and state.hp == before.hp:
             self.rest_stalled_at = (state.turn, state.hp)
         if "no_progress" in kinds:
@@ -169,6 +182,9 @@ class Reflex:
         if action == "travel":
             mode = "travel"
             result = self.conn.act(first_step(self.state, MF_STAIR_DOWN))
+        elif action == "shop":
+            mode = "travel"
+            result = self._visit_shop()
         else:
             mode = "explore"
             result = self.conn.act(*KEYS[action])
@@ -179,10 +195,29 @@ class Reflex:
         self.hooks.on_step(self, action)
         self.stub.observe(action, before, self.state, interrupts)
         for i in interrupts:
+            if i.kind == "feature_in_view" and i.decision_type == "descend_stairs":
+                if self.stub.descend_asked:
+                    continue                   # a level has three downstairs: one question is enough
+                self.stub.descend_asked = True
             request = decisions.for_interrupt(i, self.state, self.stub.level_explored) if i.decision_type else None
             if request:
                 self._apply(self._ask(request))
         return interrupts
+
+    def _visit_shop(self) -> ActResult:
+        """Walk to the nearest unvisited shop one square at a time; on it, open the menu and leave."""
+        shop = self.stub.unvisited_shop(self.state)
+        if self.state.pos != shop:
+            key = step_toward(self.state, shop)
+            if key is None:
+                self.stub.shops_seen.add(shop)          # no known way there; explore will deal with it
+                return ActResult()
+            return self.conn.act(key)
+        self.stub.shops_seen.add(shop)
+        opened = self.conn.open_menu("<")
+        closed = self.conn.act("key_esc")
+        closed.messages = opened.messages + closed.messages
+        return closed
 
     def _ask(self, request: DecisionRequest) -> Answer:
         self.decisions += 1

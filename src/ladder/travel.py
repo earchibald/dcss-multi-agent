@@ -22,13 +22,22 @@ def first_step(state: GameState, goal_mf: int) -> str | None:
 
     Returns None when no such cell is reachable over explored, walkable ground.
     """
+    return _first_step(state, lambda pos, cell: cell.get("mf") == goal_mf)
+
+
+def step_toward(state: GameState, goal: tuple[int, int]) -> str | None:
+    """Direction key for the first step of a shortest known path to `goal`, or None if there is none."""
+    return _first_step(state, lambda pos, cell: pos == goal)
+
+
+def _first_step(state: GameState, is_goal) -> str | None:
     start = state.pos
     cells = state.cells
     prev: dict[tuple[int, int], tuple[int, int] | None] = {start: None}
     queue = deque([start])
     while queue:
         cur = queue.popleft()
-        if cur != start and cells.get(cur, {}).get("mf") == goal_mf:
+        if cur != start and is_goal(cur, cells.get(cur, {})):
             while prev[cur] != start:
                 cur = prev[cur]
             return DIRECTIONS[(cur[0] - start[0], cur[1] - start[1])]
