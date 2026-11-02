@@ -216,6 +216,7 @@ function renderRun(run) {
   const ended = run.games?.slice(-1)[0];
   const saved = ended && (ended.ended_by === "take_over" || ended.ended_by === "stopped");
   $("stop").disabled = run.state !== "running";
+  $("hold").disabled = !["starting", "running"].includes(run.state);
   $("handover").hidden = !(saved && run.state !== "running");
   if ($("handover").hidden) return;
   $("h-handover").textContent = `Saved for you at ${ended.final_place}, turn ${ended.turns}`;

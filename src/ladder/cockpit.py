@@ -41,6 +41,7 @@ from .reflex import Hooks
 from .routing import Thresholds, needs_jev, route
 
 STRATEGY_STUB = "stub recommendation; Strategy isn't built yet"
+GAME_GONE = "the run is over, so there is no game to send that to; start the cockpit again for a new run"
 
 
 # --- child process: the game ------------------------------------------------
@@ -135,6 +136,7 @@ class Hub:
         self.stall_after = stall_after
         self.last_heard = clock()
         self.stalled = False
+        self.gone = False                   # the game process has exited and its pipe is closed
 
     # -- publishing --
 
@@ -220,7 +222,11 @@ class Hub:
 
     def child_gone(self) -> None:
         with self.lock:
-            if self.run["state"] in ("starting", "running"):
+            self.gone = True
+            if self.pending:
+                self.pending = None
+                self.publish("pending", keep=False, pending=None)
+            if self.run["state"] in ("starting", "running", "stopping"):
                 self.run["state"] = "error"
                 self.publish("error", message="the game process exited")
                 self.publish("run", keep=False, run=self.run)
@@ -262,8 +268,22 @@ class Hub:
             self.pending = {"request": request, "posted_at": self.clock(), "why": verdict.reason}
             self.publish("pending", keep=False, pending=self.pending_view())
 
-    def _answer(self, request: dict, choice: str, decider: str, reason: str) -> None:
-        self._send({"cmd": "answer", "id": request["id"], "choice": choice, "decider": decider, "reason": reason})
+    def _to_game(self, cmd: dict) -> str | None:
+        """Send to the game process. Once it has exited the pipe is closed, so say that instead of raising."""
+        if self.gone:
+            return GAME_GONE
+        try:
+            self._send(cmd)
+        except OSError:                     # BrokenPipeError, or the handle is closed
+            self.gone = True
+            return GAME_GONE
+        return None
+
+    def _answer(self, request: dict, choice: str, decider: str, reason: str) -> str | None:
+        err = self._to_game({"cmd": "answer", "id": request["id"], "choice": choice, "decider": decider,
+                             "reason": reason})
+        if err:
+            return err
         self.deciders[decider] += 1
         label = next(o["label"] for o in request["options"] if o["key"] == choice)
         self.publish("decided", id=request["id"], decision_type=request["decision_type"],
@@ -272,6 +292,7 @@ class Hub:
         if self.pending and self.pending["request"]["id"] == request["id"]:
             self.pending = None
             self.publish("pending", keep=False, pending=None)
+        return None
 
     # -- from the player --
 
@@ -283,8 +304,7 @@ class Hub:
             request = self.pending["request"]
             if choice not in {o["key"] for o in request["options"]}:
                 return f"'{choice}' isn't an option"
-            self._answer(request, choice, "player", "your call")
-            return None
+            return self._answer(request, choice, "player", "your call")
 
     def set_mode(self, mode: str) -> str | None:
         if mode not in (ASSISTED, AUTONOMOUS):
@@ -310,7 +330,7 @@ class Hub:
         now = self.clock() if now is None else now
         with self.lock:
             self._check_stall(now)
-            if not self.pending:
+            if not self.pending or self.gone:
                 return
             request = self.pending["request"]
             verdict = self.authority.check_idle(Pending(request["decision_type"], self.pending["posted_at"]), now)
@@ -328,24 +348,32 @@ class Hub:
             self.stalled = True
             self.publish("stall", stalled=True, seconds=round(now - self.last_heard))
 
-    def hold(self, on: bool) -> None:
+    def hold(self, on: bool) -> str | None:
         with self.lock:
+            err = self._to_game({"cmd": "hold" if on else "resume"})
+            if err:
+                return err
             self.held = bool(on)
-            self._send({"cmd": "hold" if self.held else "resume"})
             self.publish("settings", keep=False, settings=self.settings())
+            return None
 
-    def stop(self) -> None:
+    def stop(self) -> str | None:
         """Stop after the current action and leave the game saved, so the player can take the wheel."""
         with self.lock:
+            if self.gone:
+                return GAME_GONE
             if self.pending:
                 request = self.pending["request"]
                 keys = {o["key"] for o in request["options"]}
                 choice = TAKE_OVER if TAKE_OVER in keys else request["recommended"]
                 self._answer(request, choice, "player", "stopped from the cockpit")
-            self._send({"cmd": "stop"})
+            err = self._to_game({"cmd": "stop"})
+            if err:
+                return err
             self.held = False
             self.run["state"] = "stopping" if self.run["state"] == "running" else self.run["state"]
             self.publish("run", keep=False, run=self.run)
+            return None
 
 
 # --- HTTP ---------------------------------------------------------------------
@@ -531,10 +559,7 @@ def serve(args: argparse.Namespace, thresholds: Thresholds = Thresholds()) -> No
     except KeyboardInterrupt:
         pass
     finally:
-        try:
-            hub.stop()
-        except OSError:
-            pass
+        hub.stop()
         proc.join(timeout=20)
         if proc.is_alive():
             proc.terminate()

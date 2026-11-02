@@ -10,7 +10,7 @@ import pytest
 
 from helpers import add_monster, make_state
 from ladder.authority import AUTONOMOUS, Authority
-from ladder.cockpit import ChildHooks, Hub, game_links, handover_text, make_handler, watch_url
+from ladder.cockpit import GAME_GONE, ChildHooks, Hub, game_links, handover_text, make_handler, watch_url
 from ladder.decisions import TAKE_OVER, Answer, for_escalation, for_interrupt, stat_choice
 from ladder.interrupts import Interrupt
 from ladder.jev import Answers, JevResult
@@ -94,6 +94,20 @@ def test_stop_answers_a_waiting_card_with_take_over():
     h.handle({"ev": "decision", "request": request()})
     h.stop()
     assert sent[0]["choice"] == TAKE_OVER and sent[1] == {"cmd": "stop"}
+
+
+def test_controls_after_the_game_process_exits_say_so_instead_of_raising():
+    """Issue 4: the player took the wheel, the run ended, then Hold hit a closed pipe."""
+    def closed(cmd):
+        raise BrokenPipeError(32, "Broken pipe")
+    h = Hub(Authority(), closed, clock=Clock())
+    h.handle({"ev": "decision", "request": request()})
+    assert h.decide("1-5-1", "skip") == GAME_GONE and h.pending      # the card stays until the pump notices
+    h.child_gone()
+    assert h.pending is None and h.run["state"] == "error"
+    assert h.hold(True) == GAME_GONE and not h.held
+    assert h.stop() == GAME_GONE
+    h.tick()
 
 
 def test_records_route_without_jev_and_shadow_route_with_it():
