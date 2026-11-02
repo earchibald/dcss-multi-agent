@@ -75,6 +75,33 @@ holds the GIL, so a server in the same process would freeze with it. If the game
 quiet for 45 s while nothing is waiting on you, the stream says so; Ctrl-C leaves the
 game saved and the next start resumes it. Decisions are logged to `runs/<dir>/decisions.jsonl`.
 
+## Claude Code channel
+
+The running game can talk to a Claude Code session in this repo, and Claude can answer. `.mcp.json`
+registers `ladder channel`, a [channel](https://code.claude.com/docs/en/channels-reference) MCP server that
+Claude Code spawns over stdio. It subscribes to the cockpit's event stream on 127.0.0.1:8090 and pushes
+these into the session as `<channel source="cockpit" kind="...">` events:
+
+- **notes** you write in the cockpit's *Claude Code* panel (⌘/Ctrl-Enter sends)
+- **errors** from the game process, with the traceback, and **stalls**
+- **escalations**, **deaths** and **no-progress** loops, with place, turn, HP and the last game messages
+- **run start** (with the log directory), **game end**, **run end**, and the cockpit going away mid-run
+
+Everything else (routine interrupts, status, settings) stays in the cockpit. Claude has two tools: `reply`
+(its text shows in the cockpit's stream) and `cockpit_state` (run, game, settings, the waiting decision,
+recent events).
+
+```bash
+claude --dangerously-load-development-channels server:cockpit   # in this repo; approve the warning and the server
+uv run ladder cockpit --seed 1                                   # in another terminal, any time
+```
+
+Channels are a research preview: custom channels aren't on the allowlist, so they need the development flag,
+which works in interactive sessions only (not `-p`). On a Team or Enterprise plan an admin has to enable
+channels. The channel reconnects by itself, so the cockpit can be stopped and started under one coding
+session. The panel shows *listening* while a session is attached; notes are refused when nobody is.
+Point it at another port with `ladder channel --cockpit http://127.0.0.1:<port>` in `.mcp.json`.
+
 ## Jev routing (offline)
 
 `profiles.toml` maps tiers to model profiles; each profile names a Keychain item, never a key.
@@ -135,6 +162,7 @@ Integration tests use their own account (`laddertest`) and dcss-api's scenario b
 | `src/ladder/decisions.py` | Decision requests: the options Reflex can carry out, the stub's recommendation, Authority's context |
 | `src/ladder/games.py` | Plays a run of games; shared by `spike` and the cockpit |
 | `src/ladder/cockpit.py`, `static/` | The cockpit: game process, hub, HTTP + server-sent events on 127.0.0.1 |
+| `src/ladder/channel.py`, `.mcp.json` | Claude Code channel: cockpit events into a coding session, `reply` and `cockpit_state` back |
 | `src/ladder/crawlrc.txt` | The rc file we ship: part of Reflex is DCSS configuration |
 | `src/ladder/jev.py`, `routing.py`, `jeveval.py` | Jev questions, the routing rules, and the offline evaluator |
 | `src/ladder/llm.py`, `profiles.py` | Anthropic and OpenAI-compatible adapters; profiles with capability flags |

@@ -56,6 +56,21 @@
       <p id="toast" class="toast" role="status" aria-live="polite"></p>
     </section>
 
+    <section class="panel" aria-labelledby="h-claude">
+      <div class="row between">
+        <h2 id="h-claude" class="lbl">Claude Code</h2>
+        <span id="channel-state" class="pill">not listening</span>
+      </div>
+      <form id="note-form" class="note">
+        <textarea id="note" rows="2" maxlength="4000" aria-label="Note to Claude Code"
+                  placeholder="Tell the coding session what you saw…"></textarea>
+        <button type="submit" id="note-send" class="ghost" title="Send to the coding session (⌘/Ctrl-Enter)">Send</button>
+      </form>
+      <p id="channel-help" class="muted small">No coding session is listening. In this repo, start one with
+        <code class="mono">claude --dangerously-load-development-channels server:cockpit</code>; it also hears
+        errors, stalls, escalations and deaths.</p>
+    </section>
+
     <section id="card" class="card" aria-live="assertive" hidden>
       <div class="row between">
         <span class="lbl">Your call · <span id="card-type"></span></span>

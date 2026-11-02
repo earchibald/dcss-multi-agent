@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "cockpit": {
+      "command": "uv",
+      "args": ["run", "--quiet", "ladder", "channel"]
+    }
+  }
+}
