@@ -1,0 +1,24 @@
+# Ribbon worms spit sticky webbing: the player gets caught and has to struggle free.
+options:
+  default_feature: "floor"
+
+levels:
+  - level:
+      name: D:1
+      features:
+        - '< = exit_dungeon'
+        - '> = stone_stairs_down_i'
+        - '# = rock_wall'
+        - '. = floor'
+      monsters:
+        - 'w = ribbon worm'
+      map: |-
+          ###############
+          #.............#
+          #.<.......w...#
+          #.............#
+          #..@.......w..#
+          #.............#
+          #.........w.>.#
+          #.............#
+          ###############

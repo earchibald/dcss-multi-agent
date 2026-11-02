@@ -65,3 +65,26 @@ def test_seeded_reflex_run_walks_stops_and_logs(game, tmp_path):
     assert summary["interrupts_total"] > 5
     assert summary["by_source"].get("dcss", 0) > 0
     assert {"item_in_view", "hostile_in_view"} <= set(summary["by_kind"])
+
+
+def test_caught_in_a_web_reflex_struggles_free(game, tmp_path):
+    """Tab only says "You are caught in a web!"; a move struggles. Run 20261101-175256 ended there."""
+    conn, state = game
+    conn.start_scenario(SCENARIOS / "ribbon_worms.yaml", "b", "f", "b")
+    reflex = Reflex(conn, state, RunLog(tmp_path))
+    caught_at, freed = None, False
+    for _ in range(15):
+        if state.caught and caught_at is None:
+            caught_at = state.turn
+        if caught_at is not None and not state.caught:
+            freed = True
+            break
+        action = reflex.stub.next_action(state)
+        if state.caught:
+            assert action == "struggle"
+        before = state.turn
+        reflex.step(action)
+        if action == "struggle":
+            assert state.turn > before                # struggling takes a turn: no "no progress"
+    assert caught_at is not None, "the ribbon worms never webbed us"
+    assert freed

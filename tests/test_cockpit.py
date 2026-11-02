@@ -11,9 +11,10 @@ import pytest
 from helpers import add_monster, make_state
 from ladder.authority import AUTONOMOUS, Authority
 from ladder.cockpit import GAME_GONE, ChildHooks, Hub, game_links, handover_text, make_handler, watch_url
-from ladder.decisions import TAKE_OVER, Answer, for_escalation, for_interrupt, stat_choice
+from ladder.decisions import END_GAME, TAKE_OVER, Answer, for_escalation, for_interrupt, stat_choice
 from ladder.interrupts import Interrupt
 from ladder.jev import Answers, JevResult
+from ladder.reflex import Escalation, Hooks, StubTiers
 
 ROOM = ["#######", "#..@..#", "#.....#", "#######"]
 
@@ -153,7 +154,7 @@ def test_decision_requests_offer_only_what_reflex_can_do():
     assert "fight_on" not in for_escalation("stuck", state, False).keys()
     add_monster(state, (5, 1), 7, "Natasha", threat=2)
     esc = for_escalation("low hp", state, False)
-    assert {"fight_on", "end_game", "take_over"} <= esc.keys() and esc.recommended == "end_game"
+    assert {"fight_on", "end_game", "take_over"} <= esc.keys() and esc.recommended == "take_over"
     assert esc.context["threat"] == 2
 
 
@@ -169,6 +170,24 @@ class Pipe:
 
     def poll(self, timeout=0):
         return bool(self.incoming)
+
+
+def test_stub_struggles_out_of_webs_and_stuck_means_leave_it_saved():
+    """Run 20261101-175256: webbed at 32/33 HP, Tab only said so, and Strategy took 'end game'."""
+    webbed = make_state(ROOM, hp=32, hp_max=33, status=[{"light": "Held"}])
+    assert StubTiers().next_action(webbed) == "struggle"
+    add_monster(webbed, (5, 1), 7, "ribbon worm")
+    assert StubTiers().next_action(webbed) == "struggle"
+    free = make_state(ROOM)
+    add_monster(free, (5, 1), 7, "ribbon worm")
+    assert StubTiers().next_action(free) == "fight"
+    hurt = make_state(ROOM, hp=5, status=[{"light": "Held"}])
+    add_monster(hurt, (5, 1), 7, "kobold")
+    with pytest.raises(Escalation):
+        StubTiers().next_action(hurt)                 # low HP still asks first
+    esc = for_escalation("no progress on 'fight'", webbed, False)
+    assert esc.recommended == TAKE_OVER
+    assert Hooks().decide(esc).choice == END_GAME     # `spike` plays alone: no one to hand the game to
 
 
 def test_child_hooks_wait_for_their_own_answer():

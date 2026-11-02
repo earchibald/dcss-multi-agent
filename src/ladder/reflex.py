@@ -29,6 +29,7 @@ KEYS = {
     "explore": ("o",),
     "rest": ("5",),
     "fight": ("key_tab",),
+    "struggle": ("key_dir_e",),     # held in a web or net, any move struggles; Tab only says you're caught
     "descend": (">",),
 }
 
@@ -52,6 +53,9 @@ class Hooks:
         return True
 
     def decide(self, request: DecisionRequest) -> Answer:
+        if request.decision_type == "escalation":
+            # Playing alone there is no one to take the wheel: end this game and go on to the next.
+            return Answer(END_GAME, "stub", "playing alone, no one to take the wheel")
         return Answer(request.recommended, "stub", "stub recommendation")
 
     def on_record(self, record: dict) -> None:
@@ -76,11 +80,13 @@ class StubTiers:
         frac = state.hp / state.hp_max
         if not hostiles:
             self.fight_anyway = False
-        if hostiles:
-            if frac > self.fight_hp_floor or self.fight_anyway:
-                return "fight"
+        if hostiles and frac <= self.fight_hp_floor and not self.fight_anyway:
             raise Escalation(f"hp {state.hp}/{state.hp_max} with hostiles in view: "
                              + ", ".join(m.name for m in hostiles[:3]))
+        if state.caught:
+            return "struggle"
+        if hostiles:
+            return "fight"
         if frac < self.rest_below and self.rest_stalled_at != (state.turn, state.hp):
             return "rest"
         if self.level_explored:

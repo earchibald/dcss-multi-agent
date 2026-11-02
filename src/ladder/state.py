@@ -173,6 +173,11 @@ class GameState:
                 out.append(label)
         return out
 
+    @property
+    def caught(self) -> bool:
+        """Held in a web or net: moving only struggles, and autofight won't attack."""
+        return "Held" in self.statuses
+
     def monsters(self) -> list[Monster]:
         """Monsters currently in view. Webtiles keeps remembered monsters on unseen cells."""
         out = []

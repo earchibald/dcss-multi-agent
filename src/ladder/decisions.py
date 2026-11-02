@@ -86,6 +86,7 @@ def stat_choice(state: GameState, level_explored: bool) -> DecisionRequest:
 
 
 def for_escalation(reason: str, state: GameState, level_explored: bool) -> DecisionRequest:
-    """The stub has no safe answer. It recommends ending the game, which is what it did before there was a cockpit."""
+    """The stub has no safe answer. It recommends leaving the game saved: ending it can't be undone, and
+    whoever answers (Strategy in autonomous mode) may be answering for a character that is fine."""
     options = [{"key": "fight_on", "label": "Fight on anyway"}] if state.hostiles() else []
-    return _request("escalation", f"Reflex is stuck: {reason}", options, END_GAME, state, level_explored)
+    return _request("escalation", f"Reflex is stuck: {reason}", options, TAKE_OVER, state, level_explored)

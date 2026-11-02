@@ -149,4 +149,7 @@ Integration tests use their own account (`laddertest`) and dcss-api's scenario b
   later. `Connection._settle` handles both.
 - Webtiles keeps remembered monsters on cells that left view; visibility comes from the
   `UNSEEN`/`MM_UNSEEN` bits of the cell's tile background.
+- dcss-api's `start_game_with_scenario` overwrites the account's rc with its own two-line
+  example (`show_more = false`, `rest_delay = -1`), so scenario games don't run on
+  `crawlrc.txt`. To test an rc option in a scenario, save by hanging up, `set_rc`, and resume.
 - nkhoit/dcss-ai has no license, so it is a design reference only; no code is copied.
