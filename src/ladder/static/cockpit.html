@@ -23,7 +23,7 @@
 
 <main class="grid">
   <div class="col">
-    <section class="panel" aria-labelledby="h-control">
+    <section class="panel" data-panel="control" aria-labelledby="h-control">
       <h2 id="h-control" class="lbl">Control</h2>
       <div class="row between">
         <div class="dial" role="group" aria-label="Who decides">
@@ -56,7 +56,7 @@
       <p id="toast" class="toast" role="status" aria-live="polite"></p>
     </section>
 
-    <section class="panel" aria-labelledby="h-claude">
+    <section class="panel" data-panel="claude" aria-labelledby="h-claude">
       <div class="row between">
         <h2 id="h-claude" class="lbl">Claude Code</h2>
         <span id="channel-state" class="pill">not listening</span>
@@ -71,7 +71,9 @@
         errors, stalls, escalations and deaths.</p>
     </section>
 
-    <section id="card" class="card" aria-live="assertive" hidden>
+    <p id="call-idle" class="muted call-idle" data-panel="call" hidden>Nothing is waiting on you. A decision shows here, and the window comes to the front.</p>
+
+    <section id="card" class="card" data-panel="call" aria-live="assertive" hidden>
       <div class="row between">
         <span class="lbl">Your call · <span id="card-type"></span></span>
         <span id="card-clock" class="muted small mono"></span>
@@ -83,7 +85,7 @@
       <p id="card-why" class="muted small"></p>
     </section>
 
-    <section id="handover" class="card handover" aria-labelledby="h-handover" hidden>
+    <section id="handover" class="card handover" data-panel="call" aria-labelledby="h-handover" hidden>
       <span class="lbl">Your game</span>
       <h3 id="h-handover"></h3>
       <ol class="steps">
@@ -92,10 +94,11 @@
         <li>Open <a id="ho-lobby" href="#" target="_blank" rel="noopener">webtiles</a> and log in as <b id="ho-user"></b>.</li>
         <li>Click <b>Play</b>. DCSS resumes the saved game.</li>
       </ol>
+      <button type="button" id="ho-play" class="ghost" hidden>▶ Sign in and play in the webtiles window</button>
       <p class="muted small">To hand it back, save with Ctrl-S in DCSS and start the cockpit again. It resumes the save.</p>
     </section>
 
-    <section class="panel" aria-labelledby="h-game">
+    <section class="panel" data-panel="game" aria-labelledby="h-game">
       <h2 id="h-game" class="lbl">Game</h2>
       <div class="stats">
         <div><span class="k">Place</span><span id="s-place" class="v">–</span></div>
@@ -109,14 +112,14 @@
       <ol id="s-msgs" class="msgs mono small"></ol>
     </section>
 
-    <section class="panel" aria-labelledby="h-decisions">
+    <section class="panel" data-panel="decisions" aria-labelledby="h-decisions">
       <h2 id="h-decisions" class="lbl">Decisions</h2>
       <p id="decider-counts" class="small muted"></p>
       <ol id="decisions" class="list"></ol>
     </section>
   </div>
 
-  <section class="panel col stream-panel" aria-labelledby="h-stream">
+  <section class="panel col stream-panel" data-panel="stream" aria-labelledby="h-stream">
     <div class="row between">
       <h2 id="h-stream" class="lbl">Escalation stream</h2>
       <label class="small muted"><input type="checkbox" id="hide-routine"> hide bookkeeping</label>

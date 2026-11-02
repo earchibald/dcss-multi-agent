@@ -134,3 +134,18 @@ button.ghost[aria-pressed=true] { background: var(--tactics-bg); border-color: v
   .stream li .chip { grid-column: 2; justify-self: start; }
   .stream li .what { grid-column: 2; }
 }
+
+/* One panel per window (?panel=…), and the Mac app (?app): window titles name the panel,
+   and the page sits on the window's translucent material. */
+.off { display: none !important; }
+body[data-panel] { padding: 10px 14px 16px; }
+body[data-panel] .top { display: none; }
+body[data-panel] .grid, body[data-panel] .col:not(.panel) { display: block; }
+body[data-panel] .panel { border: 0; background: none; padding: 0; }
+body[data-panel] .panel > h2.lbl, body[data-panel] .panel > .row > h2.lbl { display: none; }
+body[data-panel] .stream-panel { position: static; }
+body[data-panel] .stream { max-height: none; overflow: visible; }
+body[data-panel] .card { margin: 0; }
+.call-idle { padding: 18px 4px; text-align: center; }
+body[data-app] { background: transparent; font-size: 13.5px; }
+body[data-app] .card { background: color-mix(in srgb, var(--surface) 85%, transparent); }

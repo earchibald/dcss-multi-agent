@@ -1,7 +1,18 @@
 "use strict";
 // Ladder cockpit: one EventSource for everything the game process reports, small POSTs back.
+// `?panel=<name>` shows one panel (the Mac app gives each its own window); `?app` means the
+// Mac app relays the event stream through `ladder.event`, so its windows share one connection.
 
 const $ = (id) => document.getElementById(id);
+const params = new URLSearchParams(location.search);
+const PANEL = params.get("panel");
+const bridge = params.has("app") ? window.webkit?.messageHandlers?.ladder : null;
+
+if (PANEL) {
+  document.body.dataset.panel = PANEL;
+  for (const el of document.querySelectorAll("[data-panel]")) el.classList.toggle("off", el.dataset.panel !== PANEL);
+}
+if (bridge) document.body.dataset.app = "";
 
 function h(tag, attrs, ...kids) {
   const el = document.createElement(tag);
@@ -143,10 +154,15 @@ function renderCounts() {
   $("decider-counts").textContent = Object.keys(deciders).length ? "Decided by: " + fmt(deciders) : "No decisions yet.";
 }
 
+function renderCallIdle() {
+  $("call-idle").hidden = !$("card").hidden || !$("handover").hidden;
+}
+
 function renderPending(p) {
   pending = p;
   clearInterval(clockTimer);
   $("card").hidden = !p;
+  renderCallIdle();
   if (!p) return;
   $("card-type").textContent = p.decision_type;
   $("card-q").textContent = p.question;
@@ -233,7 +249,9 @@ function renderRun(run) {
   $("hold").disabled = !["starting", "running"].includes(run.state);
   $("step").disabled = $("hold").disabled;
   $("handover").hidden = !(saved && run.state !== "running");
+  renderCallIdle();
   if ($("handover").hidden) return;
+  $("ho-play").hidden = !bridge;
   $("h-handover").textContent = `Saved for you at ${ended.final_place}, turn ${ended.turns}`;
   $("ho-cmd").textContent = links.password_cmd;
   $("ho-lobby").href = links.lobby;
@@ -301,6 +319,7 @@ $("ho-copy").addEventListener("click", async () => {
     $("ho-copy").textContent = "Select the command and copy it";
   }
 });
+$("ho-play").addEventListener("click", () => bridge?.postMessage({ type: "play" }));
 $("hide-routine").addEventListener("change", (ev) => $("stream").classList.toggle("hidden-routine", ev.target.checked));
 document.addEventListener("keydown", (ev) => {
   if (!pending || ev.target.closest("input, textarea") || ev.metaKey || ev.ctrlKey || ev.altKey) return;
@@ -309,10 +328,7 @@ document.addEventListener("keydown", (ev) => {
   if (i >= 0 && i < choices.length) decide(choices[i].key);
 });
 
-function connect() {
-  const es = new EventSource("/events");
-  es.onmessage = (msg) => {
-    const e = JSON.parse(msg.data);
+function onEvent(e) {
     switch (e.ev) {
       case "hello":
         links = e.links; tiers = { ...e.tiers }; deciders = {};
@@ -336,7 +352,28 @@ function connect() {
         return addEvent(e);
       default: return addEvent(e);
     }
-  };
-  es.onerror = () => { $("run-state").textContent = "reconnecting…"; $("run-state").dataset.s = "error"; };
 }
-connect();
+
+function reconnecting() {
+  $("run-state").textContent = "reconnecting…";
+  $("run-state").dataset.s = "error";
+}
+
+if (bridge) {
+  // The app sends the current state as a hello, then every event; `down` when the server goes away.
+  window.ladder = { event: onEvent, down: reconnecting };
+  document.addEventListener("focusin", (ev) => {
+    // Panels don't take the keyboard from the game on a click; a text field asks for it.
+    if (ev.target.closest("input:not([type=checkbox]):not([type=range]), textarea")) bridge.postMessage({ type: "key" });
+  });
+  if (PANEL === "call") {
+    // The window fits the card: small while nothing waits, as tall as the options when something does.
+    new ResizeObserver(() => bridge.postMessage({ type: "height", h: Math.ceil(document.querySelector("main").getBoundingClientRect().bottom) + 14 }))
+      .observe(document.querySelector("main"));
+  }
+  bridge.postMessage({ type: "ready", panel: PANEL });
+} else {
+  const es = new EventSource("/events");
+  es.onmessage = (msg) => onEvent(JSON.parse(msg.data));
+  es.onerror = reconnecting;
+}

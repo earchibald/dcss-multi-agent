@@ -80,6 +80,46 @@ holds the GIL, so a server in the same process would freeze with it. If the game
 quiet for 45 s while nothing is waiting on you, the stream says so; Ctrl-C leaves the
 game saved and the next start resumes it. Decisions are logged to `runs/<dir>/decisions.jsonl`.
 
+## Mac app
+
+```bash
+mac/build.sh             # builds mac/build/Ladder.app (Swift, needs Xcode or its command line tools)
+mac/build.sh --install   # also copies it to ~/Applications
+open mac/build/Ladder.app
+```
+
+Ladder puts the cockpit's panels and webtiles in separate windows, so there are no tabs to flip
+between. *Your Call*, *Control*, *Game* and *Escalation Stream* show at first; *Decisions* and
+*Claude Code* are in the Window menu (⌥⌘1–6, webtiles ⌥⌘0). *Arrange Around Webtiles* (⌥⌘A)
+puts webtiles on the left and stacks the panels on the right.
+
+- **Floating panels.** *Your Call* and *Control* float above other apps by default
+  (Window ▸ Float on Top sets it per panel), and Window ▸ Panel Opacity sets how see-through
+  they are. Panels don't take the keyboard when clicked: pressing Hold or an answer leaves
+  typing with the game or the terminal. A panel takes the keyboard only for its text fields.
+- **Decisions come to you.** When a decision waits, *Your Call* comes to the front and resizes
+  to fit the card. ⌘1–⌘9 answer from anywhere in the app (the Decision menu). The Dock icon
+  shows a badge. When Ladder isn't the frontmost app you also get a notification that you can
+  answer from its Options.
+- **Menu bar.** The menu bar shows place and HP (`@ your call` when a decision waits). Its menu
+  answers decisions and offers Hold, Step and Take the wheel.
+- **Keys.** ⌘. holds and resumes, ⌘' steps one action, ⌘[ and ⌘] change the pause, and ⇧⌘T
+  takes the wheel.
+- **Handover.** When the cockpit leaves a game saved for you, *Sign in and play* (on the card,
+  in the notification, or ⇧⌘P) reads the bot's password from Keychain and logs in to webtiles
+  in the webtiles window, which then presses Play. The password isn't kept, and macOS asks
+  once to let Ladder read the Keychain item. While a run plays, the webtiles window spectates
+  the bot.
+- **Start and stop.** Cockpit ▸ Start Cockpit (⌘R) runs `ladder cockpit` in the repo with the
+  options from Settings (⌘,); Stop and Quit send it Ctrl-C, so the game stays saved. A cockpit
+  started in a terminal works the same: Ladder connects to whatever answers on port 8090. The
+  Mac doesn't sleep while a run plays.
+
+The app reads `/events` once and relays it to every panel. Each panel is the cockpit page
+(`/?panel=<name>&app`) in its own web view, and the panels would otherwise exceed the
+browser's six connections per host. In a browser, `/?panel=stream` and the others show one
+panel on its own.
+
 ## Claude Code channel
 
 The running game can talk to a Claude Code session in this repo, and Claude can answer. `.mcp.json`
@@ -168,6 +208,7 @@ Integration tests use their own account (`laddertest`) and dcss-api's scenario b
 | `src/ladder/games.py` | Plays a run of games; shared by `spike` and the cockpit |
 | `src/ladder/cockpit.py`, `static/` | The cockpit: game process, hub, HTTP + server-sent events on 127.0.0.1 |
 | `src/ladder/channel.py`, `.mcp.json` | Claude Code channel: cockpit events into a coding session, `reply` and `cockpit_state` back |
+| `mac/` | The Mac app: Swift (AppKit + WebKit), built by `mac/build.sh` |
 | `src/ladder/crawlrc.txt` | The rc file we ship: part of Reflex is DCSS configuration |
 | `src/ladder/jev.py`, `routing.py`, `jeveval.py` | Jev questions, the routing rules, and the offline evaluator |
 | `src/ladder/llm.py`, `profiles.py` | Anthropic and OpenAI-compatible adapters; profiles with capability flags |
