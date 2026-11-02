@@ -42,6 +42,7 @@ from .decisions import TAKE_OVER, Answer, DecisionRequest
 from .games import run_games
 from .jev import Jev, build_state
 from .jeveval import SeenBefore
+from .pace import pace_ms
 from .reflex import Hooks
 from .routing import Thresholds, needs_jev, route
 
@@ -120,6 +121,9 @@ class ChildHooks(Hooks):
 
     def on_record(self, record: dict) -> None:
         self.send("record", record=record)
+
+    def pace_ms(self) -> int:
+        return pace_ms(self.delay)
 
     def on_step(self, reflex, action: str) -> None:
         self.last_action = time.monotonic()

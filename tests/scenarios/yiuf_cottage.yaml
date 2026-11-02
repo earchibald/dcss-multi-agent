@@ -1,0 +1,27 @@
+# Crazy Yiuf behind a translucent runed door, as in his cottage vault. Explore brings him into
+# view (in view at the start, the encounter --more-- blocks the scenario build), but autofight
+# won't path through a runed door ("No reachable target in view!"). Run 20261101-193854 stuck there.
+options:
+  default_feature: "floor"
+
+levels:
+  - level:
+      name: D:3
+      features:
+        - '< = stone_stairs_up_i'
+        - '> = stone_stairs_down_i'
+        - '# = rock_wall'
+        - 'c = stone_wall'
+        - 'D = runed_clear_door'      # not '=': the builder splits these lines on it
+        - '. = floor'
+      monsters:
+        - '1 = Crazy Yiuf'
+      map: |-
+          ##########################
+          #........................#
+          #.<..#############ccccc..#
+          #.@..#...........D...c...#
+          #....#...........c.1.c...#
+          #................ccccc...#
+          #......................>.#
+          ##########################

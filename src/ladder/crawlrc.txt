@@ -8,7 +8,8 @@ save_dir = /data/saves
 show_more = false
 default_manual_training = false
 
-# No animation delays; the bot doesn't watch
+# No animation delays; the bot doesn't watch. The cockpit slows explore and travel
+# mid-game for a viewer, through the Lua keys appended below (ladder/pace.py).
 travel_delay = -1
 explore_delay = -1
 rest_delay = -1

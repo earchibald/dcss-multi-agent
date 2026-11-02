@@ -12,7 +12,8 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 
 from .interrupts import Interrupt
-from .state import THREAT_NAMES, GameState
+from .state import MF_STAIR_DOWN, THREAT_NAMES, GameState
+from .travel import first_step
 
 END_GAME, TAKE_OVER = "end_game", "take_over"
 EXITS = [
@@ -72,9 +73,13 @@ def for_interrupt(interrupt: Interrupt, state: GameState, level_explored: bool) 
         return _request(t, "An altar is in view. Worshipping isn't automated yet.",
                         [{"key": "skip", "label": "Skip the altar"}], "skip", state, level_explored)
     if t == "engage_unique":
-        names = [m["name"] for m in d.get("monsters", []) if m.get("unique")]
-        return _request(t, f"{', '.join(names)} in view. Fight?",
-                        [{"key": "fight", "label": "Fight"}], "fight", state, level_explored)
+        uniques = [m for m in d.get("monsters", []) if m.get("unique")]
+        seen = ", ".join(f"{m['name']} ({m['threat']}, {m['dist']} squares away)" for m in uniques)
+        options = [{"key": "fight", "label": "Fight"},
+                   {"key": "avoid", "label": "Leave it alone and keep exploring"}]
+        if first_step(state, MF_STAIR_DOWN) or state.cells.get(state.pos, {}).get("mf") == MF_STAIR_DOWN:
+            options.append({"key": "leave", "label": "Leave it alone and take the stairs down"})
+        return _request(t, f"{seen} in view. Fight?", options, "fight", state, level_explored)
     return None
 
 

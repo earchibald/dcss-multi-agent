@@ -90,6 +90,24 @@ def test_caught_in_a_web_reflex_struggles_free(game, tmp_path):
     assert freed
 
 
+def test_unique_behind_a_runed_door_reflex_opens_it_and_fights(game, tmp_path):
+    """Autofight won't path through a runed door: "No reachable target in view!" took no turn, twice,
+    and Reflex escalated with Crazy Yiuf in view. Run 20261101-193854 stuck there."""
+    conn, state = game
+    conn.start_scenario(SCENARIOS / "yiuf_cottage.yaml", "b", "f", "b")
+    reflex = Reflex(conn, state, RunLog(tmp_path))
+    actions = []
+    for _ in range(12):
+        action = reflex.stub.next_action(state)
+        actions.append(action)
+        reflex.step(action)
+        if "You open the door." in state.recent_messages(3):
+            break
+    assert "approach" in actions, actions
+    assert "You open the door." in state.recent_messages(3)
+    assert reflex.stub.next_action(state) == "fight"
+
+
 def test_seeded_run_visits_the_shop_greedy_explore_would_hang_in(game, tmp_path):
     """Seed 777's explore walks into Doito's Book Boutique at turn 39. Opened by explore, the shop
     menu sends no input_mode and act() waits forever, so Reflex visits shops itself first."""

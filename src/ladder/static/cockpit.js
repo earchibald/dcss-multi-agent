@@ -151,7 +151,7 @@ function renderPending(p) {
   $("card-type").textContent = p.decision_type;
   $("card-q").textContent = p.question;
   const s = p.snapshot || {};
-  $("card-ctx").textContent = `${s.place} · turn ${s.turn} · HP ${s.hp}/${s.hp_max}` +
+  $("card-ctx").textContent = `${s.place} · turn ${s.turn} · ${s.species ?? "you"} XL ${s.xl} · HP ${s.hp}/${s.hp_max}` +
     (s.hostiles?.length ? ` · ${monsters(s.hostiles)}` : "");
   const choices = p.options.filter((o) => !o.exit), exits = p.options.filter((o) => o.exit);
   $("card-opts").replaceChildren(...choices.map((o, i) => h("button", {

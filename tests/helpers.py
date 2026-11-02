@@ -1,11 +1,11 @@
 """Build GameStates from small ASCII maps for detector and travel tests."""
 
-from ladder.state import (BG_UNSEEN, MF_FEATURE, MF_FLOOR, MF_ITEM, MF_MONS_HOSTILE, MF_STAIR_DOWN,
+from ladder.state import (BG_UNSEEN, MF_DOOR, MF_FEATURE, MF_FLOOR, MF_ITEM, MF_MONS_HOSTILE, MF_STAIR_DOWN,
                           MF_STAIR_UP, MF_TRAP, MF_UNEXPLORED, MF_WALL, GameState)
 
 GLYPH_MF = {
     ".": MF_FLOOR, "#": MF_WALL, "?": MF_UNEXPLORED, ">": MF_STAIR_DOWN, "<": MF_STAIR_UP,
-    "^": MF_TRAP, "_": MF_FEATURE, "∩": MF_FEATURE, "$": MF_ITEM, "@": MF_FLOOR,
+    "^": MF_TRAP, "_": MF_FEATURE, "∩": MF_FEATURE, "$": MF_ITEM, "@": MF_FLOOR, "+": MF_DOOR,
 }
 
 

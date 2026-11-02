@@ -65,6 +65,11 @@ link spectates the bot). It shows:
   to 60 s) slows Reflex down so you can follow it in webtiles. *Step ▸* runs N Reflex
   actions (default 1) and holds again; from a running game it holds after the next N.
   One action can cover many turns: an autoexplore runs until something interrupts it.
+  At any pause above 0, DCSS's own explore and travel also walk at 0.1 s per square or
+  slower, rising with the pause, so the player doesn't jump down a hallway. At 0 they run
+  at full speed. The rc can't change that delay mid-game, so the shipped rc binds a Lua
+  setter for each step to a key no command uses (`ladder/pace.py`), and Reflex sends the
+  key when the speed changes.
 
 To take the wheel, log in to webtiles as the bot with the password from Keychain
 (`security find-generic-password -s dcss-ladder -a dcss-account/ladderbot -w`). The

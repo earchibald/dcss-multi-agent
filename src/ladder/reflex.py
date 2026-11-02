@@ -21,8 +21,9 @@ from . import decisions
 from .conn import ActResult, Connection
 from .decisions import END_GAME, Answer, DecisionRequest
 from .interrupts import Before, Detector, Interrupt
+from .pace import pace_key
 from .runlog import RunLog
-from .state import MF_STAIR_DOWN, GameState
+from .state import MF_STAIR_DOWN, GameState, Monster
 from .travel import first_step, step_toward
 
 KEYS = {
@@ -32,6 +33,8 @@ KEYS = {
     "struggle": ("key_dir_e",),     # held in a web or net, any move struggles; Tab only says you're caught
     "descend": (">",),
 }
+# Autofight's targeting steps greedily and won't path through runed doors (Crazy Yiuf's cottage)
+RE_UNREACHABLE = ("No reachable target in view!", "Failed to move towards target.")
 
 
 @dataclass
@@ -64,6 +67,10 @@ class Hooks:
     def on_step(self, reflex: "Reflex", action: str) -> None:
         pass
 
+    def pace_ms(self) -> int | None:
+        """DCSS's step delay during explore and travel (ladder.pace); None leaves the rc's."""
+        return None
+
 
 class StubTiers:
     """Placeholder decisions. Every branch here is a job for a real tier later."""
@@ -77,23 +84,30 @@ class StubTiers:
         self.shops: set[tuple[int, int]] = set()           # shops on this level; the glyph hides under @
         self.shops_seen: set[tuple[int, int]] = set()      # the ones we have looked inside
         self.descend_asked = False                          # "downstairs in view" asked once per level
+        self.ignored: set[int] = set()     # monster ids left alone: out of reach, or the answer was to avoid
+        self.approach = False              # autofight couldn't path to a target: walk there ourselves
+
+    def active_hostiles(self, state: GameState) -> list[Monster]:
+        """Hostiles to fight. One left alone counts again once it's next to us."""
+        return [m for m in state.hostiles() if m.id not in self.ignored or state.distance(m.pos) <= 1]
 
     def unvisited_shop(self, state: GameState) -> tuple[int, int] | None:
         self.shops |= state.shops()
         return min(self.shops - self.shops_seen, key=state.distance, default=None)
 
     def next_action(self, state: GameState) -> str:
-        hostiles = state.hostiles()
+        hostiles = self.active_hostiles(state)
         frac = state.hp / state.hp_max
         if not hostiles:
             self.fight_anyway = False
+            self.approach = False
         if hostiles and frac <= self.fight_hp_floor and not self.fight_anyway:
             raise Escalation(f"hp {state.hp}/{state.hp_max} with hostiles in view: "
                              + ", ".join(m.name for m in hostiles[:3]))
         if state.caught:
             return "struggle"
         if hostiles:
-            return "fight"
+            return "approach" if self.approach else "fight"
         if frac < self.rest_below and self.rest_stalled_at != (state.turn, state.hp):
             return "rest"
         if self.level_explored:
@@ -117,6 +131,14 @@ class StubTiers:
             self.rest_stalled_at = None
             self.shops, self.shops_seen = set(), set()
             self.descend_asked = False
+            self.ignored.clear()
+        if action == "fight":
+            new = [m["text"] for m in state.messages[before.msg_index:]]
+            self.approach = any(t in RE_UNREACHABLE for t in new)
+        elif action == "approach":
+            self.approach = False              # try autofight again from the new square
+        if any(i.kind == "hostile_in_view" and i.detail.get("explore_refused") for i in interrupts):
+            self.ignored.clear()               # DCSS thinks they can reach us after all
         if action == "rest" and state.hp == before.hp:
             self.rest_stalled_at = (state.turn, state.hp)
         if "no_progress" in kinds:
@@ -136,6 +158,7 @@ class Reflex:
         self.steps = 0
         self.decisions = 0
         self.escalation: str | None = None
+        self.pace = -1                         # the rc's travel_delay
 
     def run(self, max_steps: int = 300, max_turns: int = 20000) -> dict:
         start_turn = self.state.turn
@@ -146,6 +169,7 @@ class Reflex:
             if not self.hooks.checkpoint():
                 ended_by = "stopped"
                 break
+            self._pace()
             try:
                 action = self.stub.next_action(self.state)
                 self.step(action)
@@ -185,6 +209,9 @@ class Reflex:
         elif action == "shop":
             mode = "travel"
             result = self._visit_shop()
+        elif action == "approach":
+            mode = "travel"
+            result = self._approach()
         else:
             mode = "explore"
             result = self.conn.act(*KEYS[action])
@@ -219,6 +246,22 @@ class Reflex:
         closed.messages = opened.messages + closed.messages
         return closed
 
+    def _approach(self) -> ActResult:
+        """One step along our own path to the nearest hostile; moving into a closed or runed door opens it."""
+        hostiles = sorted(self.stub.active_hostiles(self.state), key=lambda m: self.state.distance(m.pos))
+        for m in hostiles:
+            key = step_toward(self.state, m.pos)
+            if key:
+                return self.conn.act(key)
+        self.stub.ignored |= {m.id for m in hostiles}   # no known way to any of them
+        return ActResult()
+
+    def _pace(self) -> None:
+        want = self.hooks.pace_ms()
+        if want is not None and want != self.pace:
+            self.conn.act(pace_key(want))
+            self.pace = want
+
     def _ask(self, request: DecisionRequest) -> Answer:
         self.decisions += 1
         request.id = f"{self.game_no}-{self.steps}-{self.decisions}"
@@ -232,7 +275,9 @@ class Reflex:
     def _apply(self, answer: Answer) -> None:
         if answer.choice in (END_GAME, decisions.TAKE_OVER):
             raise GameOver(answer.choice)
-        if answer.choice == "descend":
+        if answer.choice in ("avoid", "leave"):
+            self.stub.ignored |= {m.id for m in self.state.hostiles() if m.unique}
+        if answer.choice in ("descend", "leave"):
             self.stub.level_explored = True    # travel to the stairs, then descend
 
     def _answer_prompts(self, result: ActResult) -> ActResult:

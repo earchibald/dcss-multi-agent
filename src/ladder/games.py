@@ -7,13 +7,14 @@ from importlib import resources
 from typing import Callable
 
 from .conn import Connection
+from .pace import pace_rc
 from .reflex import Hooks, Reflex
 from .runlog import RunLog
 from .state import GameState
 
 
 def crawlrc() -> str:
-    return resources.files("ladder").joinpath("crawlrc.txt").read_text()
+    return resources.files("ladder").joinpath("crawlrc.txt").read_text() + "\n# Step delay keys (ladder.pace)\n" + pace_rc()
 
 
 def run_games(args: argparse.Namespace, hooks: Hooks | None = None,
