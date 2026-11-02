@@ -110,6 +110,16 @@ def test_controls_after_the_game_process_exits_say_so_instead_of_raising():
     h.tick()
 
 
+def test_step_and_speed_reach_the_game_and_validate():
+    h, sent, _ = hub()
+    assert h.step(0) and h.step(1.5) and h.step(True) and h.step(1001)
+    assert h.step(3) is None and h.held and sent == [{"cmd": "step", "n": 3}]
+    assert h.set_speed(-1) and h.set_speed(61) and h.set_speed("2") and h.set_speed(float("nan"))
+    assert h.set_speed(1.5) is None and h.settings()["delay"] == 1.5 and sent[-1] == {"cmd": "speed", "delay": 1.5}
+    h.child_gone()
+    assert h.step(1) == GAME_GONE and h.set_speed(0) == GAME_GONE
+
+
 def test_records_route_without_jev_and_shadow_route_with_it():
     record = {"game": 1, "step": 3, "action": "explore", "kind": "hostile_in_view", "source": "dcss",
               "decision_type": None, "detail": {"monsters": []}, "messages": [],
@@ -147,20 +157,21 @@ def test_decision_requests_offer_only_what_reflex_can_do():
     assert esc.context["threat"] == 2
 
 
+class Pipe:
+    def __init__(self, incoming):
+        self.incoming, self.sent = list(incoming), []
+
+    def send(self, m):
+        self.sent.append(m)
+
+    def recv(self):
+        return self.incoming.pop(0)
+
+    def poll(self, timeout=0):
+        return bool(self.incoming)
+
+
 def test_child_hooks_wait_for_their_own_answer():
-    class Pipe:
-        def __init__(self, incoming):
-            self.incoming, self.sent = list(incoming), []
-
-        def send(self, m):
-            self.sent.append(m)
-
-        def recv(self):
-            return self.incoming.pop(0)
-
-        def poll(self):
-            return bool(self.incoming)
-
     req = for_interrupt(Interrupt("feature_in_view", "dcss", {"dist": 2}, decision_type="choose_god"),
                         make_state(ROOM), False)
     req.id = "1-2-1"
@@ -235,3 +246,35 @@ def test_stall_warning_only_when_the_game_should_be_moving():
     clock.now += 600
     h.tick()                                          # waiting on the player is not a stall
     assert len([e for e in h.events if e["ev"] == "stall"]) == 2
+
+
+def test_child_steps_n_actions_then_holds():
+    pipe = Pipe([{"cmd": "step", "n": 2}])
+    hooks = ChildHooks(pipe)
+    assert hooks.checkpoint() and hooks.checkpoint()
+    assert pipe.sent == [] and hooks._holding()      # two actions ran; the third waits for the player
+    pipe.poll = lambda timeout=0: False               # Resume arrives only once it is waiting
+    pipe.incoming = [{"cmd": "resume"}]
+    assert hooks.checkpoint()
+    assert pipe.sent == [{"ev": "paused", "paused": True}, {"ev": "paused", "paused": False}]
+    assert not hooks.held and not hooks.steps_left
+
+
+def test_child_paces_actions_and_takes_commands_while_it_waits():
+    import time
+    pipe = Pipe([{"cmd": "speed", "delay": 0}])
+    hooks = ChildHooks(pipe, delay=30)
+    hooks.last_action = time.monotonic()
+    started = time.monotonic()
+    assert hooks.checkpoint() and hooks.delay == 0
+    assert time.monotonic() - started < 5             # the new speed cut the 30 s pause short
+    pipe.incoming = [{"cmd": "stop"}]
+    hooks.delay, hooks.last_action = 30, time.monotonic()
+    assert hooks.checkpoint() is False
+
+
+def test_http_step_and_speed(server):
+    h, port = server
+    assert call(port, "/api/speed", {"delay": 2})[0] == 200 and h.delay == 2
+    assert call(port, "/api/speed", {"delay": "fast"})[0] == 409
+    assert call(port, "/api/step", {"n": 5})[0] == 200 and h.held

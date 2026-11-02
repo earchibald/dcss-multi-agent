@@ -42,6 +42,8 @@ from .routing import Thresholds, needs_jev, route
 
 STRATEGY_STUB = "stub recommendation; Strategy isn't built yet"
 GAME_GONE = "the run is over, so there is no game to send that to; start the cockpit again for a new run"
+MAX_DELAY = 60           # seconds between actions
+MAX_STEPS = 1000         # actions per Step
 
 
 # --- child process: the game ------------------------------------------------
@@ -49,10 +51,13 @@ GAME_GONE = "the run is over, so there is no game to send that to; start the coc
 class ChildHooks(Hooks):
     """Reflex's hooks in the game process: report everything, wait on the parent for decisions."""
 
-    def __init__(self, pipe):
+    def __init__(self, pipe, delay: float = 0.0):
         self.pipe = pipe
         self.held = False
         self.stopping = False
+        self.delay = delay              # seconds between actions, so a person can follow the game
+        self.steps_left = 0             # actions to run before holding again
+        self.last_action = 0.0
 
     def send(self, ev: str, **data) -> None:
         self.pipe.send({"ev": ev, **data})
@@ -60,23 +65,42 @@ class ChildHooks(Hooks):
     def _handle(self, msg: dict) -> dict | None:
         cmd = msg.get("cmd")
         if cmd == "hold":
-            self.held = True
+            self.held, self.steps_left = True, 0
         elif cmd == "resume":
-            self.held = False
+            self.held, self.steps_left = False, 0
+        elif cmd == "step":
+            self.held, self.steps_left = True, msg["n"]
+        elif cmd == "speed":
+            self.delay = msg["delay"]
         elif cmd == "stop":
             self.stopping = True
         elif cmd == "answer":
             return msg
         return None
 
+    def _holding(self) -> bool:
+        return self.held and not self.steps_left and not self.stopping
+
+    def _pace(self) -> None:
+        """Wait out the pause since the last action, still taking commands: a new speed applies at once."""
+        while not self.stopping and not self._holding():
+            left = self.last_action + self.delay - time.monotonic()
+            if left <= 0:
+                return
+            if self.pipe.poll(left):
+                self._handle(self.pipe.recv())
+
     def checkpoint(self) -> bool:
         while self.pipe.poll():
             self._handle(self.pipe.recv())
-        if self.held and not self.stopping:
+        self._pace()
+        if self._holding():
             self.send("paused", paused=True)
-            while self.held and not self.stopping:
+            while self._holding():
                 self._handle(self.pipe.recv())
             self.send("paused", paused=False)
+        if self.steps_left:
+            self.steps_left -= 1
         return not self.stopping
 
     def decide(self, request: DecisionRequest) -> Answer:
@@ -90,6 +114,7 @@ class ChildHooks(Hooks):
         self.send("record", record=record)
 
     def on_step(self, reflex, action: str) -> None:
+        self.last_action = time.monotonic()
         self.send("step", game=reflex.game_no, step=reflex.steps, action=action,
                   snapshot=reflex.state.snapshot(), messages=reflex.state.recent_messages(5))
 
@@ -97,7 +122,7 @@ class ChildHooks(Hooks):
 def child_main(pipe, args: argparse.Namespace) -> None:
     signal.signal(signal.SIGINT, signal.SIG_IGN)     # Ctrl-C goes to the parent, which stops us cleanly
     faulthandler.register(signal.SIGUSR1)            # `kill -USR1 <pid>` prints stacks, even inside read_until
-    hooks = ChildHooks(pipe)
+    hooks = ChildHooks(pipe, args.delay)
     try:
         run_games(args, hooks, on_event=hooks.send)
     except Exception:
@@ -113,7 +138,7 @@ class Hub:
 
     def __init__(self, authority: Authority, send: Callable[[dict], None], jev: Jev | None = None,
                  thresholds: Thresholds = Thresholds(), clock: Callable[[], float] = time.time,
-                 backlog: int = 500, links: dict | None = None, stall_after: float = 45.0):
+                 backlog: int = 500, links: dict | None = None, stall_after: float = 45.0, delay: float = 0.0):
         self.authority = authority
         self._send = send
         self.jev = jev
@@ -129,6 +154,7 @@ class Hub:
         self.pending: dict | None = None
         self.held = False
         self.paused = False
+        self.delay = delay
         self.tiers: Counter[str] = Counter()
         self.deciders: Counter[str] = Counter()
         self.seen = SeenBefore()
@@ -163,7 +189,7 @@ class Hub:
     def settings(self) -> dict:
         a = self.authority
         return {"mode": a.mode, "idle_minutes": a.idle_minutes, "switched_by_idle": a.switched_by_idle,
-                "held": self.held, "paused": self.paused, "jev": self.jev is not None}
+                "held": self.held, "paused": self.paused, "delay": self.delay, "jev": self.jev is not None}
 
     def pending_view(self) -> dict | None:
         if not self.pending:
@@ -344,7 +370,7 @@ class Hub:
         waiting_on_us = self.pending or self.paused
         if self.run["state"] != "running" or waiting_on_us or self.stalled:
             return
-        if now - self.last_heard >= self.stall_after:
+        if now - self.last_heard >= self.stall_after + self.delay:
             self.stalled = True
             self.publish("stall", stalled=True, seconds=round(now - self.last_heard))
 
@@ -354,6 +380,30 @@ class Hub:
             if err:
                 return err
             self.held = bool(on)
+            self.publish("settings", keep=False, settings=self.settings())
+            return None
+
+    def step(self, n) -> str | None:
+        """Run `n` more actions, then hold. From a running game it holds after the next `n`."""
+        if not isinstance(n, int) or isinstance(n, bool) or not 1 <= n <= MAX_STEPS:
+            return f"step is a whole number of actions, 1 to {MAX_STEPS}"
+        with self.lock:
+            err = self._to_game({"cmd": "step", "n": n})
+            if err:
+                return err
+            self.held = True
+            self.publish("settings", keep=False, settings=self.settings())
+            return None
+
+    def set_speed(self, delay) -> str | None:
+        """Seconds to wait between actions, so a person watching webtiles can keep up. 0 is full speed."""
+        if isinstance(delay, bool) or not isinstance(delay, (int, float)) or not 0 <= delay <= MAX_DELAY:
+            return f"the pause between actions is 0 to {MAX_DELAY} seconds"
+        with self.lock:
+            err = self._to_game({"cmd": "speed", "delay": float(delay)})
+            if err:
+                return err
+            self.delay = float(delay)
             self.publish("settings", keep=False, settings=self.settings())
             return None
 
@@ -448,6 +498,10 @@ def make_handler(hub: Hub, port: int) -> type[BaseHTTPRequestHandler]:
                 err = hub.decide(str(body.get("id")), str(body.get("choice")))
             elif path == "/api/hold":
                 err = hub.hold(bool(body.get("hold")))
+            elif path == "/api/step":
+                err = hub.step(body.get("n"))
+            elif path == "/api/speed":
+                err = hub.set_speed(body.get("delay"))
             elif path == "/api/stop":
                 err = hub.stop()
             else:
@@ -524,7 +578,7 @@ def serve(args: argparse.Namespace, thresholds: Thresholds = Thresholds()) -> No
     jev = Jev(profiles.for_tier("jev")) if args.jev else None
     parent_end, child_end = mp.Pipe()
     hub = Hub(authority, parent_end.send, jev=jev, thresholds=thresholds,
-              links=game_links(args.server, args.user))
+              links=game_links(args.server, args.user), delay=args.delay)
     proc = mp.get_context("spawn").Process(target=child_main, args=(child_end, args), name="ladder-game",
                                            daemon=True)
     proc.start()

@@ -70,7 +70,8 @@ button, input { font: inherit; color: inherit; }
 .dial button + button { border-left: 1.5px solid var(--line); }
 .dial button[aria-pressed=true] { background: var(--ink); color: var(--bg); }
 .badge { font: 600 .72rem var(--mono); color: var(--tactics); background: var(--tactics-bg); padding: 2px 8px; border-radius: 4px; }
-#idle { width: 4.5em; padding: 4px 6px; border: 1.5px solid var(--line); border-radius: 4px; background: var(--bg); }
+#delay { width: 10em; accent-color: var(--ink); }
+#idle, #step-n { width: 4.5em; padding: 4px 6px; border: 1.5px solid var(--line); border-radius: 4px; background: var(--bg); }
 button.ghost, .opts button, .exits button { border: 1.5px solid var(--line); background: var(--bg); border-radius: 5px;
                 padding: 6px 12px; cursor: pointer; }
 button.ghost:hover, .opts button:hover { border-color: var(--ink); }

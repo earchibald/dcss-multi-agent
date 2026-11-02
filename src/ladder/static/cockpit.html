@@ -43,6 +43,16 @@
         <button type="button" id="hold" class="ghost">❚❚ Hold at next event</button>
         <button type="button" id="stop" class="ghost" title="Stop after the current action and leave the game saved for you to play in webtiles">Take the wheel</button>
       </div>
+      <div class="row">
+        <label for="delay">Pause between actions</label>
+        <input id="delay" type="range" min="0" max="5" step="0.25" value="0">
+        <output id="delay-out" for="delay" class="mono small">full speed</output>
+      </div>
+      <form id="step-form" class="row">
+        <button type="submit" id="step" class="ghost" title="Run this many Reflex actions, then hold">Step ▸</button>
+        <input id="step-n" type="number" min="1" max="1000" step="1" inputmode="numeric" value="1" aria-label="Actions to step">
+        <span class="muted">actions, then hold</span>
+      </form>
       <p id="toast" class="toast" role="status" aria-live="polite"></p>
     </section>
 

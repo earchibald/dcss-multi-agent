@@ -83,6 +83,8 @@ def main() -> None:
     p.add_argument("--mode", choices=("assisted", "autonomous"), default="assisted")
     p.add_argument("--idle-minutes", type=int, default=0, help="go autonomous after this many idle minutes; 0 = never")
     p.add_argument("--jev", action="store_true", help="also ask Jev about each interrupt and show its route (shadow)")
+    p.add_argument("--delay", type=float, default=0.0,
+                   help="seconds to wait between Reflex actions so you can follow along; 0 = full speed")
     p.add_argument("--open", action="store_true", help="open the cockpit in a browser")
     add_threshold_args(p)
     p = sub.add_parser("jev-eval", help="ask Jev about every logged interrupt and route it")
@@ -96,6 +98,8 @@ def main() -> None:
     args = parser.parse_args()
     if getattr(args, "idle_minutes", 0) < 0:
         parser.error("--idle-minutes is 0 (never) or a positive number of minutes")
+    if not 0 <= getattr(args, "delay", 0) <= 60:
+        parser.error("--delay is 0 (full speed) to 60 seconds")
     {"spike": spike, "cockpit": cockpit, "jev-eval": jev_eval, "retune": retune}[args.cmd](args)
 
 

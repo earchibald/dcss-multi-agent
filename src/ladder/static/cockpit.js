@@ -206,7 +206,13 @@ function renderSettings(s) {
   if (document.activeElement !== $("idle")) $("idle").value = s.idle_minutes;
   $("hold").setAttribute("aria-pressed", String(s.held));
   $("hold").textContent = s.held ? (s.paused ? "▶ Resume (holding)" : "▶ Resume (will hold)") : "❚❚ Hold at next event";
+  if (document.activeElement !== $("delay")) $("delay").value = s.delay;
+  showDelay(s.delay);
   renderCounts();
+}
+
+function showDelay(d) {
+  $("delay-out").textContent = Number(d) ? `${Number(d).toFixed(2).replace(/\.?0+$/, "")} s` : "full speed";
 }
 
 function renderRun(run) {
@@ -217,6 +223,7 @@ function renderRun(run) {
   const saved = ended && (ended.ended_by === "take_over" || ended.ended_by === "stopped");
   $("stop").disabled = run.state !== "running";
   $("hold").disabled = !["starting", "running"].includes(run.state);
+  $("step").disabled = $("hold").disabled;
   $("handover").hidden = !(saved && run.state !== "running");
   if ($("handover").hidden) return;
   $("h-handover").textContent = `Saved for you at ${ended.final_place}, turn ${ended.turns}`;
@@ -259,6 +266,16 @@ $("idle-form").addEventListener("submit", (ev) => {
 });
 $("hold").addEventListener("click", () => post("/api/hold", { hold: !settings.held }));
 $("stop").addEventListener("click", () => post("/api/stop", {}));
+$("delay").addEventListener("input", (ev) => showDelay(ev.target.value));
+$("delay").addEventListener("change", async (ev) => {
+  if (!(await post("/api/speed", { delay: Number(ev.target.value) }))) showDelay(settings.delay);
+});
+$("step-form").addEventListener("submit", (ev) => {
+  ev.preventDefault();
+  const n = Number($("step-n").value);
+  if (!Number.isInteger(n) || n < 1 || n > 1000) return toast("step is a whole number of actions, 1 to 1000");
+  post("/api/step", { n });
+});
 $("ho-copy").addEventListener("click", async () => {
   try {
     await navigator.clipboard.writeText(links.password_cmd);

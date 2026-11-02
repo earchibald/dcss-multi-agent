@@ -61,6 +61,10 @@ link spectates the bot). It shows:
   *Take the wheel* (stop, game left saved) and *End game*. Number keys answer.
 - **Control**: Assisted / Autonomous, the idle switch (whole minutes, `0` = never, with a
   countdown on the card), *Hold at next event*, and *Take the wheel*.
+- **Speed**: *Pause between actions* (0–5 s on the slider; `--delay` sets it at start, up
+  to 60 s) slows Reflex down so you can follow it in webtiles. *Step ▸* runs N Reflex
+  actions (default 1) and holds again; from a running game it holds after the next N.
+  One action can cover many turns: an autoexplore runs until something interrupts it.
 
 To take the wheel, log in to webtiles as the bot with the password from Keychain
 (`security find-generic-password -s dcss-ladder -a dcss-account/ladderbot -w`). The
