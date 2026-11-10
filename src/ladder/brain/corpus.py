@@ -7,7 +7,8 @@ game, as six numbers (features.COMPONENTS):
     died_soon   1 if the character died within SOON_TURNS game turns
     hp_lost     the deepest HP drop within SOON_TURNS, as a fraction of max HP (all of it on death)
     xp_soon     experience levels gained within XP_TURNS (fractions from the progress bar)
-    depth_go    new depths reached later on, each discounted by exp(-turns / TAU_GO)
+    depth_go    new depths reached later on *and survived for SETTLE_TURNS*, each discounted by
+                exp(-turns / TAU_GO) from the step to the turn the depth was settled
     xp_go       experience gained later on, discounted the same way
     died_go     exp(-turns until death / TAU_DEATH), 0 if the game didn't end in death
 
@@ -32,6 +33,9 @@ from .net import contract
 from .policy import REPLAY_DIVERGED
 
 SOON_TURNS, XP_TURNS, TAU_GO, TAU_DEATH = 30, 100, 1500.0, 400.0
+# A new depth counts once the character has lasted this many game turns after first reaching it.
+# Paying on arrival taught the first models to dive: the stairs earned the reward, whoever died below.
+SETTLE_TURNS = 200
 DANGER_DROP = 0.25
 HOLDOUT_SEED = 500_000    # seeds from here up are evaluation's (cli.EVAL_SEED)
 VAL_FOLD = 5              # one game in five is held out, by a hash of where it came from
@@ -77,6 +81,19 @@ def _point(o: dict) -> tuple[int, float, float, int]:
             progress_depth(o["place"], o["depth"]))
 
 
+def settled_depth(turn: np.ndarray, depth: np.ndarray) -> np.ndarray:
+    """At each point, the deepest depth first reached at least SETTLE_TURNS before it."""
+    reached = np.maximum.accumulate(depth)
+    out = np.full(len(turn), reached[0])
+    j = 0
+    for i in range(len(turn)):
+        while j < i and turn[j + 1] + SETTLE_TURNS <= turn[i]:
+            j += 1
+        if turn[j] + SETTLE_TURNS <= turn[i]:
+            out[i] = reached[j]
+    return np.maximum.accumulate(out)
+
+
 def label(game: dict) -> np.ndarray:
     """Outcome components for each step of one game: [steps, N_COMPONENTS]."""
     pts = [_point(s["obs"]) for s in game["steps"]]
@@ -90,7 +107,7 @@ def label(game: dict) -> np.ndarray:
     turn = np.array([p[0] for p in pts], dtype=np.float64)
     hp = np.array([p[1] for p in pts])
     xp = np.array([p[2] for p in pts])
-    best = np.maximum.accumulate(np.array([p[3] for p in pts], dtype=np.float64))
+    best = settled_depth(turn, np.array([p[3] for p in pts], dtype=np.float64))
     if died:
         hp[-1] = 0.0
     out = np.zeros((n, 6), dtype=np.float32)
@@ -169,6 +186,7 @@ def build(roots: list[str | Path], out: str | Path) -> dict:
             "by_action": {a: int((arrays["action"] == i).sum()) for i, a in enumerate(ACTIONS)},
             "roots": [str(r) for r in roots],
             "labels": {"soon_turns": SOON_TURNS, "xp_turns": XP_TURNS, "tau_go": TAU_GO, "tau_death": TAU_DEATH,
+                       "settle_turns": SETTLE_TURNS,
                        "danger_drop": DANGER_DROP}}
     Path(f"{out}.meta.json").write_text(json.dumps(meta, indent=1))
     return meta

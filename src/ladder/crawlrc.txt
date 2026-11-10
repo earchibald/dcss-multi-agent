@@ -28,3 +28,43 @@ hp_warning = 25
 # Autofight (Tab) refuses below 50% HP by default ("You are too injured to fight recklessly!").
 # Whether to fight on is the ladder's decision, not the key's.
 autofight_stop = 0
+
+# Explore walks into a shop it has found and opens it. The shop's menu arrives after the reply the
+# bot waits for, with nothing behind it, and the read (which has no timeout) never returns. Keep
+# explore out: the trained brain presses this key when a shop comes into view, and every shop in
+# sight is excluded from travel. Reflex still visits a shop on foot (reflex.py, _visit_shop).
+# (Not a ready() hook: scanning every turn of a long rest trips Lua's runaway-script guard.)
+{
+function ladder_fence_shops()
+  for x = -8, 8 do
+    for y = -8, 8 do
+      if view.feature_at(x, y) == "enter_shop" then
+        travel.set_exclude(x, y, 0)
+      end
+    end
+  end
+end
+}
+macros += M \{9350} ===ladder_fence_shops
+
+# Pick up the weapons and armour the trained brain knows how to rank (ladder/brain/gear.py),
+# one of each kind, so `wield` and `wear` have something to choose from.
+{
+local ladder_gear = { "flail", "morningstar", "eveningstar", "great mace", "demon whip", "sacred scourge",
+  "ring mail", "scale mail", "chain mail", "plate armour", "dragon scales", "troll leather",
+  "cloak", "scarf", "gloves", "boots", "hat", "helmet", "buckler", "kite shield" }
+add_autopickup_func(function(it, name)
+  local class = it.class(true)
+  if class ~= "armour" and class ~= "weapon" then return nil end
+  if it.is_useless then return nil end
+  for _, g in ipairs(ladder_gear) do
+    if name:find(g, 1, true) then
+      for _, mine in ipairs(items.inventory()) do
+        if mine.name():find(g, 1, true) then return nil end
+      end
+      return true
+    end
+  end
+  return nil
+end)
+}

@@ -17,12 +17,13 @@ import numpy as np
 
 from ..state import MF_STAIR_DOWN, MF_STAIR_UP, MF_TRAP, NOT_WALKABLE, GameState, Monster
 from ..travel import DIRECTIONS
+from . import gear
 
-FEATURE_VERSION = 2
+FEATURE_VERSION = 3
 
 # What the brain can ask Reflex to do. Order is the model's output order.
 ACTIONS = ["explore", "fight", "rest", "descend", "flee_up", "quaff_heal", "quaff_unknown",
-           "read_unknown", "read_teleport", "wait", "berserk"]
+           "read_unknown", "read_teleport", "wait", "berserk", "wield", "wear"]
 N_ACTIONS = len(ACTIONS)
 
 # What the network predicts for each action (corpus.py computes them from what happened next).
@@ -99,6 +100,7 @@ def observe(state: GameState, hostiles: list[Monster], ctx: dict) -> dict:
     d_down = 0 if here == MF_STAIR_DOWN else path(state, MF_STAIR_DOWN)[1]
     d_up = 0 if here == MF_STAIR_UP else path(state, MF_STAIR_UP)[1]
     mons = sorted(hostiles, key=lambda m: state.distance(m.pos))
+    better = gear.upgrades(state, ctx.get("worn") or {})
     open_n = sum(1 for dx, dy in DIRECTIONS
                  if (c := state.cells.get((px + dx, py + dy))) and c.get("mf", 0) not in NOT_WALKABLE)
     return {
@@ -113,7 +115,8 @@ def observe(state: GameState, hostiles: list[Monster], ctx: dict) -> dict:
         "mons": [{"name": m.name, "dx": m.pos[0] - px, "dy": m.pos[1] - py, "threat": m.threat,
                   "unique": m.unique} for m in mons[:MAX_MONS]],
         "n_hostiles": len(mons),
-        "inv": {k: v for k, v in inventory(state).items() if k != "letters"},
+        "inv": {**{k: v for k, v in inventory(state).items() if k != "letters"},
+                "wield": int(bool(better["wield"])), "wear": int(bool(better["wear"]))},
         "on_down": here == MF_STAIR_DOWN, "on_up": here == MF_STAIR_UP,
         "dist_down": d_down, "dist_up": d_up, "open_neighbors": open_n,
         "level_explored": bool(ctx.get("level_explored")),

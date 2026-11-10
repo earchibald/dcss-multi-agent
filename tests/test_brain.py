@@ -11,7 +11,7 @@ import numpy as np
 import pytest
 from helpers import add_monster, make_state, player
 
-from ladder.brain import corpus
+from ladder.brain import corpus, policy
 from ladder.brain.cli import compare
 from ladder.brain.features import (ACTIONS, COMPONENTS, FEATURE_VERSION, MAX_MONS, MON_DIM, N_ACTIONS,
                                    N_COMPONENTS, SELF_DIM, encode, inventory, observe, path, progress_depth)
@@ -470,6 +470,10 @@ class ScriptedConn:
         self.sent.append((keys, kw))
         return self.results.pop(0) if self.results else ActResult()
 
+    def catch_up(self):
+        self.caught_up = getattr(self, "caught_up", 0) + 1
+        return getattr(self, "behind", None) or ActResult()
+
 
 def test_perform_quaffs_the_right_letter_through_the_menu():
     state = make_state(["@..."])
@@ -477,6 +481,24 @@ def test_perform_quaffs_the_right_letter_through_the_menu():
     conn = ScriptedConn([ActResult(blocking="menu")])
     BrainTiers().perform(SimpleNamespace(state=state, conn=conn), "quaff_heal")
     assert conn.sent == [(("q",), {}), (("e",), {"through_menu": True})]
+
+
+def test_a_menu_key_first_catches_up_with_the_game():
+    # explore can leave a late "ready" unread; the menu would then open unseen
+    state = make_state(["@..."])
+    with_inv(state, s0=item("potion of curing", POTIONS, 1, 101))
+    conn = ScriptedConn([ActResult(blocking="menu")])
+    BrainTiers().perform(SimpleNamespace(state=state, conn=conn), "quaff_heal")
+    assert conn.caught_up == 1
+
+
+def test_a_prompt_found_while_catching_up_is_returned_and_no_key_sent():
+    state = make_state(["@..."])
+    with_inv(state, s0=item("potion of curing", POTIONS, 1, 101))
+    conn = ScriptedConn()
+    conn.behind = ActResult(blocking="text_input")
+    result = BrainTiers().perform(SimpleNamespace(state=state, conn=conn), "quaff_heal")
+    assert result.blocking == "text_input" and conn.sent == []
 
 
 def test_perform_sends_no_letter_when_the_verb_is_refused():
@@ -559,10 +581,12 @@ def test_label_hp_drop_without_death():
 
 
 def test_label_depth_go_is_discounted_by_time():
-    game = {"id": "g", "steps": [step(point(0, 20, depth=1)), step(point(100, 20, depth=2))], "end": None}
+    # the descent counts once it has been survived for SETTLE_TURNS: here at turn 400, from 100
+    game = {"id": "g", "steps": [step(point(0, 20, depth=1)), step(point(100, 20, depth=2)),
+                                 step(point(400, 20, depth=2))], "end": None}
     out = corpus.label(game)
-    assert out[0, COMPONENTS.index("depth_go")] == pytest.approx(math.exp(-100 / corpus.TAU_GO))
-    assert out[1, COMPONENTS.index("depth_go")] == 0                     # nothing known after the last step
+    assert out[0, COMPONENTS.index("depth_go")] == pytest.approx(math.exp(-400 / corpus.TAU_GO))
+    assert out[2, COMPONENTS.index("depth_go")] == 0                     # nothing known after the last step
 
 
 def test_label_xp_soon_and_go():
@@ -583,7 +607,8 @@ def test_label_truncated_game_without_an_end_record():
 def test_label_end_record_with_state_is_used_as_a_last_point():
     end = {"type": "end", "died": False, "turn": 40, "hp": 20, "hp_max": 20, "xl": 1, "progress": 0,
            "place": "Dungeon", "depth": 2}
-    game = {"id": "g", "steps": [step(point(0, 20, depth=1))], "end": end}
+    end["turn"] = 300                          # depth 2 (reached at 50) is settled by then
+    game = {"id": "g", "steps": [step(point(0, 20, depth=1)), step(point(50, 20, depth=2))], "end": end}
     assert corpus.label(game)[0, COMPONENTS.index("depth_go")] > 0
 
 
@@ -1051,23 +1076,24 @@ def test_other_prompts_after_an_item_are_left_for_reflex():
 
 # --- the shop guard --------------------------------------------------------------------------
 
-def test_an_unvisited_shop_is_visited_unless_berserk():
+def test_a_shop_in_view_is_fenced_off_once_and_never_visited():
     rows = ["@.∩.."]
-    assert BrainTiers(rng=random.Random(0)).next_action(make_state(rows)) == "shop"
-    raging = make_state(rows, status=[{"light": "Berserk"}])
-    tiers = BrainTiers(rng=random.Random(0))
-    assert tiers.next_action(raging) == "wait"
-    assert tiers.last is None                                  # not a brain choice
-
-
-def test_no_shop_visit_once_the_level_is_explored_or_hostiles_are_about():
-    rows = ["@.∩.."]
-    tiers = BrainTiers(rng=random.Random(0))
-    tiers.level_explored = True
-    assert tiers.next_action(make_state(rows)) != "shop"
     state = make_state(rows)
+    tiers = BrainTiers(rng=random.Random(0))
+    assert tiers.next_action(state) == "fence_shops"
+    assert tiers.last is None                                  # not a brain choice
+    assert tiers.next_action(state) == "explore"
+
+
+def test_fencing_comes_before_fighting_and_sends_the_macro_key():
+    state = make_state(["@.∩.."])
     add_monster(state, (4, 0), 1, "rat")
-    assert BrainTiers(rng=random.Random(0)).next_action(state) == "fight"
+    tiers = BrainTiers(rng=random.Random(0))
+    assert tiers.next_action(state) == "fence_shops"
+    assert tiers.next_action(state) == "fight"
+    conn = ScriptedConn([ActResult()])
+    tiers.perform(SimpleNamespace(state=state, conn=conn), "fence_shops")
+    assert [k for k, _ in conn.sent] == [(policy.FENCE_KEY,)]
 
 
 # --- corpus: seeds, forks, holdout --------------------------------------------------------------

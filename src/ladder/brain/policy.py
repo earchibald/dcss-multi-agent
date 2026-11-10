@@ -18,7 +18,9 @@ import numpy as np
 from ..conn import ActResult
 from ..interrupts import Before, Interrupt
 from ..reflex import Escalation, StubTiers
-from ..state import MF_STAIR_UP, GameState
+from ..state import MF_STAIR_UP, GameState, strip_tags
+
+from . import gear
 from .features import ACTIONS, COMPONENTS, encode, inventory, observe, path
 from .net import TrainedNet
 
@@ -29,6 +31,7 @@ REPLAY_DIVERGED, FORK_DONE = "replay diverged", "fork horizon reached"
 LEVEL_STEP_LIMIT = 1500   # choices on one level before the brain calls itself stuck
 IDLE_LIMIT = 60           # waits in a row, with nothing else possible, before it does the same
 BLOCK_TURNS = 50         # an action that went nowhere is left alone for this many game turns
+FENCE_KEY = chr(9350)      # the rc's ladder_fence_shops macro (crawlrc.txt)
 UNTIL_LEVEL = 10 ** 9     # ...or until the next level, for scrolls and potions that wouldn't go down
 
 
@@ -75,6 +78,9 @@ def available(obs: dict, level_explored: bool, blocked: set[str], rest_stalled: 
         "wait": hostiles and not adjacent,
         # Trog's Berserk: refused while berserk or exhausted, which the no-progress block then handles
         "berserk": hostiles and obs.get("god") == "Trog" and not any(x.startswith(("Berserk", "-Berserk")) for x in status),
+        # changing equipment takes several turns: never with something watching
+        "wield": bool(inv.get("wield")) and not hostiles and calm,
+        "wear": bool(inv.get("wear")) and not hostiles and calm,
     }
     return [a for a in ACTIONS if can[a] and a not in blocked]
 
@@ -88,7 +94,7 @@ def baseline(obs: dict, avail: list[str], level_explored: bool) -> str:
         order = (["berserk"] if rage and near else []) + (["quaff_heal"] if frac <= 0.5 else []) + \
                 ["fight", "descend", "flee_up", "wait"]
     else:
-        order = (["rest"] if frac < 0.8 else ["read_unknown", "quaff_unknown"]) + \
+        order = ["wield", "wear"] + (["rest"] if frac < 0.8 else ["read_unknown", "quaff_unknown"]) + \
                 (["descend"] if level_explored else ["explore"]) + ["rest", "descend", "explore"]
     return next((a for a in order if a in avail), avail[0])
 
@@ -116,6 +122,8 @@ class BrainTiers(StubTiers):
         self.level_turn = 0
         self.prev_frac: float | None = None
         self.last_action: str | None = None
+        self.fenced: set = set()               # (level, shop square) already excluded from explore
+        self.worn: dict[str, str] | None = None   # armour kind -> inventory slot (gear.py)
 
     # --- choosing ------------------------------------------------------
 
@@ -126,12 +134,17 @@ class BrainTiers(StubTiers):
             self.approach = False
         if state.caught:
             return "struggle"
-        if not hostiles and not self.level_explored and self.unvisited_shop(state):
-            # see StubTiers: explore would wedge on the shop menu. A berserker can't shop, and Reflex
-            # would wait forever for the menu, so let the rage pass first.
-            return "wait" if any(x.startswith("Berserk") for x in state.statuses) else "shop"
+        shops = {(state.level_seq, s) for s in state.shops()}
+        if shops - self.fenced:
+            self.fenced |= shops
+            # Before explore can walk into one (see crawlrc.txt). The brain has no action that buys,
+            # so unlike StubTiers it never visits a shop: stepping onto a fenced square asks "really?".
+            return "fence_shops"
         frac = state.hp / state.hp_max
+        if self.worn is None:                  # joining a game part-way: found out by trying
+            self.worn = gear.initial_worn(state) if state.turn <= 1 else {}
         obs = observe(state, hostiles, {
+            "worn": self.worn,
             "level_explored": self.level_explored, "level_steps": self.level_steps, "level_turn": self.level_turn,
             "hp_delta": 0.0 if self.prev_frac is None else frac - self.prev_frac, "last_action": self.last_action})
         self.prev_frac = frac
@@ -213,6 +226,28 @@ class BrainTiers(StubTiers):
                 after.messages = result.messages + after.messages
                 return after
             return result
+        if action == "fence_shops":
+            return conn.act(FENCE_KEY)
+        if action in ("wield", "wear"):
+            letter = gear.upgrades(state, self.worn or {})[action]
+            if not letter:
+                return ActResult()
+            piece = gear.kind_of(state, letter)
+            result = self.through_menu(conn, "w" if action == "wield" else "W", letter)
+            if result.blocking:
+                # Something came into view part-way ("Keep equipping yourself?", a yes/no menu that
+                # ignores Esc), or the game wants to be sure. No, either way.
+                after = conn.act("N", through_menu=True)
+                after.messages = result.messages + after.messages
+                result = after
+            if action == "wear" and piece and self.worn is not None:
+                text = " ".join(strip_tags(m.get("text", "")) for batch in result.messages
+                                if batch.get("msg") == "msgs" for m in batch.get("messages", []))
+                if "You finish putting on" in text or "You are now wearing" in text:
+                    self.worn[piece[0]] = piece[1]
+                elif "You finish taking off" in text or "You take off" in text:
+                    self.worn.pop(piece[0], None)   # it was on already, and the key took it off
+            return result
         if action == "wait":
             return conn.act("s")
         if action == "berserk":
@@ -228,7 +263,11 @@ class BrainTiers(StubTiers):
     def through_menu(conn, verb: str, letter: str) -> ActResult:
         """Press `verb`, and `letter` only once its menu is up. A refused verb (reading while silenced)
         opens no menu, and the letter would then be taken as a command of its own."""
+        behind = conn.catch_up()
+        if behind.blocking:
+            return behind                       # a prompt was already waiting: that first
         opened = conn.act(verb)
+        opened.messages = behind.messages + opened.messages
         if opened.blocking != "menu":
             return opened
         result = conn.act(letter, through_menu=True)
@@ -261,7 +300,7 @@ class BrainTiers(StubTiers):
         if self.stalls[self.choice] < 2:
             return
         self.stalls.pop(self.choice)
-        item = self.choice in ("read_unknown", "quaff_unknown", "quaff_heal", "read_teleport")
+        item = self.choice in ("read_unknown", "quaff_unknown", "quaff_heal", "read_teleport", "wield", "wear")
         self.blocked[self.choice] = UNTIL_LEVEL if item else state.turn + BLOCK_TURNS
         if self.choice == "fight":
             # out of reach (behind glass, across water). Explore won't run with it in view, so stop

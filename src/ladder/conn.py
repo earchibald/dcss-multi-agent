@@ -61,6 +61,17 @@ def reply_modes(batch: list[dict]) -> list[int]:
     return modes
 
 
+def menu_left_open(batch: list[dict]) -> bool:
+    """Whether the last menu these messages open is not closed again by them."""
+    opened = False
+    for m in batch:
+        if m.get("msg") in ("menu", "ui-push"):
+            opened = True
+        elif m.get("msg") in ("close_menu", "close_all_menus", "ui-pop"):
+            opened = False
+    return opened
+
+
 def classify_error(exc: Exception) -> str:
     if isinstance(exc, dcss_api.BlockingErr):
         return str(exc).lower() or "pickup"
@@ -104,6 +115,8 @@ class Connection:
         out = []
         while (raw := web.get_message()) is not None:
             msg = json.loads(raw)
+            if msg.get("msg") == "rcfile_contents":
+                continue                        # the server's answer to catch_up()
             out.append(msg)
             if self.record is not None:
                 self.record.write(raw + "\n")
@@ -172,10 +185,25 @@ class Connection:
         return messages + self.sync().messages
 
     def quit_game(self) -> None:
-        try:
-            self.web.quit_game()
-        except (dcss_api.APIErr, dcss_api.BlockingErr):
-            pass
+        """Abandon the character: Ctrl-Q, then the word the game asks for.
+
+        dcss-api's own quit always answers "yes", but DCSS asks an established character to type
+        "quit" instead, and then dcss-api waits forever for a lobby that isn't coming.
+        """
+        asked = self.act("key_ctrl_q")
+        if asked.blocking != "text_input":
+            return
+        prompt = " ".join(m.get("text", "") for batch in asked.messages if batch.get("msg") == "msgs"
+                          for m in batch.get("messages", []))
+        for key in ("quit" if '"quit"' in prompt else "yes"):
+            self.web.write_key(key)
+        self.web.write_key("key_enter")
+        for _ in range(8):                      # the death screens on the way out
+            try:
+                self.web.read_until("go_lobby")
+                break
+            except (dcss_api.APIErr, dcss_api.BlockingErr) as e:
+                self.web.write_key("key_enter" if classify_error(e) == "more" else "key_esc")
         self._drain()
 
     def close(self) -> None:
@@ -204,6 +232,7 @@ class Connection:
         bare sync takes whatever prompt comes.
         """
         result = ActResult()
+        self._note(keys=list(keys))
         for key in keys:
             self.web.write_key(key)
         for _ in range(max_reads):
@@ -213,6 +242,8 @@ class Connection:
             except (dcss_api.APIErr, dcss_api.BlockingErr) as e:
                 reason = classify_error(e)
             batch = self._drain()
+            if reason:
+                self._note(blocked=reason)
             result.messages += batch
             if reason == "more":
                 self.web.write_key("key_enter")
@@ -225,10 +256,38 @@ class Connection:
             if modes and modes[-1] == 1:
                 break
             # `through_menu`: the keys open a menu and answer it (q or r, then the item's letter),
-            # so the menu passing by is not something left waiting
-            if not through_menu and any(m.get("msg") in ("menu", "ui-push") for m in batch):
+            # so a menu passing by is not something left waiting. One still open at the end is:
+            # the answer brought up another ("Keep equipping yourself?" comes as a yes/no menu).
+            if menu_left_open(batch) if through_menu else any(m.get("msg") in ("menu", "ui-push") for m in batch):
                 result.blocking = "menu"
                 break
+        return result
+
+    def _note(self, **what) -> None:
+        """A line of the recording that is ours, not the server's: the keys sent, a read that stopped."""
+        if self.record is not None:
+            self.record.write(json.dumps({"msg": "_ladder", **what}) + "\n")
+
+    def catch_up(self) -> ActResult:
+        """Read everything the game has already sent, so the next key's reply is the next thing read.
+
+        Explore sometimes ends with two "ready for a command" signals: act() returns on the first,
+        and the second is then taken for the reply to the next key. For most keys that only means
+        seeing the result a step late. For a key that opens a menu it means the menu is never seen,
+        and its answer is typed into nothing. dcss-api can't look without waiting, so this asks the
+        server an unrelated question (the rc file) and reads up to the answer.
+        """
+        self._note(catch_up=True)
+        result = ActResult()
+        try:
+            self.web.get_rc_file(GAME_ID)
+        except (dcss_api.APIErr, dcss_api.BlockingErr) as e:
+            reason = classify_error(e)
+            self._note(blocked=reason)
+            if reason == "more":
+                return self.act("key_enter")
+            result.blocking = reason
+        result.messages = self._drain()
         return result
 
     def open_menu(self, *keys: str) -> ActResult:

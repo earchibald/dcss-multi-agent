@@ -45,7 +45,7 @@ def _play(job: dict, cfg: dict, log, beat) -> dict:
     game_id = job.get("id", seed)
     steps = StepLog(log.dir)
     raw = log.dir / f"game{seed}.protocol.jsonl"       # plain while playing, so a killed game's is readable
-    record = raw.open("w")
+    record = raw.open("w", buffering=1)                # line by line: a killed game keeps its last lines
     net = TrainedNet.load(cfg["model"]) if cfg["model"] else None
     tiers = steps.attach(BrainTiers(net, Style(**cfg["style"]), cfg["epsilon"], random.Random(seed * 7919 + 1),
                                     job.get("script"), job.get("horizon", 0)), game_id)

@@ -2,7 +2,7 @@
  "rounds": [
   {
    "round": 0,
-   "candidate": "models/iter0.json",
+   "candidate": "models/v2/iter0.json",
    "selfplay": {
     "games": 226,
     "mean_depth": 4.11,
