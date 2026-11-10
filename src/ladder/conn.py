@@ -193,7 +193,7 @@ class Connection:
 
     # --- play ----------------------------------------------------------
 
-    def act(self, *keys: str, max_reads: int = 40) -> ActResult:
+    def act(self, *keys: str, max_reads: int = 40, through_menu: bool = False) -> ActResult:
         """Send keys, then wait until the game asks for a command again.
 
         Waits on any `input_mode` message rather than only mode 1 (command
@@ -224,7 +224,9 @@ class Connection:
                      else [m.get("mode") for m in batch if m.get("msg") == "input_mode"])
             if modes and modes[-1] == 1:
                 break
-            if any(m.get("msg") in ("menu", "ui-push") for m in batch):
+            # `through_menu`: the keys open a menu and answer it (q or r, then the item's letter),
+            # so the menu passing by is not something left waiting
+            if not through_menu and any(m.get("msg") in ("menu", "ui-push") for m in batch):
                 result.blocking = "menu"
                 break
         return result

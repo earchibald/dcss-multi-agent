@@ -147,13 +147,13 @@ class StubTiers:
 
 class Reflex:
     def __init__(self, conn: Connection, state: GameState, log: RunLog, game_no: int = 1,
-                 hooks: Hooks | None = None):
+                 hooks: Hooks | None = None, tiers: StubTiers | None = None):
         self.conn = conn
         self.state = state
         self.log = log
         self.game_no = game_no
         self.detector = Detector()
-        self.stub = StubTiers()
+        self.stub = tiers or StubTiers()       # or the trained brain (ladder.brain.policy.BrainTiers)
         self.hooks = hooks or Hooks()
         self.steps = 0
         self.decisions = 0
@@ -212,9 +212,12 @@ class Reflex:
         elif action == "approach":
             mode = "travel"
             result = self._approach()
-        else:
+        elif action in KEYS:
             mode = "explore"
             result = self.conn.act(*KEYS[action])
+        else:
+            mode = "travel"
+            result = self.stub.perform(self, action)    # the trained brain's own actions
         result = self._answer_prompts(result)
         interrupts = self.detector.detect(before, self.state, action, result.blocking, mode)
         for i in interrupts:

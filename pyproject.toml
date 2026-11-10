@@ -7,6 +7,7 @@ dependencies = [
     "anthropic>=2.3.0",
     "dcss-api==0.4.1",
     "keyring>=25",
+    "numpy>=2",
     "openai>=3.42.1",
     "websockets>=17.4",
 ]
@@ -16,6 +17,7 @@ ladder = "ladder.cli:main"
 
 [dependency-groups]
 dev = ["pytest>=8"]
+train = ["torch>=2.4"]      # only `ladder brain train` needs it; playing is numpy
 
 [build-system]
 requires = ["hatchling"]

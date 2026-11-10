@@ -1,0 +1,53 @@
+{
+ "rounds": [
+  {
+   "round": 0,
+   "candidate": "models/iter0.json",
+   "selfplay": {
+    "games": 226,
+    "mean_depth": 4.11,
+    "died": 225,
+    "seconds": 849
+   },
+   "corpus_rows": 99624,
+   "val": {
+    "q_loss": 1.1642658710479736,
+    "danger_bce": 0.6183133125305176,
+    "prior_ce": -0.0,
+    "danger_auc": 0.6839396583090213,
+    "danger_rate": 0.19542783498764038,
+    "prior_top1": NaN,
+    "r2": {
+     "died_soon": -0.172,
+     "hp_lost": -0.216,
+     "xp_soon": -0.055,
+     "depth_go": -0.165,
+     "xp_go": 0.081,
+     "died_go": -0.111
+    }
+   },
+   "champion": {
+    "mean_depth": 4.36,
+    "median_depth": 4.0,
+    "max_depth": 10,
+    "mean_xl": 4.66,
+    "died": 55
+   },
+   "challenger": {
+    "mean_depth": 3.78,
+    "median_depth": 4.0,
+    "max_depth": 10,
+    "mean_xl": 2.66,
+    "died": 57
+   },
+   "versus": {
+    "seeds": 56,
+    "deeper": 16,
+    "same": 16,
+    "shallower": 24
+   },
+   "promoted": false,
+   "at": "2026-11-09 18:20"
+  }
+ ]
+}

@@ -24,3 +24,7 @@ runrest_stop_message += LOW HITPOINT WARNING
 runrest_stop_message += You feel a little less (mighty|clever|agile)
 runrest_stop_message += trap
 hp_warning = 25
+
+# Autofight (Tab) refuses below 50% HP by default ("You are too injured to fight recklessly!").
+# Whether to fight on is the ladder's decision, not the key's.
+autofight_stop = 0

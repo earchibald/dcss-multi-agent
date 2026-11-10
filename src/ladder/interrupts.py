@@ -20,7 +20,9 @@ from .state import MF_UNEXPLORED, NOT_WALKABLE, THREAT_NAMES, GameState
 # Actions that run as DCSS "delays" (multi-turn, natively interruptible)
 DELAY_ACTIONS = {"explore", "travel", "rest"}
 # Actions expected to spend game time
-TIMED_ACTIONS = DELAY_ACTIONS | {"fight", "approach", "struggle", "descend"}
+TIMED_ACTIONS = DELAY_ACTIONS | {"fight", "approach", "struggle", "descend",
+                                 # the trained brain's own actions (ladder.brain)
+                                 "flee_up", "quaff_heal", "quaff_unknown", "read_unknown", "read_teleport", "wait"}
 
 RE_EXPLORED = re.compile(r"Done exploring|Partly explored", re.I)
 RE_HOSTILE_STOP = re.compile(r"is nearby|are nearby|comes? into view|There are monsters nearby", re.I)

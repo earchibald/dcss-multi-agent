@@ -88,7 +88,9 @@ class GameState:
     def apply(self, msg: dict) -> None:
         kind = msg.get("msg")
         if kind == "player":
-            self.player.update({k: v for k, v in msg.items() if k != "msg"})
+            self.player.update({k: v for k, v in msg.items() if k not in ("msg", "inv")})
+            if "inv" in msg:
+                self._apply_inv(msg["inv"])
         elif kind == "map":
             self._apply_map(msg)
         elif kind == "msgs":
@@ -101,6 +103,14 @@ class GameState:
             self.in_game = True
         elif kind == "go_lobby":
             self.in_game = False
+
+    def _apply_inv(self, changes: dict) -> None:
+        inv = self.player.setdefault("inv", {})
+        for slot, item in changes.items():
+            cur = inv.setdefault(slot, {})
+            cur.update(item)
+            if cur.get("base_type") == 100 or cur.get("quantity") == 0:
+                del inv[slot]
 
     def _apply_map(self, msg: dict) -> None:
         if msg.get("clear"):

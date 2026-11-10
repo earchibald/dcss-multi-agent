@@ -75,6 +75,10 @@ def add_game_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--weapon", default="b", help="weapon menu key")
     p.add_argument("--out", default="runs")
     p.add_argument("--record", action="store_true", help="also save raw protocol messages per game")
+    p.add_argument("--brain", nargs="?", const="champion", metavar="MODEL",
+                   help="let the trained brain choose Reflex's actions: a model file, 'baseline' for its rules "
+                        "of thumb, or nothing for models/brain.json (the rules of thumb until a model has been "
+                        "promoted). Its steps are logged for training.")
 
 
 def main() -> None:
@@ -100,6 +104,8 @@ def main() -> None:
     p.add_argument("--listen", choices=("auto", "always", "never"), default="auto",
                    help="subscribe to the cockpit's events: auto = only when the Claude Code session above was "
                         "started with --dangerously-load-development-channels server:cockpit")
+    from .brain import cli as brain_cli
+    brain_cli.add_parser(sub)
     p = sub.add_parser("jev-eval", help="ask Jev about every logged interrupt and route it")
     p.add_argument("run_dir")
     p.add_argument("--limit", type=int, default=None, help="at most this many Jev calls")
@@ -113,7 +119,8 @@ def main() -> None:
         parser.error("--idle-minutes is 0 (never) or a positive number of minutes")
     if not 0 <= getattr(args, "delay", 0) <= 60:
         parser.error("--delay is 0 (full speed) to 60 seconds")
-    {"spike": spike, "cockpit": cockpit, "channel": channel, "jev-eval": jev_eval, "retune": retune}[args.cmd](args)
+    {"spike": spike, "cockpit": cockpit, "channel": channel, "jev-eval": jev_eval, "retune": retune,
+     "brain": brain_cli.main}[args.cmd](args)
 
 
 if __name__ == "__main__":

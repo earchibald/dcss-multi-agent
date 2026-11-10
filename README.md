@@ -182,6 +182,23 @@ means a session that will get your notes. Notes are refused when nobody is liste
 enough. `ladder channel --listen always|never` overrides the check; point it at another port with
 `--cockpit http://127.0.0.1:<port>`, both in `.mcp.json`.
 
+## Trained brain (local model)
+
+A small network trained on this machine from the ladder's own games chooses Reflex's actions, with no
+API calls. It learns from every step log under `runs/`: its own self-play, games it plays in the
+cockpit, and your recorded games. How it works, what it measures and what's next:
+[docs/trained-brain.md](docs/trained-brain.md).
+
+```bash
+uv sync --group train                         # torch, for training only
+uv run ladder brain iterate --rounds 3        # self-play, retrain, evaluate, promote; repeat
+uv run ladder brain eval baseline models/brain.json --games 60
+uv run ladder spike --brain --games 3         # the champion plays as ladderbot (also: ladder cockpit --brain)
+```
+
+Self-play runs on its own accounts (`ladderbrain1`…), several games at once, and never touches
+`ladderbot`'s save.
+
 ## Jev routing (offline)
 
 `profiles.toml` maps tiers to model profiles; each profile names a Keychain item, never a key.
@@ -251,6 +268,7 @@ Integration tests use their own account (`laddertest`) and dcss-api's scenario b
 | `src/ladder/jev.py`, `routing.py`, `jeveval.py` | Jev questions, the routing rules, and the offline evaluator |
 | `src/ladder/llm.py`, `profiles.py` | Anthropic and OpenAI-compatible adapters; profiles with capability flags |
 | `src/ladder/authority.py` | Assisted vs autonomous decisions and the idle switch |
+| `src/ladder/brain/`, `models/` | The trained brain: features, numpy network, policy, self-play, corpus, training, the iterate loop |
 
 ## Notes from building it
 
