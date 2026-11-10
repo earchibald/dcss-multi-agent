@@ -48,6 +48,63 @@
    },
    "promoted": false,
    "at": "2026-11-09 18:20"
+  },
+  {
+   "round": 1,
+   "candidate": "models/iter1.json",
+   "selfplay": {
+    "games": 237,
+    "mean_depth": 4.85,
+    "died": 231,
+    "seconds": 683
+   },
+   "corpus_rows": 354833,
+   "val": {
+    "q_loss": 0.7851917147636414,
+    "danger_bce": 0.37618935108184814,
+    "prior_ce": -0.0,
+    "forks": {
+     "moments": 126,
+     "regret": 1.6205,
+     "random": 1.8034,
+     "recorded": 1.9113,
+     "top1": 0.349
+    },
+    "danger_auc": 0.7824732921066074,
+    "danger_rate": 0.17265109717845917,
+    "prior_top1": NaN,
+    "r2": {
+     "died_soon": 0.284,
+     "hp_lost": 0.238,
+     "xp_soon": 0.238,
+     "depth_go": 0.148,
+     "xp_go": 0.362,
+     "died_go": 0.237
+    }
+   },
+   "champion": {
+    "mean_depth": 5.55,
+    "median_depth": 6.0,
+    "max_depth": 12,
+    "mean_xl": 5.67,
+    "died": 58
+   },
+   "challenger": {
+    "mean_depth": 4,
+    "median_depth": 4.0,
+    "max_depth": 10,
+    "mean_xl": 3.8,
+    "died": 57
+   },
+   "versus": {
+    "seeds": 60,
+    "deeper": 9,
+    "same": 15,
+    "shallower": 36
+   },
+   "promoted": false,
+   "at": "2026-11-09 20:51",
+   "note": "models/iter1.json was retrained afterwards on the same corpus with the depth_end component and the default style depth_end - died_soon: 5.48 vs 5.48 mean depth (22 deeper / 13 same / 25 shallower). Level, not promoted."
   }
  ]
 }

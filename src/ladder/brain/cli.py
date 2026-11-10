@@ -209,7 +209,8 @@ def add_parser(sub) -> None:
     q.add_argument("--name")
     q.add_argument("--points", type=int, default=200, help="moments to fork")
     q.add_argument("--alternatives", type=int, default=3, help="other actions tried at each")
-    q.add_argument("--horizon", type=int, default=1500, help="game turns played after the fork; 0 = to the end")
+    q.add_argument("--horizon", type=int, default=0,
+                   help="game turns played after the fork; 0 = to the end, which the depth_end label needs")
     q.add_argument("--model", help="plays on after the fork; without one the rules of thumb do")
     q.add_argument("--seed", type=int, default=0, help="which moments are picked")
     q.set_defaults(fn=cmd_forks)

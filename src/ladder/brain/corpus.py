@@ -11,6 +11,9 @@ game, as six numbers (features.COMPONENTS):
                 exp(-turns / TAU_GO) from the step to the turn the depth was settled
     xp_go       experience gained later on, discounted the same way
     died_go     exp(-turns until death / TAU_DEATH), 0 if the game didn't end in death
+    depth_end   how many depths deeper than now this game ever got, undiscounted: the number the
+                evaluation counts. The discounted ones all prefer sooner to later, which is a preference
+                for the stairs over exploring first; this one has none.
 
 DCSS can't be forked the way s1-battle's simulator can, so a row only knows the outcome of the action
 that was taken. Random exploration during self-play (--epsilon) is what lets the network compare actions.
@@ -28,7 +31,7 @@ from pathlib import Path
 
 import numpy as np
 
-from .features import ACTIONS, MAX_MONS, MON_DIM, SELF_DIM, encode, progress_depth
+from .features import ACTIONS, MAX_MONS, MON_DIM, N_COMPONENTS, SELF_DIM, encode, progress_depth
 from .net import contract
 from .policy import REPLAY_DIVERGED
 
@@ -110,7 +113,9 @@ def label(game: dict) -> np.ndarray:
     best = settled_depth(turn, np.array([p[3] for p in pts], dtype=np.float64))
     if died:
         hp[-1] = 0.0
-    out = np.zeros((n, 6), dtype=np.float32)
+    out = np.zeros((n, N_COMPONENTS), dtype=np.float32)
+    reached = np.maximum.accumulate(np.array([p[3] for p in pts], dtype=np.float64))
+    out[:, 6] = reached[-1] - reached[:n]
     # discounted sums, from the back: G_i = d_i * (r_{i+1} + G_{i+1})
     g_depth = g_xp = 0.0
     for i in range(len(pts) - 2, -1, -1):
@@ -171,7 +176,7 @@ def build(roots: list[str | Path], out: str | Path) -> dict:
         "avail": np.asarray(cols["avail"], dtype=np.float32).reshape(n, len(ACTIONS)),
         "action": np.asarray(cols["action"], dtype=np.int64),
         "base": np.asarray(cols["base"], dtype=np.int64),
-        "q": np.asarray(cols["q"], dtype=np.float32).reshape(n, 6),
+        "q": np.asarray(cols["q"], dtype=np.float32).reshape(n, N_COMPONENTS),
         "human": np.asarray(cols["human"], dtype=np.float32),
         "fork": np.asarray(cols["fork"], dtype=np.float32),
         "group": np.asarray(cols["group"], dtype=np.int64),

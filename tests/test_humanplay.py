@@ -6,6 +6,7 @@ import os
 from helpers import map_message
 
 from ladder.brain import corpus
+from ladder.brain.features import N_COMPONENTS
 from ladder.brain.humanplay import convert, convert_all, key_tokens, step_of
 from ladder.state import MF_MONS_HOSTILE
 
@@ -184,7 +185,7 @@ def test_corpus_reads_and_labels_a_death(tmp_path):
     [g] = corpus.read_games([tmp_path / "out"])
     assert len(g["steps"]) == 2 and g["end"]["died"]
     q = corpus.label(g)
-    assert q.shape == (2, 6) and (q[:, 0] == 1.0).all()             # died soon
+    assert q.shape == (2, N_COMPONENTS) and (q[:, 0] == 1.0).all()             # died soon
     meta = corpus.build([tmp_path / "out"], tmp_path / "corpus.npz")
     assert meta["by_source"] == {"human": 2} and meta["deaths"] == 1
 

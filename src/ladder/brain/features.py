@@ -19,7 +19,7 @@ from ..state import MF_STAIR_DOWN, MF_STAIR_UP, MF_TRAP, NOT_WALKABLE, GameState
 from ..travel import DIRECTIONS
 from . import gear
 
-FEATURE_VERSION = 3
+FEATURE_VERSION = 4
 
 # What the brain can ask Reflex to do. Order is the model's output order.
 ACTIONS = ["explore", "fight", "rest", "descend", "flee_up", "quaff_heal", "quaff_unknown",
@@ -27,7 +27,7 @@ ACTIONS = ["explore", "fight", "rest", "descend", "flee_up", "quaff_heal", "quaf
 N_ACTIONS = len(ACTIONS)
 
 # What the network predicts for each action (corpus.py computes them from what happened next).
-COMPONENTS = ["died_soon", "hp_lost", "xp_soon", "depth_go", "xp_go", "died_go"]
+COMPONENTS = ["died_soon", "hp_lost", "xp_soon", "depth_go", "xp_go", "died_go", "depth_end"]
 N_COMPONENTS = len(COMPONENTS)
 
 MAX_MONS = 8

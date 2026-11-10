@@ -8,40 +8,42 @@ runs in numpy in well under a millisecond. It is the same idea as the trained br
 ## Where it stands
 
 Measured 2026-11-09 on this Mac, Minotaur Berserker, 60 fixed evaluation dungeons (seeds 500000–500059)
-that training never sees. "Depth" is the deepest floor reached. A dungeon replays identically for the same
-choices, so the last column compares model and baseline on the same dungeons.
+that training never sees. "Depth" is the deepest floor reached. The last column compares model and
+baseline dungeon by dungeon.
 
 | | games | mean depth | median | best | mean XL | game turns | vs baseline: deeper / same / shallower |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| **Rules of thumb** (`baseline`, no model) | 56 | **4.36** | 4 | 10 | 4.66 | 1664 | |
-| `iter0`: first model, 326 games, trained to epoch 40 | 58 | 3.78 | 4 | 10 | 2.66 | 634 | 16 / 16 / 24 |
-| `iter0b`: same data, early stopping and dropout | 55 | 3.75 | 4 | 7 | 4.25 | 1983 | 18 / 10 / 24 |
-| `iter0b`, `margin=0.3` | 53 | 4.30 | 5 | 9 | 4.89 | 1986 | 19 / 17 / 14 |
-| `iter1`: + 455 replay forks | 59 | 4.27 | 4 | 8 | 3.46 | 788 | 18 / 19 / 19 |
-| `iter1`, `margin=0.3` | 59 | 4.05 | 4 | 8 | 4.03 | 946 | 17 / 19 / 19 |
+| Rules of thumb, first version (no equipment) | 56 | 4.36 | 4 | 10 | 4.66 | 1664 | |
+| **Rules of thumb now** (`baseline`: wields and wears what it finds) | 60 | **5.55** | 6 | 12 | 5.67 | 1960 | |
+| `iter1`, discounted reward (how round 1 first came out) | 60 | 4.00 | 4 | 10 | 3.80 | 943 | 9 / 15 / 36 |
+| `iter1`, retrained to predict depth gained by the end of the game | 60 | 5.48 | 6 | 15 | 5.15 | 1140 | 22 / 13 / 25 |
+| the same, `margin=0.6` | 60 | 5.25 | 5 | 12 | 5.32 | 1725 | 16 / 24 / 20 |
+| the same, `margin=1.0 died_soon=-3` | 60 | 5.28 | 5 | 12 | 5.48 | 1964 | 8 / 39 / 13 |
 
-**No model beats the rules of thumb yet, so none has been promoted**: `models/brain.json` does not exist
-and `--brain` plays the rules of thumb. One standard error on a mean depth here is about 0.25, so
-`iter1` and `iter0b margin=0.3` are level with the baseline and `iter0` is behind it. What the numbers say:
+**The gain so far has come from what the bot can do, not from the model.** Equipment took the rules of
+thumb from 4.36 to 5.55, and fixing the hangs means all 60 games now finish (4 to 8 used to be lost).
+**No model beats the rules of thumb yet, so none is promoted**: `models/brain.json` does not exist and
+`--brain` plays the rules of thumb. One standard error on a mean depth is about 0.3, and replaying the
+baseline three times gave 5.55, 5.48 and 5.42, so the last three rows are level with it.
 
-- `iter0` overrode two thirds of the baseline's choices, mostly "fight" with "descend", "wait" or
-  "flee_up". It had only seen what diving leads to when the *baseline* plays on afterwards, never the
-  under-levelled character its own diving makes. It also memorised its training games: validation loss
-  rose from epoch 5 on. Early stopping fixed the second part (R² on unseen games went from negative to
-  0.17–0.32 per outcome; danger AUC 0.75).
-- `iter1` reaches the same depth as the baseline in half the game turns, two experience levels lower.
-  It has learned that descending is how depth is gained, not how to stay alive at depth 5. On held-out
-  forked moments its top-rated action loses 1.67 value units against the best action tried there, a
-  random one 1.92, and what the game actually did 2.21 (59 moments, so indicative only).
-- The ceiling for both is the same: this character, with these eleven actions and no equipment changes,
-  dies around D:4–5. That points at the action list as much as at the model (see Next).
+What the model rows say:
 
-The rules of thumb are themselves new in this branch, and a large step from the stub they replace: the
-stub's games ended in an escalation on D:1–4 and never died or went on; the baseline plays every game
-to its end, reaching D:8–15 in its best games (15 in one of the 240 exploratory games).
+- With time-discounted rewards the model dives, however the reward is shaped. Paying for a depth only
+  after 200 turns survived there did not help (4.00): a discount prefers the same depth sooner, and that
+  alone is a preference for the stairs over exploring first.
+- Predicting **depth gained by the end of the game, undiscounted** (`depth_end`, the number the
+  evaluation counts) brought the same network on the same data level with the baseline. On held-out
+  forked moments it picks the best action tried 63% of the time (35% before; 126 moments).
+- It still replaces "explore" and "wear" with "descend" more than half the time, and reaches the same
+  depth in 40% fewer turns at a lower level. That trade is neutral here; it would be wrong for a character
+  meant to survive past D:12. Holding it closer to the baseline (the last two rows) removes the trade
+  without finding anything better.
 
-Throughput: about 3 s per game with 6 parallel games (240 games in 14 minutes), about 2 s per fork with 10.
-Training takes 12 s. A model is 103 KB (37k weights, float16) and matches torch to 5 decimal places.
+The first three candidates (before equipment, 3.75 to 4.30 against the old 4.36) are in `models/v2/`.
+
+Throughput: about 28 s per game, 6 at once (240 games in 11 minutes); a fork costs about 18 s of one
+worker, since it replays the game to the fork and then plays on. Training takes under a minute. A model
+is 108 KB (39k weights, float16) and matches torch to 5 decimal places.
 
 ## What carried over from s1-battle, and what couldn't
 
@@ -52,7 +54,7 @@ Training takes 12 s. A model is 103 KB (37k weights, float16) and matches torch 
 | A *style* weighs the outcomes at decision time, so behaviour changes without retraining | `policy.Style`, set with `--style key=value` |
 | float16 weights in a JSON file, forward pass re-implemented without the training framework, parity-checked | `models/*.json` (~100 KB), numpy forward pass in `net.py`, `check_parity` on every training run |
 | Expert iteration: the current model plays, the next one learns from those games too | `ladder brain iterate` |
-| Labels from **counterfactual rollouts**: fork the simulator once per option and play each out | DCSS can't be cloned mid-game, but a seeded game **replays identically**, so `forks.py` replays a recorded game to a choice and takes another action there. A fork costs a replay of everything before it (about 2 s), where s1's cost microseconds |
+| Labels from **counterfactual rollouts**: fork the simulator once per option and play each out | DCSS can't be cloned mid-game, but a seeded game **replays identically**, so `forks.py` replays a recorded game to a choice and takes another action there. About 1 replay in 15 drifts from the recording (the fork is then detected and dropped). A fork costs a replay of everything before it, seconds where s1 paid microseconds |
 
 That last row is the big difference. Most rows here only know what happened after the action that was
 actually taken, in that one game; forks are the few places where several actions' outcomes are known
@@ -86,6 +88,13 @@ at every step it picks one of these, from those possible right now (`policy.avai
 | `read_teleport` | read a known scroll of teleportation |
 | `wait` | pass one turn (`s`) |
 | `berserk` | Trog's Berserk (`a`, `a`) |
+| `wield` | wield the best mace or flail in the pack, if it beats the one in hand (`w`, letter) |
+| `wear` | put on the piece of armour that improves the character most (`W`, letter) |
+
+The brain decides *when* to change equipment (never with something hostile in view); `gear.py` decides
+*what*, by a fixed ranking: base damage and speed for the mace family, armour class for body armour, any
+piece for an empty cloak, glove, boot, head or shield slot. The rc's autopickup function collects one of
+each kind it ranks. Artefacts and other weapon types are left alone.
 
 Decision cards (stairs, altars, uniques, the stat prompt) still go through `Hooks.decide` and Authority
 as before. Where the stub raised an escalation (HP at half with monsters in view, an action that makes
@@ -93,7 +102,7 @@ no progress) the brain picks another action instead, so a game runs until the ch
 
 The **rules of thumb** (`policy.baseline`) are what plays when there is no model, and what the model is
 measured against: berserk when hurt or facing something tough, drink a healing potion at half HP, fight,
-rest below 80%, read and drink unknowns when safe, explore, then go down.
+change to better equipment, rest below 80%, read and drink unknowns when safe, explore, then go down.
 
 ## What it sees
 
@@ -105,31 +114,39 @@ turns it into numbers:
 - **About the place**: on stairs or not, walking distance to known up and down stairs, open neighbours
   (corridor or open floor), level explored, choices and turns spent on this level.
 - **About the fight**: how many hostiles, how many adjacent, nearest, worst and total threat, a unique.
-- **Recent history**: HP change since the last choice, the last action, which actions are possible.
+- **Recent history**: HP change since the last choice, the last action, which actions are possible
+  (so "a better weapon is in the pack" is seen as "`wield` is possible").
 - **Per monster** (a set): distance, direction, adjacent, unique, webtiles' threat level (0–3), and its name
   hashed into 24 buckets.
 
-It does not see the map, monster HP, equipment, skills or spells. Those are the obvious next features.
+It does not see the map, monster HP, what is wielded or worn (only the AC it adds up to), skills or spells. Those are the obvious next features.
 
 ## What it predicts
 
-For each action, six numbers about what follows (`corpus.label` computes them from the rest of the game):
+For each action, seven numbers about what follows (`corpus.label` computes them from the rest of the game):
 
 | component | meaning |
 | --- | --- |
 | `died_soon` | died within 30 game turns |
 | `hp_lost` | deepest HP drop within 30 turns, as a fraction of max HP |
 | `xp_soon` | experience levels gained within 100 turns |
-| `depth_go` | new depths reached later, each discounted by exp(−turns / 1500) |
+| `depth_go` | new depths reached later **and survived for 200 turns**, each discounted by exp(−turns / 1500) |
 | `xp_go` | experience gained later, discounted the same way |
 | `died_go` | exp(−turns until death / 400); 0 if the game didn't end in death |
+| `depth_end` | how many depths deeper than now the game ever got, undiscounted |
+
+A depth used to count on arrival, and the first models learned that the stairs pay whoever dies at the
+bottom of them. Now a descent the character doesn't outlive by 200 turns earns nothing.
 
 plus `danger` (the chance of losing a quarter of max HP within 30 turns) and a `prior` (which action the
 recorded player took here). The default style is
 
-    value = depth_go + 0.5·xp_go + 0.5·xp_soon − 2·died_go − 2·died_soon − 0.5·hp_lost
+    value = depth_end − died_soon
 
-`--style died_go=-4 margin=0.1` and so on change it for a run. `human=1` adds the prior's log-probability,
+and an action replaces the rules of thumb's choice only when its value is 0.25 better. The other
+components are predicted so they can be tried without retraining.
+
+`--style depth_go=1 died_go=-2 margin=0.1` and so on change it for a run. `human=1` adds the prior's log-probability,
 which only means something once the corpus has a good number of a person's games in it.
 
 ## The corpus: every session adds to it
@@ -200,6 +217,7 @@ so no game is lost; a new field is simply missing from old observations) and tra
 | --- | --- |
 | `src/ladder/brain/features.py` | actions, components, `observe` (state to dict) and `encode` (dict to numbers) |
 | `src/ladder/brain/net.py` | model file format, numpy forward pass, parity check |
+| `src/ladder/brain/gear.py` | ranks weapons and armour, and says which piece in the pack is better than the one in use |
 | `src/ladder/brain/policy.py` | `available`, `baseline`, `Style`, and `BrainTiers`, which sits in Reflex where `StubTiers` did |
 | `src/ladder/brain/steplog.py` | `steps.jsonl` writer shared by self-play, `spike` and the cockpit |
 | `src/ladder/brain/selfplay.py` | parallel games, one process each, with a watchdog for hung reads |
@@ -209,7 +227,8 @@ so no game is lost; a new field is simply missing from old observations) and tra
 | `src/ladder/brain/train.py` | PyTorch training and export |
 | `src/ladder/brain/cli.py` | `ladder brain ...`, including the iterate loop |
 | `models/brain.json`, `models/brain.ledger.json` | the champion (none yet) and the record of every `iterate` round |
-| `models/iter0.json`, `iter0b.json`, `iter1.json` | the candidates in the table above, each with its parity vectors |
+| `models/iter<n>.json` | each round's candidate, with its parity vectors |
+| `models/v2/` | the first three candidates, from before the equipment actions; today's code refuses to load them |
 
 ## What it found on the way
 
@@ -235,28 +254,54 @@ this branch:
   leaves a slot out if its account won't open. (To get those two back: delete their rows from
   `/data/webserver/passwd.db3` in the container, or `docker compose down -v`.)
 
-Still open: about 3% of games hang on prompts no one answers yet (the acquirement menu, a yes/no after
-some scrolls). The watchdog drops them after 60 quiet seconds.
+Found once equipment made games longer (the second commit):
+
+- **The cause of most "hung" games.** Explore sometimes ends with two "ready for a command" signals.
+  `act()` returned on the first, and the second was then read as the reply to the *next* key. Usually that
+  only meant seeing a result one step late. When the next key opened a menu (`q`, `r`, `a`, `W`), the menu
+  arrived unseen, the item's letter was never sent, and the read (dcss-api has none with a timeout) never
+  came back. `Connection.catch_up()` now reads everything already sent before a menu key, by asking the
+  server an unrelated question and reading up to its answer.
+- Explore walks into a shop it has found and opens it; nothing could read that menu either. The brain now
+  presses a macro key (`ladder_fence_shops` in the rc) that excludes shops in view from travel, and never
+  visits them, since it has no action that buys.
+- "Keep equipping yourself?" (a monster appeared part-way through putting armour on) is a yes/no menu
+  that ignores Esc.
+- dcss-api's `quit_game` answers "yes", but DCSS asks an established character to type "quit". A game that
+  ended without a death could never be cleared from its account, and every later game given to that
+  account hung at the start. One account had been stuck that way since the first round.
+  `Connection.quit_game()` now reads the prompt.
+- Corrosion shows as a minus on the weapon in hand only, so the spare looked better, was wielded, and
+  then showed the minus itself: a swap every turn.
+- A killed game's recording was missing its last lines (file buffering), which hid all of the above. The
+  recording is now written line by line, and includes the keys sent (`{"msg": "_ladder", ...}` lines).
+
+With these, 108 games in a row at the rules of thumb finished with none lost. With 20% random choices
+about 1 in 80 still hangs; those have not been looked at. Two rarer dead ends remain, both ending the game
+early rather than hanging it: a level whose stairs can't be reached, and "You can't go down here!" on a
+staircase.
 
 ## Next
 
 In the order I would take them:
 
-1. **Give it more to do.** The baseline and every model die at D:4–5 with the starting mace and animal
-   skin. Wielding and wearing what it finds is the biggest gap from a person's play; then Trog's Hand and
-   Brothers in Arms, throwing, wands, and stepping back into a corridor. Each is an action in
-   `features.ACTIONS`, a line in `available`, and keys in `perform`.
-2. **Reward living, not diving.** `depth_go` pays for a descent whoever survives it. Counting a new depth
-   only once the character has lasted some turns there, or putting more weight on `died_go`, would stop the
-   shortcut `iter1` found. The style can be searched against the evaluation dungeons without retraining.
-3. **Many more forks, on the model's own games.** 455 forks moved the model from behind to level. s1's
-   brain learned from 300,000 forked moments; an overnight run here is about 15,000. Forks of the
-   *champion's* games, continued by the champion, are what make this expert iteration.
-4. **More to see.** A local map patch, monster HP, what's wielded and worn, skills.
-5. **Answer the prompts.** Identify and acquirement scrolls are wasted today, and are 3% of games lost.
-6. **Answer the decision cards.** Stairs, uniques and altars are the same kind of choice; the brain could
+1. **Forks played to the end, on the model's own games, in volume.** This is the part of s1's method
+   still missing at scale: s1 learned from 300,000 forked moments, this from 982, and most of those were
+   cut off 1,500 turns after the fork, which the new `depth_end` label can't use properly. Forks now play
+   to the end by default. An overnight run (`iterate --rounds 8 --fork-points 400`) is about 6,000.
+2. **More to do in a fight.** Deaths are still mostly at D:5–8 to packs and uniques. Trog's Hand and
+   Brothers in Arms, throwing what it picks up, stepping back into a corridor, and going upstairs earlier
+   are each an action in `features.ACTIONS`, a line in `available`, and keys in `perform`.
+3. **More to see.** A local map patch, monster HP, what is wielded and worn, skills. The model can't
+   tell a character who is ready for the next floor from one who isn't, except by level and AC.
+4. **Promote on more than 60 dungeons.** Differences under 0.3 depths can't be seen with 60; the same
+   baseline replayed varies by 0.1. 200 evaluation dungeons would take about 15 minutes per model.
+5. **The remaining dead ends**: games with random choices that hang (1 in 80), unreachable stairs,
+   "You can't go down here!".
+6. **Answer the prompts.** Identify and acquirement scrolls are cancelled and wasted today.
+7. **Answer the decision cards.** Stairs, uniques and altars are the same kind of choice; the brain could
    be the recommendation Authority shows, and the player's answers would be labels.
-7. **Learn from more people.** Your recordings are in the loop but few (11 rows from the first four
+8. **Learn from more people.** Your recordings are in the loop but few (11 rows from the first four
    files). Other servers' games are public as ttyrecs and spectator streams, which have states but not keys.
-8. **Other characters.** Everything so far is a Minotaur Berserker. Species and background would need to be
-   inputs, and the action list would need spells.
+9. **Other characters.** Everything so far is a Minotaur Berserker. Species and background would need to be
+   inputs, and the action list would need spells; `gear.py` ranks only maces and flails.

@@ -21,7 +21,7 @@ from .corpus import read_games
 LATE_WINDOW = 40          # choices before the end of a game that count as "late"
 
 
-def plan(roots: list, points: int, *, alternatives: int = 3, horizon: int = 1500, late_share: float = 0.7,
+def plan(roots: list, points: int, *, alternatives: int = 3, horizon: int = 0, late_share: float = 0.7,
          seed: int = 0) -> list[dict]:
     """Jobs for selfplay.run: up to `points` moments, each forked once per alternative action."""
     rng = random.Random(seed)

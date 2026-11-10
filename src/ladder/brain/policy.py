@@ -37,15 +37,21 @@ UNTIL_LEVEL = 10 ** 9     # ...or until the next level, for scrolls and potions 
 
 @dataclass
 class Style:
-    """How the predicted outcomes are weighed. value = sum(weight x component) + prior nudge."""
-    died_soon: float = -2.0
-    hp_lost: float = -0.5
-    xp_soon: float = 0.5
-    depth_go: float = 1.0
-    xp_go: float = 0.5
-    died_go: float = -2.0
+    """How the predicted outcomes are weighed. value = sum(weight x component) + prior nudge.
+
+    The default counts what the evaluation counts: depths gained by the end of the game, less a
+    penalty for dying in the next few turns. The discounted components are there to be tried
+    (`--style depth_go=1`), but on their own they taught every early model to dive.
+    """
+    died_soon: float = -1.0
+    hp_lost: float = 0.0
+    xp_soon: float = 0.0
+    depth_go: float = 0.0
+    xp_go: float = 0.0
+    died_go: float = 0.0
+    depth_end: float = 1.0
     human: float = 0.0        # weight of log P(the recorded player would do this)
-    margin: float = 0.05      # leave the rules of thumb only for an action predicted this much better
+    margin: float = 0.25      # leave the rules of thumb only for an action predicted this much better
     min_count: float = 40     # ...and only for actions the model saw at least this often in training
 
     def weights(self) -> np.ndarray:

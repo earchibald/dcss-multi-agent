@@ -329,7 +329,7 @@ def test_without_a_net_the_baseline_is_played():
 
 
 def test_net_pick_beats_baseline_by_more_than_margin():
-    tiers = BrainTiers(FakeNet(q_for("descend", value=1.0)), rng=random.Random(0))
+    tiers = BrainTiers(FakeNet(q_for("descend", "depth_end", 1.0)), rng=random.Random(0))
     assert tiers.next_action(stairs_state()) == "travel"       # descend, off the stairs, is a "travel" step
     last = tiers.last
     assert last["action"] == "descend" and last["baseline"] == "explore" and last["source"] == "net"
@@ -341,17 +341,17 @@ def test_net_pick_beats_baseline_by_more_than_margin():
 
 
 def test_baseline_kept_within_margin():
-    tiers = BrainTiers(FakeNet(q_for("descend", value=0.04)), Style(margin=0.05), rng=random.Random(0))
+    tiers = BrainTiers(FakeNet(q_for("descend", "depth_end", 0.04)), Style(margin=0.05), rng=random.Random(0))
     assert tiers.next_action(stairs_state()) == "explore"
     assert tiers.last["source"] == "net" and tiers.last["action"] == "explore"
 
 
 def test_actions_with_too_few_training_examples_are_ignored():
     counts = {a: 1000 for a in ACTIONS} | {"descend": 3}
-    tiers = BrainTiers(FakeNet(q_for("descend", value=5.0), counts=counts), Style(min_count=40), rng=random.Random(0))
+    tiers = BrainTiers(FakeNet(q_for("descend", "depth_end", 5.0), counts=counts), Style(min_count=40), rng=random.Random(0))
     assert tiers.next_action(stairs_state()) == "explore"
     counts["descend"] = 40
-    tiers = BrainTiers(FakeNet(q_for("descend", value=5.0), counts=counts), Style(min_count=40), rng=random.Random(0))
+    tiers = BrainTiers(FakeNet(q_for("descend", "depth_end", 5.0), counts=counts), Style(min_count=40), rng=random.Random(0))
     assert tiers.next_action(stairs_state()) == "travel"
 
 
@@ -458,7 +458,7 @@ def test_no_progress_on_a_non_brain_action_still_raises():
 
 def test_describe():
     d = BrainTiers(FakeNet(), epsilon=0.2).describe()
-    assert d["model"] == "fake" and d["epsilon"] == 0.2 and d["style"]["margin"] == 0.05
+    assert d["model"] == "fake" and d["epsilon"] == 0.2 and d["style"]["margin"] == 0.25
     assert BrainTiers().describe()["model"] is None
 
 
@@ -587,6 +587,28 @@ def test_label_depth_go_is_discounted_by_time():
     out = corpus.label(game)
     assert out[0, COMPONENTS.index("depth_go")] == pytest.approx(math.exp(-400 / corpus.TAU_GO))
     assert out[2, COMPONENTS.index("depth_go")] == 0                     # nothing known after the last step
+
+
+def test_label_depth_end_is_depths_gained_by_the_end_undiscounted():
+    game = {"id": "g", "steps": [step(point(0, 20, depth=1)), step(point(100, 20, depth=2)),
+                                 step(point(5000, 20, depth=2)), step(point(9000, 20, depth=4))],
+            "end": {"type": "end", "died": False, "turn": 9500, "hp": 20, "hp_max": 20, "xl": 1, "progress": 0,
+                    "place": "Dungeon", "depth": 5}}
+    out = corpus.label(game)[:, COMPONENTS.index("depth_end")]
+    assert out.tolist() == [4.0, 3.0, 3.0, 1.0]                  # the end record's depth 5 counts, however late
+    last = {"id": "g", "steps": [step(point(0, 20, depth=3)), step(point(50, 20, depth=3))], "end": None}
+    assert corpus.label(last)[:, COMPONENTS.index("depth_end")].tolist() == [0.0, 0.0]
+
+
+def test_default_style_ranks_actions_by_depth_end_minus_died_soon():
+    def pick(q):
+        return BrainTiers(FakeNet(q), rng=random.Random(0)).next_action(stairs_state())
+    assert pick(q_for("descend", "depth_end", 0.2)) == "explore"      # better, but under the 0.25 margin
+    assert pick(q_for("descend", "depth_end", 0.3)) == "travel"       # over it: the net's pick (descend) wins
+    q = q_for("descend", "depth_end", 0.5)                            # 0.5 less died_soon 0.4 is 0.1: short of it
+    q[ACTIONS.index("descend"), COMPONENTS.index("died_soon")] = 0.4
+    assert pick(q) == "explore"
+    assert pick(q_for("descend", "depth_go", 5.0)) == "explore"       # depth_go is not in the default
 
 
 def test_label_xp_soon_and_go():
@@ -839,7 +861,7 @@ def test_script_is_replayed_in_order_and_its_last_choice_is_the_fork():
 
 def test_script_with_a_net_returns_to_the_net_afterwards():
     state = stairs_state()
-    tiers = BrainTiers(FakeNet(q_for("descend", value=1.0)), rng=random.Random(0), script=["explore"])
+    tiers = BrainTiers(FakeNet(q_for("descend", "depth_end", 1.0)), rng=random.Random(0), script=["explore"])
     tiers.next_action(state)
     assert tiers.last["source"] == "fork"
     tiers.next_action(state)
@@ -1338,7 +1360,7 @@ def test_evaluate_stores_a_styled_run_under_its_own_name(tmp_path, fake_play):
     plain = evaluate(eval_args(tmp_path), None, 3)
     styled = evaluate(eval_args(tmp_path, "margin=0.3"), None, 3)
     assert [c[0] for c in fake_play] == ["eval-baseline", "eval-baseline-margin=0.3"]
-    assert plain["style"]["margin"] == 0.05 and styled["style"]["margin"] == 0.3
+    assert plain["style"]["margin"] == 0.25 and styled["style"]["margin"] == 0.3
     assert fake_play[0][1] == [EVAL_SEED, EVAL_SEED + 1, EVAL_SEED + 2] and fake_play[0][3] == 0.0
     assert (tmp_path / "eval-baseline" / "results.json").exists()
     assert (tmp_path / "eval-baseline-margin=0.3" / "results.json").exists()
