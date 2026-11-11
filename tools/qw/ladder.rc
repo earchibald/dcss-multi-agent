@@ -1,0 +1,37 @@
+###############################################################################
+# Ladder overrides, appended by tools/qw/build.py after qw's own qw.rc.
+# Later settings win, so these replace qw's defaults for unattended play.
+###############################################################################
+
+# Play without a person: start at once, no spectator delay.
+: AUTO_START = true
+: DELAYED = false
+
+# Minotaur Berserker with a mace, Trog, the default 3-rune route ("Normal").
+combo = MiBe.mace
+: COMBO_CYCLE = false
+: GOD_LIST = { "Trog" }
+: DEFAULT_GOAL = "3 Runes"
+
+# Keep going after a qw panic (logged to stderr as QWPANIC) instead of
+# stopping and waiting for the Tab key.
+: LADDER_RESUME_ON_PANIC = true
+
+# One stderr line per qw decision (QWACT), and the state before it (QWS). The
+# runner turns these on with --action-log / --state-log.
+: LADDER_ACTION_LOG = false
+: LADDER_STATE_LOG = false
+# Build the state table for ladder_choose() even without logging it.
+: LADDER_POLICY_STATE = false
+# QWDBG lines explaining what the choke / stairs_fight primitives considered.
+: LADDER_HOLD_DEBUG = false
+# Overrides by decision index, e.g. { [1234] = { force = "teleport" } }.
+# Forks set this in the per-game rc.
+: LADDER_OVERRIDES = nil
+
+# The game must end the process when the character dies or wins.
+restart_after_game = false
+restart_after_save = false
+newgame_after_quit = false
+name_bypasses_menu = true
+show_more = false
