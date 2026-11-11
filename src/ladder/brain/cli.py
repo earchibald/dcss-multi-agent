@@ -154,7 +154,10 @@ def cmd_iterate(args: argparse.Namespace) -> None:
         old = evaluate(args, current, args.eval_games)
         new = evaluate(args, str(candidate), args.eval_games)
         versus = compare(new, old)
-        promoted = (new["mean_depth"], -new["died"]) > (old["mean_depth"], -old["died"])
+        # Only games both sides finished are compared. If many were lost (the server paused, the
+        # laptop slept) the ones left are not the same test, and the round promotes nothing.
+        complete = versus["seeds"] >= 0.9 * args.eval_games
+        promoted = complete and (new["mean_depth"], -new["died"]) > (old["mean_depth"], -old["died"])
         if promoted:
             shutil.copy(candidate, champion)
         keys = ("mean_depth", "median_depth", "max_depth", "mean_xl", "died")
@@ -166,7 +169,9 @@ def cmd_iterate(args: argparse.Namespace) -> None:
         ledger["rounds"].append(row)
         ledger_path.write_text(json.dumps(ledger, indent=1))
         print(f"round {n}: candidate {new['mean_depth']} vs champion {old['mean_depth']} mean depth over "
-              f"{versus['seeds']} seeds ({versus}) -> {'promoted' if promoted else 'kept the champion'}")
+              f"{versus['seeds']} seeds ({versus}) -> {'promoted' if promoted else 'kept the champion'}"
+              + ("" if complete else f" (only {versus['seeds']} of {args.eval_games} evaluation games finished: re-run "
+                                     f"`ladder brain eval {current or 'baseline'} {candidate} --fresh`)"))
 
 
 def add_parser(sub) -> None:

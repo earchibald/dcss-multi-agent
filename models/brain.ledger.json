@@ -105,6 +105,64 @@
    "promoted": false,
    "at": "2026-11-09 20:51",
    "note": "models/iter1.json was retrained afterwards on the same corpus with the depth_end component and the default style depth_end - died_soon: 5.48 vs 5.48 mean depth (22 deeper / 13 same / 25 shallower). Level, not promoted."
+  },
+  {
+   "round": 2,
+   "candidate": "models/iter2.json",
+   "selfplay": {
+    "games": 178,
+    "mean_depth": 4.6,
+    "died": 168,
+    "seconds": 504
+   },
+   "corpus_rows": 504876,
+   "val": {
+    "q_loss": 0.7527964115142822,
+    "danger_bce": 0.3606664836406708,
+    "prior_ce": -0.0,
+    "forks": {
+     "moments": 167,
+     "regret": 0.982,
+     "random": 1.158,
+     "recorded": 1.2156,
+     "top1": 0.587
+    },
+    "danger_auc": 0.799396073427152,
+    "danger_rate": 0.16992980241775513,
+    "prior_top1": NaN,
+    "r2": {
+     "died_soon": 0.283,
+     "hp_lost": 0.258,
+     "xp_soon": 0.259,
+     "depth_go": 0.164,
+     "xp_go": 0.374,
+     "died_go": 0.239,
+     "depth_end": 0.225
+    }
+   },
+   "champion": {
+    "mean_depth": 5.58,
+    "median_depth": 6.0,
+    "max_depth": 12,
+    "mean_xl": 5.73,
+    "died": 58
+   },
+   "challenger": {
+    "mean_depth": 5.85,
+    "median_depth": 6.0,
+    "max_depth": 12,
+    "mean_xl": 5.73,
+    "died": 60
+   },
+   "versus": {
+    "seeds": 60,
+    "deeper": 19,
+    "same": 26,
+    "shallower": 15
+   },
+   "promoted": true,
+   "at": "2026-11-10 08:45",
+   "note": "The loop's own evaluation lost 28 of 60 games (the server stopped answering overnight) and promoted on the 32 left. Re-evaluated cleanly the next morning on all 60: candidate 5.85 vs baseline 5.58 mean depth, 19 deeper / 26 same / 15 shallower. Promotion kept. 141 of this round's 566 forks were lost the same way."
   }
  ]
 }

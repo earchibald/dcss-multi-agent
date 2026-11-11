@@ -19,12 +19,14 @@ baseline dungeon by dungeon.
 | `iter1`, retrained to predict depth gained by the end of the game | 60 | 5.48 | 6 | 15 | 5.15 | 1140 | 22 / 13 / 25 |
 | the same, `margin=0.6` | 60 | 5.25 | 5 | 12 | 5.32 | 1725 | 16 / 24 / 20 |
 | the same, `margin=1.0 died_soon=-3` | 60 | 5.28 | 5 | 12 | 5.48 | 1964 | 8 / 39 / 13 |
+| **`iter2`** (round 2: + 178 games and 425 forks played to the end) — the champion | 60 | **5.85** | 6 | 12 | 5.73 | 1754 | 19 / 26 / 15 |
 
 **The gain so far has come from what the bot can do, not from the model.** Equipment took the rules of
 thumb from 4.36 to 5.55, and fixing the hangs means all 60 games now finish (4 to 8 used to be lost).
-**No model beats the rules of thumb yet, so none is promoted**: `models/brain.json` does not exist and
-`--brain` plays the rules of thumb. One standard error on a mean depth is about 0.3, and replaying the
-baseline three times gave 5.55, 5.48 and 5.42, so the last three rows are level with it.
+**Round 2's model is the first to come out ahead** (5.85 against 5.58 for the baseline replayed alongside
+it) and is the champion: `models/brain.json`, which `--brain` now plays. Read that as "level or slightly
+better", not as proof: one standard error on a mean depth is about 0.3, and the baseline replayed four
+times gave 5.55, 5.48, 5.42 and 5.58. The three `iter1` rows are level with it.
 
 What the model rows say:
 
@@ -38,6 +40,11 @@ What the model rows say:
   depth in 40% fewer turns at a lower level. That trade is neutral here; it would be wrong for a character
   meant to survive past D:12. Holding it closer to the baseline (the last two rows) removes the trade
   without finding anything better.
+
+Round 2 ran overnight and the server stopped answering part-way (most likely the laptop slept): 141 of
+566 forks and 28 of 60 evaluation games were lost, and the loop promoted on the 32 that finished. The row
+above is a clean re-run the next morning. The loop now refuses to promote unless 90% of the evaluation
+games finished. Keep the machine awake for long runs (`caffeinate -i uv run ladder brain iterate ...`).
 
 The first three candidates (before equipment, 3.75 to 4.30 against the old 4.36) are in `models/v2/`.
 
