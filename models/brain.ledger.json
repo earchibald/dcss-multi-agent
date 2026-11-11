@@ -163,6 +163,121 @@
    "promoted": true,
    "at": "2026-11-10 08:45",
    "note": "The loop's own evaluation lost 28 of 60 games (the server stopped answering overnight) and promoted on the 32 left. Re-evaluated cleanly the next morning on all 60: candidate 5.85 vs baseline 5.58 mean depth, 19 deeper / 26 same / 15 shallower. Promotion kept. 141 of this round's 566 forks were lost the same way."
+  },
+  {
+   "round": 3,
+   "candidate": "models/iter3.json",
+   "selfplay": {
+    "games": 177,
+    "mean_depth": 4.33,
+    "died": 173,
+    "seconds": 509
+   },
+   "corpus_rows": 721374,
+   "val": {
+    "q_loss": 0.7455335259437561,
+    "danger_bce": 0.35633060336112976,
+    "prior_ce": -0.0,
+    "forks": {
+     "moments": 223,
+     "regret": 1.0807,
+     "random": 1.4036,
+     "recorded": 1.4933,
+     "top1": 0.565
+    },
+    "danger_auc": 0.804612633544531,
+    "danger_rate": 0.16676340997219086,
+    "prior_top1": NaN,
+    "r2": {
+     "died_soon": 0.304,
+     "hp_lost": 0.263,
+     "xp_soon": 0.262,
+     "depth_go": 0.134,
+     "xp_go": 0.374,
+     "died_go": 0.231,
+     "depth_end": 0.209
+    }
+   },
+   "champion": {
+    "mean_depth": 5.86,
+    "median_depth": 6,
+    "max_depth": 12,
+    "mean_xl": 5.76,
+    "died": 59
+   },
+   "challenger": {
+    "mean_depth": 5.59,
+    "median_depth": 5.0,
+    "max_depth": 11,
+    "mean_xl": 5.09,
+    "died": 57
+   },
+   "versus": {
+    "seeds": 57,
+    "deeper": 19,
+    "same": 10,
+    "shallower": 28
+   },
+   "promoted": false,
+   "at": "2026-11-10 20:58"
+  },
+  {
+   "round": 4,
+   "candidate": "models/iter4.json",
+   "selfplay": {
+    "games": 171,
+    "mean_depth": 4.42,
+    "died": 171,
+    "seconds": 568
+   },
+   "corpus_rows": 801259,
+   "val": {
+    "q_loss": 0.7447347044944763,
+    "danger_bce": 0.3603474795818329,
+    "prior_ce": -0.0,
+    "forks": {
+     "moments": 240,
+     "regret": 1.4042,
+     "random": 1.4627,
+     "recorded": 1.6292,
+     "top1": 0.529
+    },
+    "danger_auc": 0.7993459309143791,
+    "danger_rate": 0.16831234097480774,
+    "prior_top1": NaN,
+    "r2": {
+     "died_soon": 0.301,
+     "hp_lost": 0.256,
+     "xp_soon": 0.267,
+     "depth_go": 0.153,
+     "xp_go": 0.372,
+     "died_go": 0.241,
+     "depth_end": 0.228
+    }
+   },
+   "champion": {
+    "mean_depth": 5.86,
+    "median_depth": 6,
+    "max_depth": 12,
+    "mean_xl": 5.76,
+    "died": 59
+   },
+   "challenger": {
+    "mean_depth": 5.86,
+    "median_depth": 6,
+    "max_depth": 11,
+    "mean_xl": 5.86,
+    "died": 58
+   },
+   "versus": {
+    "seeds": 58,
+    "deeper": 20,
+    "same": 17,
+    "shallower": 21
+   },
+   "promoted": false,
+   "at": "2026-11-10 21:17",
+   "note": "The loop was stopped during this round's forks (199 of 735 played) and the round was finished by hand: corpus, train and evaluation run as separate commands. First corpus with the player's games of 2026-11-10 (1,153 human rows: one manual game to D:10, and 11 short take-overs of Reflex's games). Level with the champion; its one fewer death is a game stuck on D:2 (1501 choices without leaving the level), not a survival, so not promoted. With the human prior switched on (--style human=0.2) the same model reached 3.27."
   }
  ]
 }

@@ -98,7 +98,8 @@ def evaluate(args: argparse.Namespace, model: str | None, games: int) -> dict:
     done = Path(args.out) / name / "results.json"
     if done.exists() and not getattr(args, "fresh", False):
         s = json.loads(done.read_text())
-        if len(s["results"]) >= games and s.get("style") == _style(args).to_dict():
+        # results written before a style weight existed were played with its default
+        if len(s["results"]) >= games and {**Style().to_dict(), **(s.get("style") or {})} == _style(args).to_dict():
             return s
     return _play(args, name, list(range(EVAL_SEED, EVAL_SEED + games)), model, 0.0)
 

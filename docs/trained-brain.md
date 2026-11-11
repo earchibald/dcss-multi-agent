@@ -20,6 +20,9 @@ baseline dungeon by dungeon.
 | the same, `margin=0.6` | 60 | 5.25 | 5 | 12 | 5.32 | 1725 | 16 / 24 / 20 |
 | the same, `margin=1.0 died_soon=-3` | 60 | 5.28 | 5 | 12 | 5.48 | 1964 | 8 / 39 / 13 |
 | **`iter2`** (round 2: + 178 games and 425 forks played to the end) — the champion | 60 | **5.85** | 6 | 12 | 5.73 | 1754 | 19 / 26 / 15 |
+| `iter3` (round 3: + 177 games and 767 forks), against `iter2` on the same dungeons | 58 | 5.59 | 5 | 11 | 5.09 | 1319 | 19 / 10 / 28 vs `iter2` |
+| `iter4` (round 4: + 171 games, 199 forks and 1,153 rows of your own play), against `iter2` | 59 | 5.86 | 6 | 11 | 5.86 | 1796 | 20 / 17 / 21 vs `iter2` |
+| the same, with the nudge toward what you did (`human=0.2`) | 60 | 3.27 | 3 | 8 | 4.13 | 1867 | |
 
 **The gain so far has come from what the bot can do, not from the model.** Equipment took the rules of
 thumb from 4.36 to 5.55, and fixing the hangs means all 60 games now finish (4 to 8 used to be lost).
@@ -45,6 +48,31 @@ Round 2 ran overnight and the server stopped answering part-way (most likely the
 566 forks and 28 of 60 evaluation games were lost, and the loop promoted on the 32 that finished. The row
 above is a clean re-run the next morning. The loop now refuses to promote unless 90% of the evaluation
 games finished. Keep the machine awake for long runs (`caffeinate -i uv run ladder brain iterate ...`).
+
+Rounds 3 and 4 (2026-11-10) did not move it. `iter2` stays the champion, replayed at 5.86.
+
+- **Round 3** (`iter3`) came out behind, 5.59, and dived again: the same floors in a quarter fewer turns,
+  at a lower level.
+- **Round 4** (`iter4`) is level, 5.86 against 5.86. The loop was stopped during its forks (199 of 735)
+  and the round finished by hand. Its one fewer death is a game stuck on D:2, so it was not promoted.
+- **More of the same data has stopped helping.** The corpus grew from 505k to 801k rows over the two
+  rounds and the validation numbers did not change (outcome loss 0.75, `depth_end` R² 0.21 to 0.23). On
+  held-out forked moments `iter4` barely beats choosing at random (regret 1.40 against 1.46; `iter2` had
+  0.98 against 1.16 on a smaller set). That points at what the model sees and can do (Next, 2 and 3),
+  not at volume.
+- **Your games are in the corpus**: 1,153 rows from 17 recordings. One is a manual game that reached
+  D:10 in 6,139 turns, deeper than 9 in 10 of the bot's games; 11 are short take-overs of Reflex's games
+  (1 to 19 rows each, nearly all `fight`, `rest` and `flee_up`). They are 0.14% of the rows, so they
+  can't have moved `iter4` as outcome labels.
+- **The nudge toward what you did makes it worse** (`--style human=0.2`: 3.27). The converter keeps only
+  commands that are one of the brain's actions: in the D:10 game 909 of 2,081 commands became rows, and
+  835 steps walked by hand were dropped, with them most of the walking to stairs. What is left is 63%
+  `fight` and 1% `descend`, so the prior learned from it holds the bot on each floor. It stays off
+  (`human` is 0 by default) until walking by hand is mapped to something.
+- A take-over that ends without a death is labelled as if the game stopped there. The character went on
+  in the next run and usually died within a thousand turns; the recordings are not yet joined up.
+- Games that hang are back: 9 of 180 self-play games in round 4, and 1 or 2 of 60 in each evaluation
+  with no random choices.
 
 The first three candidates (before equipment, 3.75 to 4.30 against the old 4.36) are in `models/v2/`.
 
@@ -110,6 +138,12 @@ no progress) the brain picks another action instead, so a game runs until the ch
 The **rules of thumb** (`policy.baseline`) are what plays when there is no model, and what the model is
 measured against: berserk when hurt or facing something tough, drink a healing potion at half HP, fight,
 change to better equipment, rest below 80%, read and drink unknowns when safe, explore, then go down.
+
+`--style wiki=1` plays a variant that follows the DCSS wiki's strategy guides (`policy.baseline_wiki`):
+rest to full, drink before the rage, go up nearby stairs when hurt, teleport and try unknowns as last
+resorts. On the 60 evaluation dungeons it came out about one standard error *behind* (5.20 against 5.58
+alone, 5.53 against 5.86 under `iter2`), so it is off by default. `docs/wiki-strategy.md` has the rules,
+the measurement and the rest of what the guides say.
 
 ## What it sees
 
@@ -225,7 +259,8 @@ so no game is lost; a new field is simply missing from old observations) and tra
 | `src/ladder/brain/features.py` | actions, components, `observe` (state to dict) and `encode` (dict to numbers) |
 | `src/ladder/brain/net.py` | model file format, numpy forward pass, parity check |
 | `src/ladder/brain/gear.py` | ranks weapons and armour, and says which piece in the pack is better than the one in use |
-| `src/ladder/brain/policy.py` | `available`, `baseline`, `Style`, and `BrainTiers`, which sits in Reflex where `StubTiers` did |
+| `src/ladder/brain/policy.py` | `available`, `baseline`, `baseline_wiki`, `Style`, and `BrainTiers`, which sits in Reflex where `StubTiers` did |
+| `docs/wiki-strategy.md` | the DCSS wiki's strategy guides, sorted by what the brain would need to use each piece of advice |
 | `src/ladder/brain/steplog.py` | `steps.jsonl` writer shared by self-play, `spike` and the cockpit |
 | `src/ladder/brain/selfplay.py` | parallel games, one process each, with a watchdog for hung reads |
 | `src/ladder/brain/forks.py` | picks the moments to fork and writes the replay scripts |
@@ -296,19 +331,33 @@ In the order I would take them:
    still missing at scale: s1 learned from 300,000 forked moments, this from 982, and most of those were
    cut off 1,500 turns after the fork, which the new `depth_end` label can't use properly. Forks now play
    to the end by default. An overnight run (`iterate --rounds 8 --fork-points 400`) is about 6,000.
+   *After rounds 3 and 4: 2,550 forks are in the corpus and the last 970 changed nothing. Do 2 and 3
+   first, then come back to volume.*
 2. **More to do in a fight.** Deaths are still mostly at D:5–8 to packs and uniques. Trog's Hand and
    Brothers in Arms, throwing what it picks up, stepping back into a corridor, and going upstairs earlier
    are each an action in `features.ACTIONS`, a line in `available`, and keys in `perform`.
+   *The wiki's guides rank these (`docs/wiki-strategy.md`, section 2): back into a corridor first,
+   then walk to the stairs up before the fight, then Trog's Hand and Brothers in Arms, which only work
+   before a rage.*
 3. **More to see.** A local map patch, monster HP, what is wielded and worn, skills. The model can't
    tell a character who is ready for the next floor from one who isn't, except by level and AC.
+   *From the wiki (`docs/wiki-strategy.md`, section 3): a flag per monster for what kind of threat it
+   is (hits from range, one-hit killer, fast, paralyses, blinks), since each wants a different answer
+   and 24 name buckets can't tell them apart; and weapon skill, so `gear.py` stops taking a great mace
+   it swings too slowly.*
 4. **Promote on more than 60 dungeons.** Differences under 0.3 depths can't be seen with 60; the same
    baseline replayed varies by 0.1. 200 evaluation dungeons would take about 15 minutes per model.
-5. **The remaining dead ends**: games with random choices that hang (1 in 80), unreachable stairs,
+5. **The remaining dead ends**: games that hang (1 in 20 with random choices in round 4, 1 in 40
+   without), unreachable stairs,
    "You can't go down here!".
 6. **Answer the prompts.** Identify and acquirement scrolls are cancelled and wasted today.
+   Designed, with using known scrolls and potions, in `docs/brain-consumables.md`.
 7. **Answer the decision cards.** Stairs, uniques and altars are the same kind of choice; the brain could
    be the recommendation Authority shows, and the player's answers would be labels.
-8. **Learn from more people.** Your recordings are in the loop but few (11 rows from the first four
-   files). Other servers' games are public as ttyrecs and spectator streams, which have states but not keys.
+8. **Learn from more people.** Your recordings are in the loop: 1,153 rows from 17 files, one of them a
+   game to D:10. Three things would make them count: map walking by hand (toward the stairs is `descend`,
+   toward unseen floor is `explore`) so the prior stops under-counting both; join a take-over to the run
+   that continued the same character, so its rows know how the game ended; and turn Reflex's own turns in
+   a shared game into rows from the spectator protocol. Other servers' games are public as ttyrecs and spectator streams, which have states but not keys.
 9. **Other characters.** Everything so far is a Minotaur Berserker. Species and background would need to be
    inputs, and the action list would need spells; `gear.py` ranks only maces and flails.

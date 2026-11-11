@@ -53,6 +53,7 @@ class Style:
     human: float = 0.0        # weight of log P(the recorded player would do this)
     margin: float = 0.25      # leave the rules of thumb only for an action predicted this much better
     min_count: float = 40     # ...and only for actions the model saw at least this often in training
+    wiki: float = 0.0         # 1 = the rules of thumb follow the DCSS wiki's guides (docs/wiki-strategy.md)
 
     def weights(self) -> np.ndarray:
         return np.asarray([getattr(self, c) for c in COMPONENTS], dtype=np.float32)
@@ -91,8 +92,13 @@ def available(obs: dict, level_explored: bool, blocked: set[str], rest_stalled: 
     return [a for a in ACTIONS if can[a] and a not in blocked]
 
 
-def baseline(obs: dict, avail: list[str], level_explored: bool) -> str:
-    """Rules of thumb: the stub's behaviour, plus drinking a healing potion instead of giving up."""
+def baseline(obs: dict, avail: list[str], level_explored: bool, wiki: bool = False) -> str:
+    """Rules of thumb: the stub's behaviour, plus drinking a healing potion instead of giving up.
+
+    `wiki` plays the variant that follows the DCSS wiki's strategy guides instead (`Style.wiki`).
+    """
+    if wiki:
+        return baseline_wiki(obs, avail, level_explored)
     frac = obs["hp"] / max(obs["hp_max"], 1)
     if obs["n_hostiles"]:
         near = [m for m in obs["mons"] if max(abs(m["dx"]), abs(m["dy"])) <= 2]
@@ -101,6 +107,40 @@ def baseline(obs: dict, avail: list[str], level_explored: bool) -> str:
                 ["fight", "descend", "flee_up", "wait"]
     else:
         order = ["wield", "wear"] + (["rest"] if frac < 0.8 else ["read_unknown", "quaff_unknown"]) + \
+                (["descend"] if level_explored else ["explore"]) + ["rest", "descend", "explore"]
+    return next((a for a in order if a in avail), avail[0])
+
+
+STAIRS_IN_REACH = 4       # steps to the stairs up that a hurt character walks before anything is adjacent
+
+
+def baseline_wiki(obs: dict, avail: list[str], level_explored: bool) -> str:
+    """The rules of thumb with the DCSS wiki's advice worked in (docs/wiki-strategy.md has the sources).
+
+    What differs from `baseline`:
+    - Explore only at full HP: rest whenever hurt, not only below 80%.
+    - A rage blocks potions and scrolls, so a healing potion is drunk before going berserk, not after.
+    - Hurt, with stairs up close and nothing adjacent yet: go up. Only adjacent monsters follow.
+    - Berserk exhausted or refused and HP at 30%: teleport, then try unknown potions, then unknown scrolls.
+    """
+    frac = obs["hp"] / max(obs["hp_max"], 1)
+    if obs["n_hostiles"]:
+        dists = [max(abs(m["dx"]), abs(m["dy"])) for m in obs["mons"]]
+        near = [m for m, d in zip(obs["mons"], dists) if d <= 2]
+        adjacent = any(d <= 1 for d in dists)
+        tough = any(m["threat"] >= 2 for m in near) or len(near) >= 3
+        order = []
+        if frac <= 0.5:
+            order.append("quaff_heal")
+            if not adjacent and (obs["on_up"] or 0 <= obs["dist_up"] <= STAIRS_IN_REACH):
+                order.append("flee_up")
+        if near and (tough or frac <= 0.5):
+            order.append("berserk")
+        if frac <= 0.3:
+            order += ["read_teleport", "quaff_unknown", "read_unknown"]
+        order += ["fight", "descend", "flee_up", "wait"]
+    else:
+        order = ["wield", "wear"] + (["rest"] if frac < 1.0 else ["read_unknown", "quaff_unknown"]) + \
                 (["descend"] if level_explored else ["explore"]) + ["rest", "descend", "explore"]
     return next((a for a in order if a in avail), avail[0])
 
@@ -168,7 +208,7 @@ class BrainTiers(StubTiers):
             raise Escalation(f"{self.level_steps} choices on this level without leaving it")
         if not avail:
             raise Escalation("nothing the brain can do here" + (f" (tried: {', '.join(sorted(blocked))})" if blocked else ""))
-        base = baseline(obs, avail, self.level_explored)
+        base = baseline(obs, avail, self.level_explored, wiki=bool(self.style.wiki))
         choice, source, extra = base, "baseline", {}
         if self.fork_turn is not None and self.horizon and state.turn > self.fork_turn + self.horizon:
             raise Escalation(FORK_DONE)
@@ -216,7 +256,7 @@ class BrainTiers(StubTiers):
 
     def perform(self, reflex, action: str) -> ActResult | None:
         state, conn = reflex.state, reflex.conn
-        letters = inventory(state)["letters"]
+        letters = inventory(state, largest=bool(self.style.wiki))["letters"]
         item = {"quaff_heal": ("q", "heal"), "quaff_unknown": ("q", "unknown_potions"),
                 "read_unknown": ("r", "unknown_scrolls"), "read_teleport": ("r", "teleport")}
         if action in item:

@@ -1429,3 +1429,59 @@ def test_fork_regret_compares_the_actions_tried_at_one_moment():
     assert r["regret"] == pytest.approx((0.0 + 0.1) / 2)
     assert r["recorded"] == pytest.approx((1.0 + 0.0) / 2)
     assert fork_regret(group, np.zeros(6, dtype=np.float32), true, pred) == {"moments": 0}
+
+
+# --- the wiki's variant of the rules of thumb (Style.wiki, docs/wiki-strategy.md) -------------------
+
+def wiki(o, explored=False):
+    return baseline(o, available(o, explored, set(), False), explored, wiki=True)
+
+
+def test_wiki_rests_to_full_before_exploring():
+    o = obs(hp=18)                                           # 90%: the plain rules explore on
+    assert baseline(o, available(o, False, set(), False), False) == "explore"
+    assert wiki(o) == "rest"
+    assert wiki(obs()) == "explore"
+
+
+def test_wiki_drinks_before_the_rage_not_after():
+    inv = {"heal": 1, "unknown_potions": 0, "unknown_scrolls": 0, "teleport": 0}
+    o = obs(hp=8, inv=inv, god="Trog", n_hostiles=1, mons=[mon()])
+    assert baseline(o, available(o, False, set(), False), False) == "berserk"
+    assert wiki(o) == "quaff_heal"
+    assert wiki(obs(hp=8, god="Trog", n_hostiles=1, mons=[mon()])) == "berserk"      # nothing to drink
+
+
+def test_wiki_still_rages_early_at_something_tough():
+    o = obs(god="Trog", n_hostiles=1, mons=[mon("ogre", dx=2, threat=2)])
+    assert wiki(o) == "berserk"
+
+
+def test_wiki_takes_near_stairs_up_before_anything_is_adjacent():
+    hurt = dict(hp=8, god="Trog", depth=3)
+    assert wiki(obs(dist_up=3, n_hostiles=1, mons=[mon(dx=2)], **hurt)) == "flee_up"
+    assert wiki(obs(dist_up=3, n_hostiles=1, mons=[mon(dx=1)], **hurt)) == "berserk"    # already in melee
+    assert wiki(obs(dist_up=9, n_hostiles=1, mons=[mon(dx=2)], **hurt)) == "berserk"    # too far to walk
+
+
+def test_wiki_last_resorts_when_the_rage_is_spent():
+    spent = dict(hp=5, god="Trog", status=["-Berserk"], n_hostiles=1, mons=[mon()])
+    inv = {"heal": 0, "unknown_potions": 1, "unknown_scrolls": 1, "teleport": 1}
+    assert wiki(obs(inv=inv, **spent)) == "read_teleport"
+    assert wiki(obs(inv={**inv, "teleport": 0}, **spent)) == "quaff_unknown"
+    assert wiki(obs(inv={**inv, "teleport": 0, "unknown_potions": 0}, **spent)) == "read_unknown"
+    assert wiki(obs(inv={**inv, "teleport": 0}, **{**spent, "hp": 9})) == "fight"       # 45%: not yet
+
+
+def test_inventory_largest_stack_first():
+    state = with_inv(make_state(["@."]), s0=item("fizzy potion", POTIONS, 1, letter=ord("c")),
+                     s1=item("murky potion", POTIONS, 3, letter=ord("d")))
+    assert inventory(state)["letters"]["unknown_potions"] == "c"
+    assert inventory(state, largest=True)["letters"]["unknown_potions"] == "d"
+    assert inventory(state, largest=True)["unknown_potions"] == 4
+
+
+def test_old_evaluations_without_a_new_style_weight_are_still_reused():
+    old = {k: v for k, v in Style().to_dict().items() if k != "wiki"}
+    assert {**Style().to_dict(), **old} == Style().to_dict()
+    assert {**Style().to_dict(), **old} != Style(wiki=1).to_dict()

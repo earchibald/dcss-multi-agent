@@ -74,9 +74,14 @@ def path(state: GameState, goal_mf: int) -> tuple[str | None, int]:
     return None, -1
 
 
-def inventory(state: GameState) -> dict:
-    """The consumables the brain has actions for, with the letter of one of each kind."""
+def inventory(state: GameState, largest: bool = False) -> dict:
+    """The consumables the brain has actions for, with the letter of one of each kind.
+
+    The letter is the first stack found, or with `largest` the biggest stack: among unknowns that is the
+    likeliest to be a common kind (curing, identify), and trying it tells the most.
+    """
     out = {"heal": 0, "unknown_potions": 0, "unknown_scrolls": 0, "teleport": 0, "letters": {}}
+    biggest: dict[str, int] = {}
     for item in (state.player.get("inv") or {}).values():
         name, qty, base = item.get("name", ""), item.get("quantity", 1) or 0, item.get("base_type")
         if not name or qty <= 0 or base not in (POTIONS, SCROLLS):
@@ -88,7 +93,8 @@ def inventory(state: GameState) -> dict:
             kind = ("teleport" if "teleportation" in name else None) if known else "unknown_scrolls"
         if kind:
             out[kind] += qty
-            out["letters"].setdefault(kind, chr(item.get("letter", ord("a"))))
+            if kind not in out["letters"] or (largest and qty > biggest[kind]):
+                out["letters"][kind], biggest[kind] = chr(item.get("letter", ord("a"))), qty
     return out
 
 
