@@ -5,3 +5,4 @@ runs/
 *.egg-info/
 .claude/settings.local.json
 .claude/worktrees/
+docs/.clearance-rendered-preview-*/

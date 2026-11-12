@@ -60,6 +60,28 @@ PRIMITIVES = {"reroll", "reroll2", "berserk", "trogs_hand", "brothers_in_arms", 
               "choke", "stairs_fight"}
 NAME_RE = re.compile(r"[A-Za-z0-9_.-]+")
 
+# Each game runs under this. The container's PID 1 is the webtiles server, which never
+# waits for processes it did not start, so a crawl whose parent died before it (a killed
+# game) stayed in the process table as a zombie for the life of the container. As a child
+# subreaper this process inherits such orphans and waits for them.
+REAPER = """\
+import ctypes, os, sys
+ctypes.CDLL(None).prctl(36, 1, 0, 0, 0)  # PR_SET_CHILD_SUBREAPER
+main = os.fork()
+if main == 0:
+    os.execvp(sys.argv[1], sys.argv[1:])
+status = 0
+while True:
+    try:
+        pid, st = os.wait()
+    except ChildProcessError:
+        break
+    if pid == main:
+        status = st
+code = os.waitstatus_to_exitcode(status)
+sys.exit(code if code >= 0 else 128 - code)
+"""
+
 
 # --- container helpers -------------------------------------------------------------------
 
@@ -208,6 +230,7 @@ class Runner:
         for w in range(1, self.args.workers + 1):
             d = self.worker_dir(w)
             in_container(self.container, "mkdir", "-p", f"{d}/saves", f"{d}/morgue")
+        put_file(self.container, f"{self.run_dir}/reap.py", REAPER)
 
     def write_rc(self, w: int, overrides: dict | None) -> None:
         d = self.worker_dir(w)
@@ -233,6 +256,7 @@ class Runner:
         cmd = [
             "docker", "exec", "-e", "LANG=C.UTF-8", "-e", "TERM=xterm", "-w", "/crawl",
             self.container,
+            "python3", f"{self.run_dir}/reap.py",
             "timeout", "-s", "KILL", str(self.args.time_limit),
             CRAWL, "-headless", "-name", name, "-seed", str(seed),
             "-lua-max-memory", "128", "-no-player-bones",
@@ -243,7 +267,9 @@ class Runner:
         return cmd
 
     def kill_game(self, w: int, name: str) -> None:
-        pattern = f"crawl -headless -name {name} .*-rc {self.worker_dir(w)}/qw.rc"
+        # Anchored: only crawl itself, not the timeout and reaper whose command lines
+        # contain crawl's. They exit by themselves once crawl is gone.
+        pattern = f"^{CRAWL} -headless -name {name} .*-rc {self.worker_dir(w)}/qw.rc"
         in_container(self.container, "pkill", "-KILL", "-f", pattern, check=False)
 
     def logfile_lines(self, w: int) -> list[str]:

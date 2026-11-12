@@ -6,6 +6,8 @@
 
 A stage is a set of runs named <stage>-<variant> under runs/qw; "base" (qw unchanged) is
 always played first. Runs that already have results are skipped, so a stage can be resumed.
+With --fleet the unplayed runs go to the other Macs in one `ladder-fleet qw` call (every
+variant of a seed on the same host) instead of the local container.
 Variants are in tools/qw/variants.py; "a+b" joins two. Search on training seeds and keep
 seeds 500000 and up for the final comparison.
 """
@@ -51,6 +53,19 @@ def cmd_run(args) -> None:
         variants.lua(spec)  # unknown names fail before any game is played
     luadir = ROOT / f"{args.stage}-lua"
     luadir.mkdir(parents=True, exist_ok=True)
+    if args.fleet:
+        todo = [s for s in specs if not (ROOT / run_name(args.stage, s) / "results.json").exists()]
+        cmd = ["ladder-fleet", "qw", "--seeds", args.seeds, "--qw-repo", str(REPO),
+               "--time-limit", str(args.time_limit), "--name", f"qw-{args.stage}", "--wait"]
+        for spec in todo:
+            luafile = luadir / f"{spec.replace('+', '_')}.lua"
+            luafile.write_text(variants.lua(spec), encoding="utf-8")
+            cmd += ["--run", f"{run_name(args.stage, spec)}={luafile}"]
+        print(f"== fleet: {len(todo)} of {len(specs)} runs to play", flush=True)
+        if todo and subprocess.run(cmd).returncode != 0:
+            sys.exit("ladder-fleet qw failed")
+        cmd_table(args)
+        return
     for i, spec in enumerate(specs, 1):
         name = run_name(args.stage, spec)
         if (ROOT / name / "results.json").exists():
@@ -121,6 +136,7 @@ def main() -> None:
     r.add_argument("--variants", default="all", help='comma-separated names, "a+b" joins; or all')
     r.add_argument("--workers", type=int, default=6)
     r.add_argument("--time-limit", type=int, default=600)
+    r.add_argument("--fleet", action="store_true", help="play on the fleet's hosts")
     r.set_defaults(fn=cmd_run)
     t = sub.add_parser("table")
     t.add_argument("--stage", required=True)

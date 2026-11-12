@@ -19,6 +19,8 @@ Minotaur Berserker of Trog with a mace, the character our trained brain plays.
 | qw, patched (the baseline) | 500000–500199 | 7.08 (SE 0.29) | 8.71 | 30% |
 | + Trog's Hand at every fight's start | 500000–500199 | 7.29 (+0.20 ± 0.31) | 8.88 (+0.17 ± 0.32) | 35% |
 | + learned policy, round 1 | 500000–500199 | 6.70 | 8.05 | 23% |
+| Baseline, rerun 2026-11-12 (1800 s limit) | 500000–500199 | 7.13 | 8.73 | 30% |
+| + searched settings (see below) | 500000–500199 | 8.70 (+1.56 ± 0.39) | 10.37 (+1.64 ± 0.40) | 45% |
 
 - qw as shipped never goes berserk: `can_berserk()` has an operator-precedence bug. Fixing that
   one line is worth about 2.5 dungeon levels for this character.
@@ -26,6 +28,47 @@ Minotaur Berserker of Trog with a mace, the character our trained brain plays.
 - The round-1 policy row is contaminated: 31 of its 200 games ended on a qw Lua error
   (`plan_flight_move_towards_enemy`, since patched) and 4 timed out. It has not been rerun.
 - "Deepest D" understates qw's better games, which turn into the Lair around D:8–11.
+
+## Settings search
+
+Searched by whole games (2026-11-11 and 12): each variant is a few lines of Lua run after
+`qw.lua` (`tools/qw/variants.py`), scored against the baseline on the same seeds.
+
+- Stage 1: 25 single changes on seeds 100000–100149 (600 s limit).
+- Stage 2: the leaders and their combinations on fresh seeds 100150–100449 (1800 s limit).
+- Stage 3: four survivors, once, on the held-out seeds against a baseline in the same run.
+
+Stage 3, 200 held-out seeds, difference from the baseline ± SE:
+
+| Settings | XL | Deepest D | Reached Lair | XL 12+ |
+|---|---|---|---|---|
+| Baseline | 8.73 | 7.13 | 30% | 25% |
+| `zerk_hp70` | 9.86 (+1.12 ± 0.37) | 8.14 (+1.01 ± 0.37) | 43% | 38% |
+| `zerk_hp70+zerk_early` | 10.10 (+1.36 ± 0.38) | 8.45 (+1.31 ± 0.37) | 46% | 41% |
+| `zerk_hp70+bia7` | 10.21 (+1.48 ± 0.37) | 8.45 (+1.31 ± 0.36) | 46% | 40% |
+| `zerk_hp70+zerk_early+bia7` | 10.37 (+1.64 ± 0.40) | 8.70 (+1.56 ± 0.39) | 45% | 43% |
+
+- `zerk_hp70`: berserk under 70% HP with an enemy adjacent, not 50%. `zerk_early`: high-threat
+  cutoff 7, not 10. `bia7`: Brothers in Arms at threat 7 (qw's own test rarely fires).
+- The triple led stage 2 as well (XL +1.50 ± 0.30, depth +1.18 ± 0.29 on 300 seeds). The four
+  rows above are not separable from each other; all are clear of the baseline.
+- Everything that worked is "rage sooner". Skill weights, heal thresholds, rest and flee
+  thresholds, extreme-threat cutoffs and Trog's Hand were within noise. Worse than the
+  baseline: lighter armour (`dodgy`), early Orc, more defensive skills (`defence_hi`, which
+  looked fine on 150 seeds and lost 0.6 XL on 300).
+- Still no wins in 200 games. Unfinished games are almost all the best ones: cut at the limit
+  in Spider, Shoals or Snake at XL 15–17, or stalled in Vaults at XL 17–20 (7 of the triple's
+  9). The Vaults stall is the next thing between qw and deeper numbers; it is not traced.
+- Open qw bug: `compare_table_keys` "attempt to compare number with nil" in the Lair, about
+  one game in 300.
+
+```sh
+uv run python tools/qw/search.py run --stage NAME --seeds A-B --time-limit 1800 --variants a,b,a+b [--fleet]
+uv run python tools/qw/search.py table --stage NAME
+```
+
+`--fleet` plays on the other Macs through `ladder-fleet qw`. Apple-silicon hosts replay
+identically to this machine; the Intel NUCs do not, so they stay out.
 
 ## Where qw dies
 
@@ -123,9 +166,9 @@ uv run python tools/qw/compare.py qw-base-200 NAME
 
 ## Next
 
-1. Search qw's settings by whole games instead of moments: skill weights, when to descend and
-   enter the Lair, the heal and Brothers in Arms thresholds, armour choice. Each variant is 200
-   to 600 games (about half an hour per 200) against the baseline.
+1. Trace the Vaults stall and the Spider and Shoals slowness, which cut qw's best games short,
+   then measure with a limit long enough to finish them. Make `zerk_hp70+zerk_early+bia7` the
+   baseline settings.
 2. Rerun the round-1 policy now that the Lua error is patched, and rerun the baseline on the
    same build.
 3. Give forks a longer horizon and a progress measure beyond XL, to see choices whose payoff
