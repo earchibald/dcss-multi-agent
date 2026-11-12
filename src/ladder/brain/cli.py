@@ -92,9 +92,9 @@ def cmd_train(args: argparse.Namespace) -> None:
 
 def evaluate(args: argparse.Namespace, model: str | None, games: int) -> dict:
     """Play the evaluation seeds with no exploration. Results are kept per model and reused."""
-    label = Path(model).stem if model else "baseline"
+    from .fleet import eval_name
     # a style given on the command line is part of what is being measured
-    name = f"eval-{label}" + "".join(f"-{pair}" for pair in sorted(args.style or []))
+    name = eval_name(model, args.style)
     done = Path(args.out) / name / "results.json"
     if done.exists() and not getattr(args, "fresh", False):
         s = json.loads(done.read_text())
@@ -175,6 +175,24 @@ def cmd_iterate(args: argparse.Namespace) -> None:
                                      f"`ladder brain eval {current or 'baseline'} {candidate} --fresh`)"))
 
 
+def cmd_fleet_jobs(args: argparse.Namespace) -> None:
+    from .fleet import jobs
+    print(json.dumps(jobs(json.loads(Path(args.spec).read_text()), out=args.out)))
+
+
+def cmd_fleet_shard(args: argparse.Namespace) -> None:
+    from .fleet import shard
+    spec = json.loads(Path(args.spec).read_text())
+    print(f"{spec['name']} batch {spec['tag']}: {len(spec['jobs'])} games, {spec['workers']} workers", flush=True)
+    s = shard(spec, on_game=_progress)
+    print("FLEET-SHARD " + json.dumps({k: v for k, v in s.items() if k not in ("results", "style")}), flush=True)
+
+
+def cmd_fleet_merge(args: argparse.Namespace) -> None:
+    from .fleet import merge
+    print(json.dumps(merge(Path(args.out) / args.name), indent=1))
+
+
 def add_parser(sub) -> None:
     p = sub.add_parser("brain", help="the trained brain: self-play, corpus, train, eval, iterate")
     bsub = p.add_subparsers(dest="brain_cmd", required=True)
@@ -240,6 +258,19 @@ def add_parser(sub) -> None:
     q.add_argument("--games", type=int, default=30)
     q.add_argument("--fresh", action="store_true", help="replay even if results exist")
     q.set_defaults(fn=cmd_versus)
+
+    # used by the ladder-fleet app (mac/Fleet), which plays batches of games on other Macs
+    q = bsub.add_parser("fleet-jobs", help="expand a fleet request (JSON file) into runs of jobs")
+    common(q, play=False)
+    q.add_argument("spec")
+    q.set_defaults(fn=cmd_fleet_jobs)
+    q = bsub.add_parser("fleet-shard", help="play one fleet batch (JSON file) on this host")
+    q.add_argument("spec")
+    q.set_defaults(fn=cmd_fleet_shard)
+    q = bsub.add_parser("fleet-merge", help="combine a fleet run's batches into its results.json")
+    common(q, play=False)
+    q.add_argument("name")
+    q.set_defaults(fn=cmd_fleet_merge)
 
     q = bsub.add_parser("iterate", help="self-play, retrain, evaluate, promote; repeat")
     common(q)

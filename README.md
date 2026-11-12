@@ -199,6 +199,23 @@ uv run ladder spike --brain --games 3         # the champion plays as ladderbot 
 Self-play runs on its own accounts (`ladderbrain1`…), several games at once, and never touches
 `ladderbot`'s save.
 
+### On other Macs: the fleet
+
+`ladder-fleet` (Swift, `mac/Fleet/`) plays self-play, evaluation and fork games on other Macs. The
+driving Mac runs the server; each run host runs an agent that pairs once with an invite code, says how
+many games it will take (cores, memory, power, heat, idle time, its owner's limits), installs what it
+needs (uv, Docker through colima, the DCSS image, the code) and sends its games back. Results land in
+`runs/brain/<name>/` like a local run, so `ladder brain eval` and the corpus read them as usual.
+Details: [mac/Fleet/README.md](mac/Fleet/README.md).
+
+```bash
+mac/Fleet/build.sh --install                   # build and sign ~/.local/bin/ladder-fleet
+ladder-fleet server install --out ~/Code/dcss-multi-agent/runs/brain
+ladder-fleet invite                            # prints the command to run on each run host
+ladder-fleet hosts
+ladder-fleet versus baseline models/brain.json --games 200 --wait   # same as `ladder-fleet eval`
+```
+
 ## Jev routing (offline)
 
 `profiles.toml` maps tiers to model profiles; each profile names a Keychain item, never a key.
@@ -269,6 +286,7 @@ Integration tests use their own account (`laddertest`) and dcss-api's scenario b
 | `src/ladder/llm.py`, `profiles.py` | Anthropic and OpenAI-compatible adapters; profiles with capability flags |
 | `src/ladder/authority.py` | Assisted vs autonomous decisions and the idle switch |
 | `src/ladder/brain/`, `models/` | The trained brain: features, numpy network, policy, self-play, corpus, training, the iterate loop |
+| `mac/Fleet/`, `src/ladder/brain/fleet.py` | `ladder-fleet`: games on other Macs (server, agents, pairing, provisioning) and its Python side |
 
 ## Notes from building it
 
