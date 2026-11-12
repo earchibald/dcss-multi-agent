@@ -22,6 +22,7 @@
 --   QWACT   <decision> <turn> <place> <hp> <mhp> <plan path, outermost first>
 --           (turn/place/hp after the action; path "" if nothing acted)
 --   QWSTALL <decision> <turn> <place>         (500 decisions with no turn passing)
+--   QWNUDGE <decision> <turn> <place>         (every 50 such decisions: we wait a turn)
 
 ---------------------------------------
 -- qw's `qw` and `const` tables are local to this file. Settings Lua run from
@@ -1163,6 +1164,12 @@ function initialize_plan_cascades()
             ladder_stall_count = ladder_stall_count + 1
             if ladder_stall_count == (LADDER_STALL_DECISIONS or 500) then
                 ladder_emit("QWSTALL", decision, turns, you.where())
+            elseif ladder_stall_count % 50 == 0 then
+                -- Every plan declined, or acted without spending a turn, 50 times
+                -- running. Pass a turn so that the game moves and qw's own stuck
+                -- plans, which count turns, can take over.
+                ladder_emit("QWNUDGE", decision, turns, you.where())
+                wait_one_turn()
             end
         end
         return result

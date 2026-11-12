@@ -69,6 +69,61 @@ PATCHES: list[Patch] = [
         "play; saves time.",
         kind="bugfix",
     ),
+    Patch(
+        "move.lua",
+        '    magic(delta_to_vi(pos) .. "YY")\n    return true\nend\n',
+        '    if you.status("immotile") then\n        return false\n    end\n\n'
+        '    magic(delta_to_vi(pos) .. "YY")\n    return true\nend\n',
+        "qw does not know the -Move status (an ironbound beastmaster's bolas, electricity "
+        "in water). A step then answers 'You cannot move.' and takes no turn, every move "
+        "plan 'fails despite returning true', and the game spins on one turn: 36 of the "
+        "41 stalls in search stages 2 and 3, 33 of them in Vaults. Kept by "
+        "--stock because without it the game cannot continue.",
+        kind="crashfix",
+    ),
+    Patch(
+        "plans-attack.lua",
+        'function random_step(reason)\n    if you.mesmerised() then\n',
+        'function random_step(reason)\n    if you.status("immotile") then\n'
+        '        say("Waiting to move again (" .. reason .. ").")\n'
+        '        wait_one_turn()\n        return true\n    end\n\n'
+        '    if you.mesmerised() then\n',
+        "With move_to() refusing while -Move, the plan of last resort has to pass the "
+        "turn itself.",
+        kind="crashfix",
+    ),
+    Patch(
+        "player.lua",
+        '            return form == "tree" or form == "fungus" and qw.danger_in_los\n',
+        '            return form == "tree" or form == "fungus" and qw.danger_in_los\n'
+        '                or you.status("immotile")\n',
+        "The same -Move status where qw asks the question itself: unable_to_move() only "
+        "knew tree and fungus form, so flee, kiting and tactical steps were still planned "
+        "while bound.",
+        kind="bugfix",
+    ),
+    Patch(
+        "move.lua",
+        "    if cache ~= nil then\n",
+        "    if cache_result ~= nil then\n",
+        "qw bug: distance_map_search_from() tests the undefined global `cache`, not "
+        "`cache_result`, so its memo never hits and the search for a flee route is "
+        "exponential in the route's length. With a flee position 84 squares away "
+        "(seed 500020, Snake:2) crawl span at 100% CPU inside one decision until the "
+        "time limit. The search's answer is unchanged.",
+        kind="crashfix",
+    ),
+    Patch(
+        "util.lua",
+        "        local val1 = a[key]\n        local val2 = b[key]\n",
+        "        local val1 = a[key] or 0\n        local val2 = b[key] or 0\n",
+        "qw bug: compare_table_keys() compares properties that a result may not have. "
+        "Two wand-attack results with none of the attack's properties scored raised "
+        "'attempt to compare two nil values' on every decision until the runner ended "
+        "the game (seed 500069 in Lair:5, about one game in 300). A missing property "
+        "now counts as 0.",
+        kind="crashfix",
+    ),
     # --- Lua 5.1 -> 5.4 (crawl's bundled Lua is 5.4 by 0.34) ---------------------------
     Patch(
         "turn.lua",

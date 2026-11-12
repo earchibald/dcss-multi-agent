@@ -56,11 +56,9 @@ Stage 3, 200 held-out seeds, difference from the baseline ± SE:
   thresholds, extreme-threat cutoffs and Trog's Hand were within noise. Worse than the
   baseline: lighter armour (`dodgy`), early Orc, more defensive skills (`defence_hi`, which
   looked fine on 150 seeds and lost 0.6 XL on 300).
-- Still no wins in 200 games. Unfinished games are almost all the best ones: cut at the limit
-  in Spider, Shoals or Snake at XL 15–17, or stalled in Vaults at XL 17–20 (7 of the triple's
-  9). The Vaults stall is the next thing between qw and deeper numbers; it is not traced.
-- Open qw bug: `compare_table_keys` "attempt to compare number with nil" in the Lair, about
-  one game in 300.
+- Still no wins in 200 games. The unfinished games were almost all the best ones: stalled in
+  Vaults at XL 17–20 (7 of the triple's 9) or cut at the limit in Spider, Shoals or Snake.
+  Both are qw bugs, traced and patched on 2026-11-12: see "Unfinished games" below.
 
 ```sh
 uv run python tools/qw/search.py run --stage NAME --seeds A-B --time-limit 1800 --variants a,b,a+b [--fleet]
@@ -69,6 +67,43 @@ uv run python tools/qw/search.py table --stage NAME
 
 `--fleet` plays on the other Macs through `ladder-fleet qw`. Apple-silicon hosts replay
 identically to this machine; the Intel NUCs do not, so they stay out.
+
+## Unfinished games
+
+Every stall, hang and error loop of stages 2 and 3 came from four causes. All are patched
+(`tools/qw/patches.py`, `tools/qw/ladder.lua`); the seven games below, replayed on the
+fixed build all finish.
+
+- **Bound in place (the Vaults stall).** qw does not know the -Move status, which an ironbound
+  beastmaster's bolas gives in Vaults and electricity gives in water. Each step answered "You
+  cannot move." without spending a turn, every move plan "failed despite returning true", and
+  the game span on one turn. 36 of the 41 stalls, 33 of them in Vaults. Now `unable_to_move()`
+  and `move_to()` know the status, and the plan of last resort waits.
+- **Flee search (the Spider, Shoals and Snake "slowness").** Not slowness: one decision that
+  never returned. `distance_map_search_from()` tests an undefined global, `cache`, where it
+  means `cache_result`, so its memo never hits and the search for a flee route is exponential
+  in the route's length. One word.
+- **`compare_table_keys`.** Two wand-attack results with no properties scored raised "attempt
+  to compare two nil values" on every decision. A missing property now counts as 0.
+- **Every plan declines.** 5 stalls in D:10–15: on arrival in a cloud, mid-teleport, no plan
+  acted and no turn passed. Not traced further. `ladder.lua` now waits a turn after 50 such
+  decisions (`QWNUDGE`) and qw's own stuck plans take over; the D:10 game went on to the Lair.
+
+The seven unfinished games of the triple, replayed on the fixed build:
+
+| Seed | Before | After |
+|---|---|---|
+| 500020 | hung in Snake:2, XL 16 | died in Abyss:4, XL 22, 2 runes |
+| 500024 | stalled in Vaults:4, XL 19 | died in Vaults:4, XL 20, 1 rune |
+| 500042 | stalled in Vaults:3, XL 19 | died in Zot:1, XL 23, 3 runes |
+| 500085 | stalled in Vaults:1, XL 17 | died in Vaults:2, XL 18, 1 rune |
+| 500094 | stalled in Vaults:4, XL 20 | died in Depths:1, XL 21, 2 runes |
+| 500130 | stalled in Vaults:2, XL 18 | died in Depths:2, XL 21, 2 runes |
+| 500151 | stalled in Vaults:1, XL 17 | died in Snake:2, XL 16 |
+
+A game that hangs inside one decision shows as `timeout` with crawl at 100% CPU. To find the
+plan, pass `--lua` a file that wraps `ladder_record_plan` and prints each plan's name: the
+hang is in the plan after the last one printed.
 
 ## Where qw dies
 
