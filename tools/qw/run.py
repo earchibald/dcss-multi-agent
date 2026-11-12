@@ -194,6 +194,7 @@ class Runner:
         self.lib_dir = args.lib_dir
         self.run_dir = f"{RUNS_DIR}/{args.name}"
         self.policy = args.policy.read_text(encoding="utf-8") if args.policy else None
+        self.lua = args.lua.read_text(encoding="utf-8") if args.lua else None
         self.lock = threading.Lock()
         self.done = 0
 
@@ -217,6 +218,11 @@ class Runner:
             rc.append(": LADDER_STATE_LOG = true")
         if overrides:
             rc.append(": LADDER_OVERRIDES = " + overrides_lua(overrides))
+        if self.lua:
+            # A Lua block run after qw.lua: changes qw's settings or replaces its functions.
+            # Its last line reports that the whole block ran: a block that fails part-way
+            # would otherwise leave qw unchanged and look like a setting with no effect.
+            rc += ["<", self.lua.rstrip("\n"), 'crawl.stderr("QWLUA\\tok")', ">"]
         if self.policy:
             # A Lua block that redefines ladder_choose(decision, state).
             rc += [": LADDER_POLICY_STATE = true", "<", self.policy.rstrip("\n"), ">"]
@@ -279,7 +285,7 @@ class Runner:
         self.write_rc(w, job.get("overrides"))
         before = set(self.logfile_lines(w))
 
-        counts = {"QWERR": 0, "QWPANIC": 0, "QWACT": 0, "QWOVR": 0, "QWS": 0}
+        counts = {"QWERR": 0, "QWPANIC": 0, "QWACT": 0, "QWOVR": 0, "QWS": 0, "QWLUA": 0}
         ovr_acted = 0
         places: list[tuple[int, str, int]] = []
         first_err = None
@@ -333,7 +339,8 @@ class Runner:
                      "qw_errors": counts["QWERR"], "qw_panics": counts["QWPANIC"],
                      "decisions_logged": counts["QWACT"], "states_logged": counts["QWS"],
                      "overrides_applied": counts["QWOVR"], "overrides_acted": ovr_acted,
-                     "first_error": first_err}
+                     "first_error": first_err,
+                     "lua_loaded": counts["QWLUA"] > 0 if self.lua else None}
         line = self.logfile_line(w, name, seed, before)
         morgue = self.morgue_text(w, name) if line else None
         if line:
@@ -522,6 +529,9 @@ def main() -> None:
     ap.add_argument("--policy", type=Path, default=None,
                     help="Lua file defining ladder_choose(decision, state); inlined into "
                          "every game's rc (state is built for it even without --state-log)")
+    ap.add_argument("--lua", type=Path, default=None,
+                    help="Lua file run after qw.lua in every game, to change qw's settings "
+                         "or replace its functions (see tools/qw/variants.py)")
     ap.add_argument("--combo", default=None, help="override the combo, e.g. GrBe.handaxe")
     ap.add_argument("--stock", action="store_true", help="build without qw bug fixes")
     ap.add_argument("--no-build", action="store_true", help="use the qw already deployed")
@@ -567,7 +577,7 @@ def main() -> None:
                  "workers": args.workers, "time_limit_s": args.time_limit,
                  "repeat": args.repeat, "action_log": args.action_log or args.state_log,
                  "state_log": args.state_log,
-                 "policy": str(args.policy) if args.policy else None,
+                 "lua": str(args.lua) if args.lua else None, "policy": str(args.policy) if args.policy else None,
                  "combo": args.combo or "MiBe.mace (tools/qw/ladder.rc)",
                  "container_dir": runner.run_dir, "elapsed_s": round(elapsed, 1),
                  "finished": datetime.now().isoformat(timespec="seconds")},

@@ -24,6 +24,12 @@
 --   QWSTALL <decision> <turn> <place>         (500 decisions with no turn passing)
 
 ---------------------------------------
+-- qw's `qw` and `const` tables are local to this file. Settings Lua run from
+-- the rc (run.py --lua, tools/qw/variants.py) reaches them through these.
+ladder_qw = qw
+ladder_const = const
+
+---------------------------------------
 -- Deterministic pairs()
 --
 -- Crawl's Lua 5.4 seeds its string hash per process, so pairs() visits the
