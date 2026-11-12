@@ -21,6 +21,8 @@ Minotaur Berserker of Trog with a mace, the character our trained brain plays.
 | + learned policy, round 1 | 500000–500199 | 6.70 | 8.05 | 23% |
 | Baseline, rerun 2026-11-12 (1800 s limit) | 500000–500199 | 7.13 | 8.73 | 30% |
 | + searched settings (see below) | 500000–500199 | 8.70 (+1.56 ± 0.39) | 10.37 (+1.64 ± 0.40) | 45% |
+| Baseline, fixed build (3600 s limit) | 500000–500199 | 7.13 | 8.72 | 30% |
+| + searched settings, fixed build | 500000–500199 | 8.79 (+1.65 ± 0.38) | 10.66 (+1.94 ± 0.40) | 46% |
 
 - qw as shipped never goes berserk: `can_berserk()` has an operator-precedence bug. Fixing that
   one line is worth about 2.5 dungeon levels for this character.
@@ -101,9 +103,99 @@ The seven unfinished games of the triple, replayed on the fixed build:
 | 500130 | stalled in Vaults:2, XL 18 | died in Depths:2, XL 21, 2 runes |
 | 500151 | stalled in Vaults:1, XL 17 | died in Snake:2, XL 16 |
 
+All 200 held-out seeds on the fixed build, 3600 s limit (stage `fix1`):
+
+| Settings | Finished | With a rune | Best game |
+|---|---|---|---|
+| Baseline | 200 of 200 | 2 | Depths:4, XL 22, 2 runes |
+| `zerk_hp70+zerk_early+bia7` | 198 of 200 | 16 (eight with 1, seven with 2, one with 3) | Zot:1, XL 23, 3 runes |
+
+No wins. Before the fixes the triple left 9 of 200 unfinished and 6 finished games with a rune. The two
+still unfinished, both at the hour limit:
+
+- 500139: D:12 at XL 18, no error and no nudge, so one decision that never returned. Not traced.
+- 500143: Lair:5 at XL 13, "Cannot currently process new keys (there is pending input)" 9
+  times, 9 nudges. Not traced.
+
 A game that hangs inside one decision shows as `timeout` with crawl at 100% CPU. To find the
 plan, pass `--lua` a file that wraps `ladder_record_plan` and prints each plan's name: the
 hang is in the plan after the last one printed.
+
+## Deep deaths, quit games and five more fixes
+
+The 400 held-out games on the `fix1` build were read for how the deep games end.
+
+Of the tuned settings' 200 games, 55 end at XL 15 or more. They die in Spider 13, Snake 10,
+D 7, Vaults 5, Orc 5, Depths 5, Shoals 4, Swamp 2, and one each in the Abyss, Zot, Desolation
+and the Lair. The wall is the first rune branch at XL 15–18 (29 deaths), not Vaults or Depths.
+Of those 29: 28 carried potions of curing, 25 scrolls of teleportation, 20 were on berserk
+cooldown, 19 slowed, 18 lethally poisoned, 6 lacked poison resistance, none had haste.
+
+What happens: qw goes berserk with poison in it or in a poison cloud, the poison turns lethal
+mid-rage, the potion is refused ("You are too berserk!") and qw dies as the rage ends. Separately,
+qw only cured poison that would take 60 HP or more, so under 60 HP a lethal dose never
+qualified.
+
+17 of the 400 games ended with qw quitting: it gets stuck, idles until Zot's clock drains it,
+and quits. The commonest cause is a walk that steps between two or three squares for ever:
+the route that avoids exclusions and the plain route disagree about the next step.
+
+Five fixes (stage `zk`, build `runs/qw/build-zk`, deployed to `/data/qw/lib-zk`; `/data/qw/lib`
+is still the `fix1` build):
+
+- Lethal poison is cured wherever it is noticed, not only at 60 HP of damage with an enemy in view.
+- Poison that will take half the current HP is cured before going berserk.
+- The two poison plans no longer try to drink while berserk.
+- A walk to a destination will not step back onto its last 16 squares (two patches).
+
+The 17 quit games replayed with the walk fix: 13 play on to an ordinary death, 3 still quit
+(500053, 500065, 500165) and 500146 runs out the 30 minutes.
+
+All five fixes against the `fix1` build, tuned settings, training seeds 100000–100149, the same
+seeds in both (113 of 150 games are identical):
+
+| | `fix1` build | With the five fixes |
+|---|---|---|
+| Died of poison | 13 | 8 |
+| Quit | 7 | 4 |
+| Games with a qw panic | 15 | 6 |
+| Mean XL | 10.40 | 10.55 (+0.15 ± 0.36) |
+| Deepest D level, mean | 8.52 | 8.65 |
+| Reached XL 15 | 38 | 38 |
+| Reached the Lair | 73 | 75 |
+| Runes | 17 | 14 |
+
+The bugs are gone and the average does not move: a character that was dying of poison mostly
+dies of something else in the same place. Six of the eight poison deaths left are poison landing
+during the rage, which no cure order fixes. Not yet measured on the held-out seeds.
+
+Quit games still open on the fixed build: a plan that flips between "PLANNING ORC" and
+"PLANNING D" (100103, 100147), a stall at an exclusion through another plan (100011), "Sorry,
+I don't know how to get there" on D:3 (500053), and two unclassified (100047, 500065). Panics
+still open: `unwield_weapon`, `stairdance_up`, `upgrade_equipment` and `brothers_in_arms`
+"failed despite returning true".
+
+## Other builds
+
+qw plays any species and background through `--combo`, with the gods in its list (Trog,
+Okawaru, Makhleb among them). It does not play casters. A probe on the `fix1` build, training
+seeds 100000–100049, the tuned settings unless noted:
+
+| Build | Mean XL | Reached the Lair | Reached XL 15 | Runes |
+|---|---|---|---|---|
+| Minotaur Berserker, mace (ours) | 10.86 | 26 | 14 | 7 |
+| Minotaur Berserker, hand axe | 10.74 | 24 | 14 | 10 |
+| Minotaur Fighter of Okawaru, war axe, qw's own settings | 9.92 | 22 | 10 | 3 |
+| Troll Berserker, claws | 9.76 | 21 | 3 | 0 |
+| Minotaur Berserker, mace, qw's own settings | 8.78 | 15 | 9 | 1 |
+| Demonspawn Berserker, hand axe | 8.24 | 14 | 6 | 0 |
+| Gargoyle Berserker, hand axe | 7.68 | 11 | 5 | 2 |
+| Oni Berserker, mace | 6.98 | 6 | 1 | 0 |
+
+No build beats the Minotaur. The Fighter's 20 of 50 games that end before an Okawaru altar is
+found count against it, and its settings are untuned: it is the one worth a settings search.
+Every build played all 50 games without a port bug of its own. The same seed and settings
+played three times gave 48 or 49 identical games of 50.
 
 ## Where qw dies
 
@@ -160,11 +252,11 @@ enters the Lair), and which fights it takes at all.
 
 | File | What it does |
 |---|---|
-| `tools/qw/patches.py` | 28 patches to qw for 0.34 and Lua 5.4, each with its reason; 4 fix qw's own bugs |
+| `tools/qw/patches.py` | 38 patches to qw for 0.34 and Lua 5.4, each with its reason; 14 fix qw's own bugs |
 | `tools/qw/build.py` | Builds `qw.lua` and the rc into `runs/qw/build`; `--deploy` copies to `/data/qw/lib` in the container |
 | `tools/qw/ladder.lua` | Our Lua: shims, error recovery, the state and action logs, the override hook, forceable primitives |
 | `tools/qw/ladder.rc` | MiBe with a mace, Trog, the 3-rune goal, auto-start |
-| `tools/qw/run.py` | Plays seeds or a jobs file of forks in parallel; writes `runs/qw/<name>/results.json` |
+| `tools/qw/run.py` | Plays seeds or a jobs file of forks in parallel; writes `runs/qw/<name>/results.json`. `--combo GrBe.handaxe`, or a `-- combo: GrBe.handaxe` line in the `--lua` file, picks the character |
 | `tools/qw/log.py` | Reads a game's log, one dict per decision (state, plan chosen, override) |
 | `tools/qw/forks.py` | Picks moments and writes the fork jobs, controls included |
 | `tools/qw/learn.py` | Scores forks against controls, fits one row of weights per option, writes a Lua policy |
@@ -201,12 +293,21 @@ uv run python tools/qw/compare.py qw-base-200 NAME
 
 ## Next
 
-1. Trace the Vaults stall and the Spider and Shoals slowness, which cut qw's best games short,
-   then measure with a limit long enough to finish them. Make `zerk_hp70+zerk_early+bia7` the
-   baseline settings.
-2. Rerun the round-1 policy now that the Lua error is patched, and rerun the baseline on the
-   same build.
-3. Give forks a longer horizon and a progress measure beyond XL, to see choices whose payoff
-   comes later (piety spent on Trog's Hand, for one).
-4. Imitate qw from its state log with our own network, as the starting point for a learned
+1. Stop tuning the Minotaur Berserker's settings. `zerk_hp70+zerk_early+bia7` is the baseline;
+   the settings left to find are worth less than the noise.
+2. Deploy the `zk` build as `/data/qw/lib` and re-measure both settings on the held-out 200,
+   once, as a bug-fix re-measure. The fixes came from reading held-out deaths, so the result
+   flatters them.
+3. The rune-branch wall is berserk itself: poison and slowness land during and after the rage.
+   Things to try, on training seeds: no berserk in a poison cloud or without poison resistance
+   in Spider, Snake and Swamp; choose the rune branches by resistances held.
+4. Search the Minotaur Fighter of Okawaru's settings (heroism, finesse, when to flee): a second
+   teacher that does not depend on rage.
+5. For the imitation step, record games from the Minotaur Berserker (both weapons) and the
+   Fighter. Troll, Demonspawn, Gargoyle and Oni add weaker play, not variety worth learning.
+6. Trace the open quit causes and panics above, the two unfinished games (500139, 500143) and
+   the every-plan-declines stall.
+7. Rerun the round-1 policy on the fixed build; give forks a longer horizon and a progress
+   measure beyond XL.
+8. Imitate qw from its state log with our own network, as the starting point for a learned
    player that is not tied to qw's plan order.

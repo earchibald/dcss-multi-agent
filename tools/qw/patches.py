@@ -124,6 +124,131 @@ PATCHES: list[Patch] = [
         "now counts as 0.",
         kind="crashfix",
     ),
+    Patch(
+        "plans-emergency.lua",
+        "function plan_cure_bad_poison()\n"
+        "    if not qw.danger_in_los then\n"
+        "        return false\n"
+        "    end\n"
+        "\n"
+        "    if you.poison_survival() <= you.hp() - 60 then\n"
+        "        if drink_by_name(\"curing\") then\n",
+        "function plan_cure_bad_poison()\n"
+        "    local survival = you.poison_survival()\n"
+        "    if survival > 0 and not qw.danger_in_los then\n"
+        "        return false\n"
+        "    end\n"
+        "\n"
+        "    if survival <= 0 or survival <= you.hp() - 60 then\n"
+        "        if can_drink() and drink_by_name(\"curing\") then\n",
+        "qw bug: poison is cured only when it will take 60 HP or more, and only with an "
+        "enemy in view. Under 60 HP a lethal dose never qualifies, so qw dies of poison "
+        "holding the cure: on the held-out 200, 18 of the tuned settings' 29 deaths in "
+        "Spider, Snake, Shoals and Swamp were lethally poisoned and 28 carried potions "
+        "of curing. Lethal poison is now cured wherever it is noticed. The drink is also "
+        "skipped while berserk, where it cannot work and raised 'cure_bad_poison failed "
+        "despite returning true'.",
+        kind="bugfix",
+    ),
+    Patch(
+        "move.lua",
+        "    for pos in adjacent_iter(from_pos) do\n"
+        "        local result = assess_move(pos, from_pos, dist_map, best_result)\n"
+        "        if result then\n"
+        "            best_result = result\n"
+        "        elseif allow_unsafe and (not best_result or not best_result.safe) then\n",
+        "    for pos in adjacent_iter(from_pos) do\n"
+        "        local tabu = false\n"
+        "        for _, seen in ipairs(ladder_move_tabu or {}) do\n"
+        "            tabu = tabu or positions_equal(pos, seen)\n"
+        "        end\n"
+        "        local result = not tabu\n"
+        "            and assess_move(pos, from_pos, dist_map, best_result)\n"
+        "        if result then\n"
+        "            best_result = result\n"
+        "        elseif not tabu and allow_unsafe\n"
+        "                and (not best_result or not best_result.safe) then\n",
+        "qw bug, part 1 of 2: see plan_move_towards_destination below. best_move_towards() "
+        "skips the squares in ladder_move_tabu when it is set.",
+        kind="bugfix",
+    ),
+    Patch(
+        "plans-explore.lua",
+        "    result = best_move_towards(qw.move_destination, qw.map_pos, true)\n"
+        "    if result then\n"
+        "        return move_to(result.move)\n"
+        "    end\n"
+        "\n"
+        "    return false\n",
+        "    local trail = ladder_move_trail\n"
+        "    if not trail or not positions_equal(trail.dest, qw.move_destination) then\n"
+        "        trail = { seen = {}, dest = {\n"
+        "            x = qw.move_destination.x, y = qw.move_destination.y } }\n"
+        "    end\n"
+        "    ladder_move_tabu = trail.seen\n"
+        "    local result = best_move_towards(qw.move_destination, qw.map_pos, true)\n"
+        "    ladder_move_tabu = nil\n"
+        "    if not result and #trail.seen > 0 then\n"
+        "        trail.seen = {}\n"
+        "        result = best_move_towards(qw.move_destination, qw.map_pos, true)\n"
+        "    end\n"
+        "    ladder_move_trail = nil\n"
+        "    if result and move_to(result.move) then\n"
+        "        local here = trail.seen[#trail.seen]\n"
+        "        if not here or not positions_equal(here, qw.map_pos) then\n"
+        "            table.insert(trail.seen, { x = qw.map_pos.x, y = qw.map_pos.y })\n"
+        "        end\n"
+        "        if #trail.seen > 16 then\n"
+        "            table.remove(trail.seen, 1)\n"
+        "        end\n"
+        "        ladder_move_trail = trail\n"
+        "        return true\n"
+        "    end\n"
+        "\n"
+        "    return false\n",
+        "qw bug: walking to a destination, a step is chosen from the route that avoids "
+        "exclusions when a safe step exists and from the plain route when none does. The "
+        "two routes can disagree: from A the safe route goes through B, and at B the next "
+        "safe square is a web, so the plain route goes back through A. qw then steps A, B, "
+        "A, B until Zot's clock drains it and it quits (seed 500012: 15,620 turns on D:2 "
+        "at XL 3; 17 of 400 held-out games ended by quitting). Steps back onto the last "
+        "16 squares of the same walk are now skipped (skipping only the square just left "
+        "turned seed 500034's two-square loop into a three-square one); when that leaves "
+        "no step at all, the trail is forgotten. Also makes `result` local.",
+        kind="bugfix",
+    ),
+    Patch(
+        "plans-emergency.lua",
+        "function plan_berserk()\n"
+        "    if can_berserk() and want_to_berserk() then\n"
+        "        return use_ability(\"Berserk\")\n",
+        "function plan_berserk()\n"
+        "    if can_berserk() and want_to_berserk() then\n"
+        "        if you.poisoned() and you.poison_survival() <= you.hp() / 2\n"
+        "                and can_drink() and drink_by_name(\"curing\") then\n"
+        "            say(\"(to cure poison before going berserk)\")\n"
+        "            return true\n"
+        "        end\n"
+        "\n"
+        "        return use_ability(\"Berserk\")\n",
+        "qw bug: nothing can be drunk while berserk, and qw goes berserk with poison "
+        "already in it. The poison turns lethal mid-rage, the potion is refused ('You are "
+        "too berserk!') and qw dies as the rage ends: of the tuned settings' 29 held-out "
+        "deaths in Spider, Snake, Shoals and Swamp, 18 were lethally poisoned and 20 were "
+        "on berserk cooldown. Poison that will take half the current HP is now cured "
+        "first, which costs the turn the rage would have started on.",
+        kind="bugfix",
+    ),
+    Patch(
+        "plans-rest.lua",
+        "    if drink_by_name(\"curing\") then\n"
+        "        say(\"(to cure poison)\")\n",
+        "    if can_drink() and drink_by_name(\"curing\") then\n"
+        "        say(\"(to cure poison)\")\n",
+        "qw bug: plan_cure_poison tries the potion while berserk, twice a turn, and "
+        "raises 'Cure_poison failed despite returning true' each time.",
+        kind="bugfix",
+    ),
     # --- Lua 5.1 -> 5.4 (crawl's bundled Lua is 5.4 by 0.34) ---------------------------
     Patch(
         "turn.lua",

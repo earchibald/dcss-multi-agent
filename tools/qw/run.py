@@ -262,8 +262,13 @@ class Runner:
             "-lua-max-memory", "128", "-no-player-bones",
             "-rc", f"{d}/qw.rc", "-rcdir", self.lib_dir, "-morgue", f"{d}/morgue",
         ]
-        if self.args.combo:
-            cmd += ["-extra-opt-last", f"combo={self.args.combo}"]
+        # A "-- combo: GrBe.handaxe" line in the Lua file picks the character, so a
+        # variant carries its combo wherever only the file is passed. Read here, per
+        # game: the fleet plays several variants in one run, each with its own Lua.
+        m = re.search(r"^-- combo: ([A-Za-z.]+)[ \t]*$", self.lua or "", re.M)
+        combo = self.args.combo or (m.group(1) if m else None)
+        if combo:
+            cmd += ["-extra-opt-last", f"combo={combo}"]
         return cmd
 
     def kill_game(self, w: int, name: str) -> None:
