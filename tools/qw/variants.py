@@ -268,6 +268,171 @@ end"""),
         return c_persist.lair_branch_order
     end
 end"""),
+    # --- stuck loops ------------------------------------------------------------------
+    # qw counts itself stuck only while no plan acts (qw.stuck_turns, plan_random_step), so a
+    # plan that acts every turn without getting anywhere runs until Zot's clock has drained
+    # max HP to 1 and qw quits ("quitting", ~40,000 turns). Three such loops; join all three
+    # with "dest_giveup+travel_walk+bounce_giveup". Each logs QWDBG lines when it acts.
+    "dest_giveup": ("drop a move destination still unreached after 400 moves on this level (and "
+                    "don't take it up again here): seed 100628 was teleported into a pocket of D:7 "
+                    "and walked a loop towards its old 'safety' square for 36,000 turns",
+                    """do
+    local LIMIT = 400
+    local key, moves = nil, 0
+    local banned, banned_where = {}, nil
+    local old = plan_move_towards_destination
+    function plan_move_towards_destination()
+        local dest = qw.move_destination
+        if not dest then
+            return old()
+        end
+        local where = you.where()
+        if banned_where ~= where then
+            banned, banned_where = {}, where
+        end
+        local k = where .. "@" .. dest.x .. "," .. dest.y
+        if k ~= key then
+            key, moves = k, 0
+        end
+        if banned[k] or moves >= LIMIT then
+            if not banned[k] then
+                banned[k] = true
+                crawl.stderr("QWDBG\\t" .. you.turns() .. "\\tunstick dest_giveup: dropped "
+                    .. tostring(qw.move_reason) .. " destination " .. k .. " after " .. moves
+                    .. " moves")
+            end
+            qw.move_destination = nil
+            qw.move_reason = nil
+            key, moves = nil, 0
+            return false
+        end
+        local acted = old()
+        if acted then
+            moves = moves + 1
+        end
+        return acted
+    end
+end"""),
+    "travel_walk": ("when travel (G) to a branch fails here with 'Sorry, I don't know how to get "
+                    "there.' and the entrance is on this level's map, walk to it (into the plants "
+                    "that block it) and take it: dpeg_oklobed_lair rings the Lair entrance with "
+                    "plants, and qw bounced between the two levels until it quit",
+                    """do
+    local failed = {}  -- level -> branch whose travel failed there
+    local last_branch
+    local said = {}
+    local old_message = c_message
+    function c_message(text, channel)
+        if last_branch and text:find("know how to get there", 1, true) then
+            failed[you.where()] = last_branch
+        end
+        return old_message(text, channel)
+    end
+
+    local old_send = send_travel
+    function send_travel(branch, depth)
+        last_branch = branch
+        local where = you.where()
+        if branch ~= "D" and failed[where] == branch and you.branch() ~= branch then
+            local ok, entrance = pcall(branch_entrance, branch)
+            if ok and entrance then
+                local tag = where .. ">" .. branch
+                if view.feature_at(0, 0) == entrance then
+                    crawl.stderr("QWDBG\\t" .. you.turns() .. "\\tunstick travel_walk: on the "
+                        .. branch .. " entrance on " .. where .. ", taking it")
+                    go_downstairs()
+                    return
+                end
+                local result = best_move_towards_features({ entrance }, true)
+                if result then
+                    if not said[tag] then
+                        said[tag] = true
+                        crawl.stderr("QWDBG\\t" .. you.turns() .. "\\tunstick travel_walk: travel to "
+                            .. branch .. " failed on " .. where .. ", walking to its entrance")
+                    end
+                    move_towards_destination(result.move, result.dest, "goal")
+                    return
+                end
+            end
+        end
+        return old_send(branch, depth)
+    end
+end"""),
+    "bounce_giveup": ("after 40 quick hops back to the level just left (each stay 6 turns or less), "
+                      "count both as explored: qw's search for unexplored stairs resets the other "
+                      "level's stairs each time, so a level with a stair it can never reach "
+                      "(seed 100601: D:7/D:8) is never done",
+                      """do
+    local LIMIT = 40
+    local gave_up = {}
+    local last_where, last_turn, prev_where, run = nil, nil, nil, 0
+    local function track()
+        local where, turn = you.where(), you.turns()
+        if where == last_where then
+            return
+        end
+        if prev_where == where and last_turn and turn - last_turn <= 6 then
+            run = run + 1
+        else
+            run = 0
+        end
+        prev_where, last_where, last_turn = last_where, where, turn
+        if run >= LIMIT and not (gave_up[where] and gave_up[prev_where]) then
+            gave_up[where], gave_up[prev_where] = true, true
+            run = 0
+            crawl.stderr("QWDBG\\t" .. you.turns() .. "\\tunstick bounce_giveup: " .. LIMIT
+                .. " quick hops back and forth between " .. prev_where .. " and " .. where
+                .. ", both counted explored")
+        end
+    end
+
+    local function given_up(branch, depth)
+        return gave_up[make_level(branch, depth)]
+    end
+
+    local old_update = update_goal
+    function update_goal()
+        track()
+        return old_update()
+    end
+
+    local old_explored = explored_level
+    function explored_level(branch, depth)
+        return given_up(branch, depth) or old_explored(branch, depth)
+    end
+
+    local old_autoexplored = autoexplored_level
+    function autoexplored_level(branch, depth)
+        return given_up(branch, depth) or old_autoexplored(branch, depth)
+    end
+
+    local old_have = have_all_stairs
+    function have_all_stairs(branch, depth, dir, feat_state)
+        return given_up(branch, depth) or old_have(branch, depth, dir, feat_state)
+    end
+
+    local old_count = count_stairs
+    function count_stairs(branch, depth, dir, feat_state)
+        if given_up(branch, depth) then
+            return num_required_stairs(branch, depth, dir)
+        end
+        return old_count(branch, depth, dir, feat_state)
+    end
+
+    local old_reset = reset_stone_stairs
+    function reset_stone_stairs(branch, depth, dir)
+        if not given_up(branch, depth) then
+            return old_reset(branch, depth, dir)
+        end
+    end
+
+    local old_finalize = finalize_travel_depth
+    function finalize_travel_depth(result)
+        if not given_up(result.branch, result.depth) then
+            return old_finalize(result)
+        end
+    end
+end"""),
 }
 
 
