@@ -275,6 +275,133 @@ def test_policy_takes_no_action_and_fits_in_an_rc_block(tmp_path):
     assert out[6] == ["nil"]
 
 
+# ---------------------------------------------------------------------------------------------------
+# the stance: teleport on the alarm (TRIVIAL gives p = 1 / (1 + e^3) = 0.0474 at every decision)
+
+P_TRIVIAL = 1 / (1 + math.exp(3.0))
+
+# qw as ladder.lua sees it, stubbed: can_teleport() and teleport() are qw's, the teleport primitive is
+# ladder.lua's (`can_teleport() and teleport() or false`), and step() does what plans.turn does with a spec.
+QW_STUB = """
+scrolls, can_read_now, reads = 0, true, 0
+function can_teleport() return can_read_now and scrolls > 0 end
+function teleport() scrolls = scrolls - 1; reads = reads + 1; return true end
+ladder_primitives = { teleport = function() return can_teleport() and teleport() or false end,
+                      reroll = function() return false end }
+function step(d, s)
+    local spec = ladder_choose(d, s)
+    local acted = nil
+    if spec and spec.force then acted = ladder_primitives[spec.force](spec, d) end
+    print("STEP", d, spec and spec.force or "-", tostring(acted), scrolls)
+end
+function st(turn, n, extra)
+    local s = { turn = turn, hp = 10, mhp = 20, e1_name = "", n_teleport = n, can_teleport = n > 0,
+                teleporting = false }
+    for k, v in pairs(extra or {}) do s[k] = v end
+    return s
+end
+"""
+
+
+def _stance_run(tmp_path: Path, body: str, policy: Path | None = None):
+    """Run `body` after the policy and QW_STUB: (STEP lines, QWSTANCE lines, all lines), split on tabs."""
+    policy = policy or _policy(tmp_path, TRIVIAL, threshold=0.01)
+    drv = tmp_path / "stance.lua"
+    drv.write_text(export_lua.offline_driver(policy, []) + QW_STUB + body)
+    out = _run_lua(drv, tmp_path)
+    assert "ERR" not in out, out
+    lines = [line.split("\t") for line in out.splitlines()]
+    return [x for x in lines if x[0] == "STEP"], [x for x in lines if x[0] == "QWSTANCE"], lines
+
+
+@needs_lua
+def test_stance_off_takes_no_action(tmp_path):
+    """With LADDER_RISK_STANCE unset the alarm is on, scrolls are held, and nothing is forced or logged."""
+    steps, stance, _ = _stance_run(tmp_path, """
+scrolls = 3
+for d = 0, 9 do step(d, st(100 + 30 * d, 3)) end
+LADDER_RISK_STANCE_THRESHOLD = 0.01
+for d = 10, 14 do step(d, st(100 + 30 * d, 3)) end
+""")
+    assert [s[2] for s in steps] == ["-"] * 15 and not stance
+
+
+@needs_lua
+def test_stance_reads_teleport_through_qw_and_keeps_its_cooldown(tmp_path):
+    steps, stance, _ = _stance_run(tmp_path, """
+LADDER_RISK_STANCE, LADDER_RISK_STANCE_THRESHOLD, LADDER_RISK_STANCE_COOLDOWN = "teleport", 0.04, 20
+scrolls = 2
+step(0, st(100, 2))                       -- fires: qw reads, 1 left
+step(1, st(105, 1))                       -- cooldown
+step(2, st(119, 1))                       -- cooldown (19 turns)
+step(3, st(120, 1, { teleporting = true }))   -- already teleporting
+step(4, st(121, 1, { can_teleport = false })) -- qw cannot read (berserk, confused, ...)
+step(5, st(122, 1))                       -- fires: the last scroll
+scrolls = 0
+step(6, st(150, 0))                       -- none left
+LADDER_OVERRIDES = { [7] = { force = "reroll" } }
+scrolls = 1
+step(7, st(200, 1))                       -- a fixed override comes first
+LADDER_RISK_STANCE_THRESHOLD = 0.05
+step(8, st(260, 1))                       -- p 0.047 is under the threshold
+""")
+    assert [(s[1], s[2], s[3], s[4]) for s in steps] == [
+        ("0", "teleport", "true", "1"), ("1", "-", "nil", "1"), ("2", "-", "nil", "1"), ("3", "-", "nil", "1"),
+        ("4", "-", "nil", "1"), ("5", "teleport", "true", "0"), ("6", "-", "nil", "0"),
+        ("7", "reroll", "false", "1"), ("8", "-", "nil", "1")]
+    assert [(s[1], s[2], s[4], s[5]) for s in stance] == [("0", "100", "teleport", "1"), ("5", "122", "teleport", "1")]
+    assert float(stance[0][3]) == P_TRIVIAL
+
+
+@needs_lua
+def test_stance_that_cannot_act_logs_it_and_does_not_loop(tmp_path):
+    """The state says a scroll can be read but qw's own check refuses: qw's cascade decides (acted 0), and the
+    stance waits out its cooldown instead of firing at every decision of the same turn."""
+    steps, stance, _ = _stance_run(tmp_path, """
+LADDER_RISK_STANCE, LADDER_RISK_STANCE_THRESHOLD, LADDER_RISK_STANCE_COOLDOWN = "teleport", 0.04, 0
+scrolls, can_read_now = 2, false
+for d = 0, 5 do step(d, st(300, 2)) end   -- six decisions, no turn passes
+step(6, st(301, 2))
+""")
+    assert [s[2] for s in steps] == ["teleport", "-", "-", "-", "-", "-", "teleport"]
+    assert [s[3] for s in steps][:1] == ["false"]
+    assert [(s[1], s[5]) for s in stance] == [("0", "0"), ("6", "0")]
+
+
+@needs_lua
+def test_stance_threshold_by_scrolls_held_and_reserve(tmp_path):
+    steps, _, _ = _stance_run(tmp_path, """
+LADDER_RISK_STANCE, LADDER_RISK_STANCE_COOLDOWN = "teleport", 20
+LADDER_RISK_STANCE_THRESHOLD = { 0.05, 0.045, 0.04 }   -- with 1, 2, 3+ scrolls; p is 0.047
+scrolls = 9
+step(0, st(100, 1))     -- the last scroll needs 0.05
+step(1, st(200, 2))     -- two need 0.045
+step(2, st(300, 7))     -- 3+ need 0.04
+LADDER_RISK_STANCE_RESERVE = 1
+step(3, st(400, 2))     -- one above the reserve: 0.05
+step(4, st(500, 3))     -- two above it: 0.045
+step(5, st(600, 1))     -- only the reserve
+""")
+    assert [s[2] for s in steps] == ["-", "teleport", "teleport", "-", "teleport", "-"]
+
+
+@needs_lua
+def test_stance_variants_switch_the_stance_on(tmp_path):
+    base = _policy(tmp_path, TRIVIAL, threshold=0.01).read_text()
+    for name, stance in export_lua.STANCES.items():
+        text = export_lua.stance_policy(base, name, stance)
+        assert text.endswith(base) and not [x for x in text.splitlines() if export_lua.rc_block_ends(x)]
+        path = tmp_path / export_lua.stance_name(name)
+        path.write_text(text)
+        _, _, lines = _stance_run(tmp_path, """
+print("CFG", LADDER_RISK_STANCE, type(LADDER_RISK_STANCE_THRESHOLD), LADDER_RISK_STANCE_COOLDOWN,
+      LADDER_RISK_STANCE_RESERVE)
+""", policy=path)
+        cfg = [x for x in lines if x[0] == "CFG"]
+        want_type = "table" if isinstance(stance["threshold"], (list, tuple)) else "number"
+        assert cfg == [["CFG", "teleport", want_type, str(stance["cooldown"]), str(stance["reserve"])]]
+
+
 @needs_lua
 def test_exported_model_matches_python_on_a_logged_game(tmp_path):
     """The real model on a real qw game's QWS lines (skipped without runs/risk/N50-zk and runs/qw/zk-train-400)."""

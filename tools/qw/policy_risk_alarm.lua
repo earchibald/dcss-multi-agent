@@ -1,10 +1,11 @@
--- Death-risk alarm for qw: a template for tools/qw/run.py --policy. It takes no action.
+-- Death-risk alarm for qw: a template for tools/qw/run.py --policy. Unless its stance is
+-- switched on (LADDER_RISK_STANCE, at the end), it takes no action.
 --
 -- At every qw decision it computes the chance that the character dies within N game turns
 -- (docs/risk-model.md), from the state qw decided from, writes it to stderr as a QWRISK line
--- (in the game's state log) and keeps it in ladder_risk for a later stance rule. ladder_choose
--- returns only the rc's fixed overrides (LADDER_OVERRIDES), exactly as ladder.lua's default
--- does, so qw plays as it would without this file.
+-- (in the game's state log) and keeps it in ladder_risk for the stance rule. With the stance off,
+-- ladder_choose returns only the rc's fixed overrides (LADDER_OVERRIDES), exactly as ladder.lua's
+-- default does, so qw plays as it would without this file.
 --
 -- tools/risk/export_lua.py fills in the model: it replaces the RISK_MODEL marker line below with
 -- the trees of a LightGBM model and the tables of tools/risk/dataset.py, and writes a runnable
@@ -23,6 +24,9 @@
 -- ladder_risk.decision, ladder_risk.threshold. Set ladder_risk.threshold to move the alarm.
 -- Cost: about 13,000 Lua VM instructions (0.05 ms) a decision; crawl's Lua throttle is off
 -- outside DGAMELAUNCH builds, and would allow 50,000 between sleeps.
+--
+-- The stance (the end of this file) is off unless LADDER_RISK_STANCE is set: then the policy acts
+-- on the probability (see there). export_lua.py --stance writes variants that set it.
 -- (The rc ends a Lua block at a line whose first '>' is its last character: no line here may.)
 
 -- @RISK_MODEL@
@@ -523,6 +527,94 @@ do
         return p
     end
 
+    ---------------------------------------
+    -- The stance: off unless LADDER_RISK_STANCE is set. With it off, ladder_choose below returns
+    -- exactly what it returns without this section.
+    --
+    -- LADDER_RISK_STANCE = "teleport" forces ladder.lua's teleport primitive, qw's own
+    -- `can_teleport() and teleport()` (read a scroll of teleportation, with qw's checks), through
+    -- the override mechanism fork runs use, at a decision where all of these hold:
+    --   - p >= the stance threshold for the scrolls held. LADDER_RISK_STANCE_THRESHOLD is a number,
+    --     or a list { with 1 scroll, with 2, with 3 or more } (counted above the reserve); unset,
+    --     it is the alarm threshold.
+    --   - the state says a scroll can be read now: can_teleport, not already teleporting, and more
+    --     than LADDER_RISK_STANCE_RESERVE (default 0) scrolls of teleportation held.
+    --   - at least LADDER_RISK_STANCE_COOLDOWN game turns (default 20, at least 1) have passed since
+    --     the stance last fired, whether or not that read happened.
+    -- A fixed override for the decision (LADDER_OVERRIDES) comes first. If the primitive cannot
+    -- act, qw's own cascade decides that decision, as for any forced spec.
+    -- Each firing writes, once the primitive has run:
+    --   QWSTANCE decision turn probability action acted(0/1)
+
+    local stance = { last_turn = nil, fired = 0, acted = 0, wrapped = false }
+    ladder_risk.stance = stance
+
+    local function stance_threshold(n)
+        local t = LADDER_RISK_STANCE_THRESHOLD
+        if type(t) == "table" then
+            return t[math.max(1, math.min(n, #t))]
+        end
+        return t or ladder_risk.threshold
+    end
+
+    local function stance_log(s, acted)
+        crawl.stderr(string.format("QWSTANCE\t%d\t%s\t%.17g\t%s\t%s", s.decision, tostring(s.turn),
+            s.p, s.action, acted))
+    end
+
+    -- Wrap the primitive once, so that a firing is logged with what it did; any other spec
+    -- (a fork's override) passes through unchanged.
+    local function stance_wrap(action)
+        if stance.wrapped or type(ladder_primitives) ~= "table"
+                or type(ladder_primitives[action]) ~= "function" then
+            return stance.wrapped
+        end
+        local prim = ladder_primitives[action]
+        ladder_primitives[action] = function(spec, decision)
+            local acted = prim(spec, decision)
+            if type(spec) == "table" and spec.stance then
+                if acted then
+                    stance.acted = stance.acted + 1
+                end
+                stance_log(spec.stance, acted and 1 or 0)
+            end
+            return acted
+        end
+        stance.wrapped = true
+        return true
+    end
+
+    function ladder_risk.stance_choose(decision, state)
+        local action = LADDER_RISK_STANCE
+        if action ~= "teleport" then
+            return nil
+        end
+        local R = ladder_risk
+        if R.p == nil or R.decision ~= decision then
+            return nil
+        end
+        local reserve = LADDER_RISK_STANCE_RESERVE or 0
+        local n = num(state.n_teleport)
+        if n <= reserve or num(state.can_teleport) <= 0 or num(state.teleporting) > 0 then
+            return nil
+        end
+        if R.p < stance_threshold(n - reserve) then
+            return nil
+        end
+        local turn = num(state.turn)
+        local cooldown = math.max(LADDER_RISK_STANCE_COOLDOWN or 20, 1)
+        if stance.last_turn and turn - stance.last_turn < cooldown then
+            return nil
+        end
+        stance.last_turn = turn
+        stance.fired = stance.fired + 1
+        local s = { decision = decision, turn = turn, p = R.p, action = action }
+        if not stance_wrap(action) then
+            stance_log(s, "-")   -- no ladder.lua primitives to wrap (outside qw)
+        end
+        return { force = action, n = 1, stance = s }
+    end
+
     function ladder_choose(decision, state)
         local fixed = LADDER_OVERRIDES and LADDER_OVERRIDES[decision]
         if state then
@@ -531,6 +623,14 @@ do
                 ladder_risk.p, ladder_risk.alarm_on = nil, false
                 crawl.stderr("QWRISKERR\t" .. tostring(decision) .. "\t"
                     .. tostring(err):gsub("[\t\n]", " "))
+            elseif LADDER_RISK_STANCE and not fixed then
+                local ok2, spec = pcall(ladder_risk.stance_choose, decision, state)
+                if not ok2 then
+                    crawl.stderr("QWSTANCEERR\t" .. tostring(decision) .. "\t"
+                        .. tostring(spec):gsub("[\t\n]", " "))
+                elseif spec then
+                    return spec
+                end
             end
         end
         return fixed

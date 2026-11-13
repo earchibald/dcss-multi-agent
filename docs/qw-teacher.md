@@ -328,7 +328,7 @@ enters the Lair), and which fights it takes at all.
 | `tools/qw/learn.py` | Scores forks against controls, fits one row of weights per option, writes a Lua policy |
 | `tools/qw/compare.py` | Compares runs on the same seeds |
 | `tools/qw/policy_hand.lua`, `policy_example.lua` | Hand-written policies |
-| `tools/qw/policy_risk_alarm.lua` | The death-risk alarm (docs/risk-model.md) computed every decision and logged, no action; `tools/risk/export_lua.py` fills in the model |
+| `tools/qw/policy_risk_alarm.lua` | The death-risk alarm (docs/risk-model.md) computed every decision and logged, no action; `tools/risk/export_lua.py` fills in the model. An opt-in stance (`LADDER_RISK_STANCE`, `export_lua.py --stance`) forces qw's `teleport` on it |
 | `models/qw-policy-r1.lua` | The round-1 learned policy (worse than qw: see above) |
 
 Forceable primitives: `berserk`, `trogs_hand`, `brothers_in_arms`, `teleport`, `heal_wounds`,

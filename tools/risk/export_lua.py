@@ -2,6 +2,8 @@
 
     uv run --group risk python tools/risk/export_lua.py export runs/risk/N50-zk
         # -> runs/risk/N50-zk/policy_risk_alarm.lua, for tools/qw/run.py --policy
+    uv run --group risk python tools/risk/export_lua.py export runs/risk/N50-zk --stance all
+        # also policy_risk_stance_<name>.lua for each of STANCES: the same policy, stance switched on
     uv run --group risk python tools/risk/export_lua.py parity runs/qw/NAME --model runs/risk/N50-zk
         # the QWRISK probabilities a run logged against the model's own, from the same QWS lines
 
@@ -38,6 +40,22 @@ TEMPLATE = REPO / "tools" / "qw" / "policy_risk_alarm.lua"
 MARKER = "-- @RISK_MODEL@"
 POLICY_NAME = "policy_risk_alarm.lua"
 K_ZERO = float(np.float32(1e-35))   # LightGBM's kZeroThreshold
+
+# Stance variants (the template's stance section; docs/risk-model.md "A stance: teleport on the alarm").
+# threshold: a number, or (with 1 scroll, with 2, with 3 or more) above the reserve; cooldown in game turns.
+# Chosen on zk-train-400 (training seeds 100000-100399) by replaying the logged games.
+STANCES = {
+    "t15": {"action": "teleport", "threshold": 0.15, "cooldown": 20, "reserve": 0,
+            "note": "read teleportation at p >= 0.15, at most once in 20 turns"},
+    "tier": {"action": "teleport", "threshold": (0.25, 0.15, 0.10), "cooldown": 20, "reserve": 0,
+             "note": "p >= 0.25 with the last scroll, 0.15 with two, 0.10 with three or more; once in 20 turns"},
+    "t10": {"action": "teleport", "threshold": 0.10, "cooldown": 20, "reserve": 0,
+            "note": "read teleportation at p >= 0.10, at most once in 20 turns"},
+}
+
+
+def stance_name(name: str) -> str:
+    return f"policy_risk_stance_{name}.lua"
 
 
 # ---------------------------------------------------------------------------------------------------
@@ -231,6 +249,30 @@ def policy_lua(model: str, template: Path = TEMPLATE) -> str:
     return out
 
 
+def stance_header(name: str, stance: dict) -> str:
+    """The Lua lines that switch a policy's stance on: the globals the template's stance section reads."""
+    if stance["action"] != "teleport":
+        raise SystemExit(f"unknown stance action {stance['action']!r}")
+    t = stance["threshold"]
+    t = "{ " + ", ".join(lua_num(float(x)) for x in t) + " }" if isinstance(t, (list, tuple)) else lua_num(float(t))
+    return "\n".join([
+        f"-- stance {name} (tools/risk/export_lua.py STANCES): {stance['note']}",
+        f"LADDER_RISK_STANCE = {lua_str(stance['action'])}",
+        f"LADDER_RISK_STANCE_THRESHOLD = {t}",
+        f"LADDER_RISK_STANCE_COOLDOWN = {int(stance['cooldown'])}",
+        f"LADDER_RISK_STANCE_RESERVE = {int(stance['reserve'])}",
+        "",
+    ])
+
+
+def stance_policy(policy: str, name: str, stance: dict) -> str:
+    out = stance_header(name, stance) + policy
+    bad = [line for line in out.splitlines() if rc_block_ends(line)]
+    if bad:
+        raise SystemExit(f"a line would end the rc's Lua block: {bad[0]!r}")
+    return out
+
+
 def rc_block_ends(line: str) -> bool:
     """Crawl's rc reader ends a `<` Lua block at a line whose first '>' is its last character."""
     s = line.strip()
@@ -270,11 +312,19 @@ def cmd_export(args) -> None:
         if (model_dir / "lgbm.txt").resolve().is_relative_to(REPO) else str(model_dir / "lgbm.txt")
     model = model_lua(forest, threshold=threshold, horizon=int(info.get("horizon", args.horizon)), source=source)
     out = args.out or model_dir / POLICY_NAME
-    out.write_text(policy_lua(model), encoding="utf-8")
+    policy = policy_lua(model)
+    out.write_text(policy, encoding="utf-8")
     full = sum(count_nodes(t) for t in forest["trees"])
     kept = sum(count_nodes(prune(t, qw_constants())) for t in forest["trees"])
     print(f"wrote {out} ({out.stat().st_size // 1024} KB): {len(forest['trees'])} trees, "
           f"{kept} of {full} splits kept for qw rows, threshold {threshold:.6g}")
+    names = [] if not args.stance else list(STANCES) if args.stance == "all" else args.stance.split(",")
+    for name in names:
+        if name not in STANCES:
+            raise SystemExit(f"unknown stance {name!r}: one of {', '.join(STANCES)}")
+        path = out.parent / stance_name(name)
+        path.write_text(stance_policy(policy, name, STANCES[name]), encoding="utf-8")
+        print(f"wrote {path}: stance {name}, {STANCES[name]['note']}")
 
 
 # ---------------------------------------------------------------------------------------------------
@@ -363,6 +413,8 @@ def main() -> None:
                    help="alarm threshold (default: qw's 5%%-false-alarm threshold from early_val_lgbm_fpr0.05.json)")
     e.add_argument("--horizon", type=int, default=50, help="if the directory has no train.json")
     e.add_argument("--out", type=Path, default=None)
+    e.add_argument("--stance", default=None,
+                   help=f"also write stance variants next to it: 'all' or names from {', '.join(STANCES)}")
     p = sub.add_parser("parity", help="a run's logged QWRISK probabilities against Python's")
     p.add_argument("run", type=Path, help="runs/qw/NAME (played with the exported policy and --state-log)")
     p.add_argument("--model", type=Path, required=True, help="the model directory the policy was exported from")

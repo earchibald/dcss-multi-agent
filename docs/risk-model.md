@@ -2,7 +2,8 @@
 
 A first model of one number: the chance that the character dies within the next N game turns, given
 one logged moment. It was built offline on existing logs. qw can now compute it at every decision
-(see [In qw](#in-qw-the-lua-export)), but nothing acts on it yet. Code in `tools/risk/`, data and
+(see [In qw](#in-qw-the-lua-export)), and an opt-in stance reads a scroll of teleportation on it
+([A stance](#a-stance-teleport-on-the-alarm); not yet measured in whole games). Code in `tools/risk/`, data and
 models in `runs/risk/` (ignored by git). Measured 2026-11-12.
 
 **In short:** at N = 50 turns, gradient-boosted trees reach AUROC 0.86 on the brain's held-out games and
@@ -281,6 +282,105 @@ Log lines: `QWRISK decision turn p raw alarm`, `QWRISKF decision features…` wi
 `LADDER_RISK_FEATURES = true`, and `QWRISKERR` if the computation fails (qw carries on). The
 probability is "risk under qw as it plays now": once a stance rule acts on the alarm, the future the
 label measured changes (see Limits).
+
+## A stance: teleport on the alarm
+
+Fork replays of deaths in `zk-train-400` forced qw's `teleport` at the first decision of the final
+alarm episode (p ≥ 0.0365), where a scroll could be read. Against reroll controls, survival 200 turns
+past the original death rose by +0.23 ± 0.04 (94 moments; +0.24 ± 0.07 on validation seeds) and at
+1,000 turns by +0.16 ± 0.05. On 31 false alarms the teleport cost nothing in survival. Live, a rule
+cannot know which episode is the last one, and scrolls are few, so the rule was chosen by replaying
+the logged games first.
+
+**Episodes and scrolls.** All 400 games of `zk-train-400` (training seeds 100000–100399), with the
+`N50-zk` probability from their `QWS` lines. "fit" are the 331 games on seeds the trees were trained
+on (probabilities in sample); "val" are the 69 on validation seeds (out of sample). An episode starts
+at an alarmed decision with no alarmed decision in the 20 turns before it.
+
+| Threshold | Episodes a game, fit / val | Per 1,000 turns, val | Scroll readable at the start, val | Death within 50 turns, fit / val | Deaths with an episode start, scroll readable, 10–200 turns before, fit / val |
+| --- | --- | --- | --- | --- | --- |
+| 0.0365 | 15.3 / 18.3 | 1.40 | 59% | 5.2% / 5.1% | 65% / 59% |
+| 0.06 | 9.8 / 11.4 | 0.87 | 59% | 8.6% / 8.7% | 59% / 52% |
+| 0.10 | 6.3 / 7.3 | 0.56 | 55% | 14.0% / 13.6% | 55% / 41% |
+| 0.15 | 4.4 / 5.3 | 0.41 | 52% | 20.6% / 18.4% | 50% / 34% |
+| 0.25 | 2.7 / 3.3 | 0.25 | 45% | 33.3% / 28.8% | 41% / 18% |
+
+Without the 20-turn merge the counts nearly double (29 episodes a game at 0.0365, fit); a 50-turn
+merge takes off about 9% more. A game finds 4.6 scrolls of teleportation (0.35 per 1,000 turns; 74% of
+games ever hold one), qw reads 1.8 itself, and a game ends holding 2.9 on average. Of the 388 deaths,
+67% have a decision in their final episode where a scroll could be read, and in 36% qw read one
+itself during it.
+
+**Rules, replayed.** The logged game is kept and the rule's reads are taken off the scroll count; a
+read of qw's own within 30 decisions after a firing counts as replaced by it, and one that finds no
+scroll left counts as starved. The rule fires at any decision where p is over its threshold, a
+scroll can be read (`can_teleport`, not already teleporting) and 20 turns have passed since it last
+fired. fit / val:
+
+| Rule | Firings a game | Death within 50 turns of a firing | Extra scrolls read a game | qw reads starved a game | Deaths with a firing 10–200 turns before | Deaths with a firing in the final episode |
+| --- | --- | --- | --- | --- | --- | --- |
+| p ≥ 0.0365 | 3.68 / 4.16 | 5% / 7% | 3.28 / 3.51 | 1.23 / 1.20 | 19% / 28% | 12% / 9% |
+| p ≥ 0.06 | 3.44 / 3.65 | 10% / 11% | 2.79 / 2.83 | 0.89 / 0.94 | 31% / 29% | 23% / 26% |
+| **`t10`**: p ≥ 0.10 | 2.90 / 2.84 | 19% / 17% | 2.06 / 2.00 | 0.49 / 0.70 | 39% / 32% | 40% / 35% |
+| **`t15`**: p ≥ 0.15 | 2.29 / 2.33 | 29% / 21% | 1.46 / 1.54 | 0.31 / 0.46 | 42% / 32% | 48% / 35% |
+| **`tier`**: 0.25 / 0.15 / 0.10 with 1 / 2 / 3+ scrolls | 2.65 / 2.62 | 27% / 20% | 1.74 / 1.75 | 0.26 / 0.48 | 43% / 29% | 52% / 44% |
+| p ≥ 0.25 | 1.62 / 1.58 | 43% / 28% | 0.94 / 0.99 | 0.15 / 0.23 | 40% / 19% | 53% / 32% |
+| p ≥ 0.15, keep one scroll | 1.83 / 1.88 | 30% / 22% | 1.08 / 1.16 | 0.14 / 0.22 | 35% / 28% | 39% / 29% |
+
+- At the alarm's own threshold the rule reads three or four scrolls a game on false alarms, leaves qw
+  without one for two of every three of its own reads, and has a scroll in only 9–12% of final
+  episodes. Higher thresholds keep the scrolls for the end.
+- The lead shrinks as the threshold rises. The first firing in the final episode comes a median of
+  23 / 18 turns before the death for `t10` (fit / val), 20 / 11 for `t15`, 19.5 / 8 for `tier` and
+  15 / 7.5 for p ≥ 0.25; the final episode itself starts 21 / 14 turns before. A scroll takes 3–5 turns to act, so a late
+  firing is worth little; the forks say nothing about firings later in the episode.
+- Cheap extra conditions did nothing: requiring hostiles in view, or danger in view and not standing
+  on an upstair, changed coverage by 1–3 points (at p ≥ 0.10 enemies are nearly always in view).
+  Firing only at an episode's first decision, or once per episode, was no better than any decision
+  with a cooldown. Cooldowns of 20, 50 and 100 turns differ little. Keeping one scroll in reserve
+  halves the starved reads and loses 6–9 points of final episodes.
+- The candidates were chosen on the fit games: `t15` (the middle of the threshold range), `tier`
+  (most final episodes covered for its spend) and `t10` (the most lead). On the validation games
+  (68 deaths, a small sample) `tier` covers the most final episodes (44% against 35% and 35%) and
+  `t10` keeps the most lead.
+- The replay is first order. After a real teleport the game changes, and the starved count assumes
+  qw's later reads would have happened anyway.
+
+**In qw.** The stance is a separate section at the end of `tools/qw/policy_risk_alarm.lua`, off
+unless `LADDER_RISK_STANCE` is set. With it off, the policy's output is byte-identical to the
+alarm-only policy exported before it (checked offline on four logged games: every `QWRISK` line and
+every returned spec). With `LADDER_RISK_STANCE = "teleport"`, `ladder_choose` returns
+`{ force = "teleport", n = 1 }`, the spec fork runs use, so ladder.lua runs its `teleport` primitive,
+qw's own `can_teleport() and teleport()`: if qw cannot read, nothing is read and qw's cascade decides.
+The settings are `LADDER_RISK_STANCE_THRESHOLD` (a number, or `{ 1 scroll, 2, 3+ }`; default the alarm
+threshold), `LADDER_RISK_STANCE_COOLDOWN` (game turns, default 20, at least 1, counted from every
+firing, so a read that fails cannot repeat at every decision) and `LADDER_RISK_STANCE_RESERVE`
+(default 0). A fixed override for the decision comes first. Each firing logs
+`QWSTANCE decision turn p action acted` once the primitive has run.
+
+```sh
+uv run --group risk python tools/risk/export_lua.py export runs/risk/N50-zk --stance all
+    # -> policy_risk_alarm.lua and policy_risk_stance_{t15,tier,t10}.lua (export_lua.STANCES)
+caffeinate -i uv run python tools/qw/run.py --seeds 100500-100699 --no-build --lib-dir /data/qw/lib-zk \
+    --lua runs/qw/combo1-lua/MiBe_mace.lua --time-limit 3600 --workers 9 --state-log \
+    --policy runs/risk/N50-zk/policy_risk_stance_t15.lua --name stance-live-t15
+uv run python tools/qw/compare.py pace-base stance-live-t15
+```
+
+**Smoke test** (6 games, training seeds 100430–100435, two per variant: `runs/qw/stance-smoke-tier`,
+`-t15`, `-t10`). 39 firings, all 39 acted: each logged `force:teleport` as the plan, the scroll
+count fell by one at the next decision and `teleporting` was set. No firing without a scroll, the
+shortest gap between firings was 27 turns, and there were no `QWSTANCEERR`, `QWRISKERR`, nudges,
+stalls or qw errors. In game, the re-exported policy's probabilities still match LightGBM's
+(10,072 of 10,080 identical on the `tier` run, the rest within 4e-18). Several firings came at full
+HP early on (D:2 at 26/26 and at 31/31): the false alarms the replay counted. One deep game
+(100431, Vaults:1, XL 18) fired 15 times and qw never read a teleport scroll itself. These games
+only check the mechanics. They are not a measure of the rule.
+
+`tests/test_risk.py` checks with qw stubbed: no action with the stance off, the read through qw's
+primitive, the cooldown, no firing without a readable scroll or while teleporting, a fixed override
+first, a read qw refuses (logged with acted 0, no repeat in the same turn), the thresholds by scrolls
+held and the reserve, and that each exported variant switches the stance on.
 
 ## Leakage checks
 
