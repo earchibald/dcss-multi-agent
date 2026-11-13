@@ -32,8 +32,11 @@ Plain stdlib. Builds and deploys qw to --lib-dir first (tools/qw/build.py) unles
 from __future__ import annotations
 
 import argparse
+import collections
+import fcntl
 import gzip
 import json
+import os
 import queue
 import re
 import statistics
@@ -54,6 +57,8 @@ CONTAINER = qwbuild.CONTAINER
 LIB_DIR = qwbuild.LIB_DIR
 RUNS_DIR = "/data/qw/runs"
 CRAWL = "/crawl/crawl"
+LIVE_EVERY_S = 5  # how often live.json is rewritten
+LIVE_RECENT = 200  # decisions kept per game in live.json
 MAX_ERRORS = 500  # QWERR lines before a game is treated as stuck in an error loop
 PRIMITIVES = {"reroll", "reroll2", "berserk", "trogs_hand", "brothers_in_arms", "teleport", "heal_wounds",
               "flee", "stairs_up", "rest", "attack", "retreat_step", "throw",
@@ -219,6 +224,9 @@ class Runner:
         self.lua = args.lua.read_text(encoding="utf-8") if args.lua else None
         self.lock = threading.Lock()
         self.done = 0
+        self.total = 0
+        self.live: dict[int, dict] = {}  # worker -> the game it is playing now
+        self.finished = False
 
     def sh(self, script: str, check: bool = False):
         return in_container(self.container, "sh", "-c", script, check=check)
@@ -328,12 +336,20 @@ class Runner:
         else:
             log = open(gdir / "stderr.log", "w", encoding="utf-8", buffering=1)
         t0 = time.time()
+        lv = {"worker": w, "seed": seed, "tag": tag, "started": t0, "last_line": t0,
+              "turn": None, "turn_changed": t0, "place": None, "xl": None, "hp": None,
+              "mhp": None, "turns_on_level": None, "decisions": 0, "in_decision_since": None,
+              "samples": collections.deque(maxlen=400 // LIVE_EVERY_S),
+              "recent": collections.deque(maxlen=LIVE_RECENT)}
+        with self.lock:
+            self.live[w] = lv
         with log:
             p = subprocess.Popen(self.crawl_cmd(w, seed, name), stdout=subprocess.DEVNULL,
                                  stderr=subprocess.PIPE, text=True, errors="replace")
             for line in p.stderr:
                 log.write(line)
                 tagname, _, rest = line.partition("\t")
+                lv["last_line"] = time.time()
                 if tagname in counts:
                     counts[tagname] += 1
                 if tagname == "QWERR" and first_err is None:
@@ -348,11 +364,26 @@ class Runner:
                     at = rest.find("\txl=")
                     if at >= 0:
                         last_xl = int(rest[at + 4:rest.index("\t", at + 1)])
+                    lv["xl"] = last_xl
+                    lv["in_decision_since"] = lv["last_line"]
+                    at = rest.find("\tturns_on_level=")
+                    if at >= 0:
+                        lv["turns_on_level"] = int(rest[at + 16:rest.index("\t", at + 1)])
                 elif tagname == "QWACT" and stop_turn and not killed:
                     # A fork only needs playing to its horizon: alive there is the answer.
                     if int(rest.split("\t", 2)[1]) >= stop_turn:
                         killed = "stopped"
                         self.kill_game(w, name)
+                if tagname == "QWACT":
+                    # QWACT <decision> <turn> <place> <hp> <mhp> <plan>
+                    a = rest.rstrip("\n").split("\t")
+                    if len(a) >= 6:
+                        turn = int(a[1])
+                        if turn != lv["turn"]:
+                            lv["turn"], lv["turn_changed"] = turn, lv["last_line"]
+                        lv.update(place=a[2], hp=int(a[3]), mhp=int(a[4]),
+                                  decisions=lv["decisions"] + 1, in_decision_since=None)
+                        lv["recent"].append([turn, a[2], int(a[3]), a[5]])
                 if counts["QWERR"] > MAX_ERRORS and not killed:
                     killed = "error_loop"
                     self.kill_game(w, name)
@@ -419,23 +450,83 @@ class Runner:
             self.clear_game(w, name)
         return row
 
+    def take_slot(self):
+        """Hold one of --workers lock files in --slots while a game plays, so several runs
+        started together never play more than --workers games between them."""
+        if not self.args.slots:
+            return None
+        self.args.slots.mkdir(parents=True, exist_ok=True)
+        while True:
+            for k in range(1, self.args.workers + 1):
+                fh = open(self.args.slots / f"slot-{k}", "w")
+                try:
+                    fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    return fh
+                except BlockingIOError:
+                    fh.close()
+            time.sleep(1)
+
+    def write_live(self) -> None:
+        """live.json: what each worker's game is doing now (tools/qw/peek.py reads it)."""
+        now = time.time()
+        games = []
+        for w, lv in sorted(self.live.items()):
+            lv["samples"].append((now, lv["turn"]))
+            g = {k: v for k, v in lv.items() if k not in ("samples", "recent")}
+            for span in (60, 300):
+                old = [t for at, t in lv["samples"] if at >= now - span - 3]
+                g[f"turns_{span}s"] = (lv["turn"] or 0) - (old[0] or 0) if old else None
+            g["recent"] = list(lv["recent"])
+            games.append(g)
+        doc = {"name": self.args.name, "updated": now, "finished": self.finished,
+               "total": self.total, "done": self.done, "time_limit_s": self.args.time_limit,
+               "games": games}
+        tmp = self.out / "live.json.tmp"
+        tmp.write_text(json.dumps(doc), encoding="utf-8")
+        os.replace(tmp, self.out / "live.json")
+
+    def live_loop(self) -> None:
+        while not self.finished:
+            try:
+                with self.lock:
+                    self.write_live()
+            except Exception as e:  # the status file must never stop a run
+                print(f"live.json: {e!r}", file=sys.stderr, flush=True)
+            time.sleep(LIVE_EVERY_S)
+
     def run(self, jobs: list[dict]) -> list[dict]:
         q: queue.Queue = queue.Queue()
         for j in jobs:
             q.put(j)
         rows: list[dict] = []
+        self.total = len(jobs)
+        drained = self.out / "drained"
+        drained.unlink(missing_ok=True)
+        threading.Thread(target=self.live_loop, daemon=True).start()
 
         def work(w: int) -> None:
             while True:
+                slot = self.take_slot()
                 try:
                     job = q.get_nowait()
                 except queue.Empty:
+                    if slot:
+                        slot.close()
+                    drained.touch()
                     return
+                if q.empty():
+                    # Every game is handed out: a later run may start on the free workers.
+                    drained.touch()
                 try:
                     row = self.play(w, job)
                 except Exception as e:  # keep the batch going; record the failure
                     row = {"tag": job["tag"], "seed": job["seed"], "rep": job.get("rep", 1),
                            "worker": w, "status": "runner_error", "error": repr(e)}
+                finally:
+                    with self.lock:
+                        self.live.pop(w, None)
+                    if slot:
+                        slot.close()
                 with self.lock:
                     rows.append(row)
                     self.done += 1
@@ -450,6 +541,9 @@ class Runner:
             t.start()
         for t in threads:
             t.join()
+        self.finished = True
+        with self.lock:
+            self.write_live()
         order = {j["tag"]: i for i, j in enumerate(jobs)}
         return sorted(rows, key=lambda r: order[r["tag"]])
 
@@ -573,6 +667,9 @@ def main() -> None:
     ap.add_argument("--build-dir", type=Path, default=REPO / "runs/qw/build",
                     help="local build output")
     ap.add_argument("--container", default=CONTAINER)
+    ap.add_argument("--slots", type=Path, default=None,
+                    help="directory of lock files shared with other runs: together they play "
+                         "at most --workers games at once (tools/qw/chain.py sets it)")
     args = ap.parse_args()
 
     args.name = args.name or datetime.now().strftime("qw-%Y%m%d-%H%M%S")
