@@ -55,7 +55,22 @@ STANCES = {
             "note": "read teleportation at p >= 0.07, at most once in 20 turns"},
     "t05": {"action": "teleport", "threshold": 0.05, "cooldown": 20, "reserve": 0,
             "note": "read teleportation at p >= 0.05, at most once in 20 turns"},
+    # t10 with the template's options (docs/risk-model.md "More stance options"); optional keys:
+    # after_landing (turns of grace after a teleport lands), berserk (True or a probability),
+    # fallback (names tried with no scroll held).
+    "t10a": {"action": "teleport", "threshold": 0.10, "cooldown": 20, "reserve": 0, "after_landing": 0,
+             "note": "t10, and read again as soon as a teleport has landed"},
+    "t10ab": {"action": "teleport", "threshold": 0.10, "cooldown": 20, "reserve": 0, "after_landing": 0,
+              "berserk": 0.05,
+              "note": "t10a, and read instead of qw's berserk at p >= 0.05"},
+    "t10abs": {"action": "teleport", "threshold": 0.10, "cooldown": 20, "reserve": 0, "after_landing": 0,
+               "berserk": 0.05, "fallback": ("stairs",),
+               "note": "t10ab, and with no scroll make for an upstair within 10 squares and take it"},
+    "t10abu": {"action": "teleport", "threshold": 0.10, "cooldown": 20, "reserve": 0, "after_landing": 0,
+               "berserk": 0.05, "fallback": ("unknown_scroll",),
+               "note": "t10ab, and with no scroll read an unidentified scroll"},
 }
+FALLBACKS = ("stairs", "unknown_scroll")
 
 
 def stance_name(name: str) -> str:
@@ -259,14 +274,25 @@ def stance_header(name: str, stance: dict) -> str:
         raise SystemExit(f"unknown stance action {stance['action']!r}")
     t = stance["threshold"]
     t = "{ " + ", ".join(lua_num(float(x)) for x in t) + " }" if isinstance(t, (list, tuple)) else lua_num(float(t))
-    return "\n".join([
+    lines = [
         f"-- stance {name} (tools/risk/export_lua.py STANCES): {stance['note']}",
         f"LADDER_RISK_STANCE = {lua_str(stance['action'])}",
         f"LADDER_RISK_STANCE_THRESHOLD = {t}",
         f"LADDER_RISK_STANCE_COOLDOWN = {int(stance['cooldown'])}",
         f"LADDER_RISK_STANCE_RESERVE = {int(stance['reserve'])}",
-        "",
-    ])
+    ]
+    # the options: a line only for those set, so a stance without them reads exactly as before
+    if stance.get("after_landing") is not None:
+        lines.append(f"LADDER_RISK_STANCE_AFTER_LANDING = {int(stance['after_landing'])}")
+    if stance.get("berserk") is not None:
+        b = stance["berserk"]
+        lines.append(f"LADDER_RISK_STANCE_BERSERK = {'true' if b is True else lua_num(float(b))}")
+    if stance.get("fallback"):
+        bad = [f for f in stance["fallback"] if f not in FALLBACKS]
+        if bad:
+            raise SystemExit(f"unknown fallback {bad[0]!r}: one of {', '.join(FALLBACKS)}")
+        lines.append(f"LADDER_RISK_STANCE_FALLBACK = {lua_value(list(stance['fallback']))}")
+    return "\n".join(lines + [""])
 
 
 def stance_policy(policy: str, name: str, stance: dict) -> str:

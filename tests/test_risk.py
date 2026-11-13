@@ -395,11 +395,206 @@ def test_stance_variants_switch_the_stance_on(tmp_path):
         path.write_text(text)
         _, _, lines = _stance_run(tmp_path, """
 print("CFG", LADDER_RISK_STANCE, type(LADDER_RISK_STANCE_THRESHOLD), LADDER_RISK_STANCE_COOLDOWN,
-      LADDER_RISK_STANCE_RESERVE)
+      LADDER_RISK_STANCE_RESERVE, tostring(LADDER_RISK_STANCE_AFTER_LANDING), tostring(LADDER_RISK_STANCE_BERSERK),
+      LADDER_RISK_STANCE_FALLBACK and table.concat(LADDER_RISK_STANCE_FALLBACK, ",") or "nil")
 """, policy=path)
         cfg = [x for x in lines if x[0] == "CFG"]
         want_type = "table" if isinstance(stance["threshold"], (list, tuple)) else "number"
-        assert cfg == [["CFG", "teleport", want_type, str(stance["cooldown"]), str(stance["reserve"])]]
+        opt = [str(stance.get("after_landing")).replace("None", "nil"), str(stance.get("berserk")).replace("None", "nil"),
+               ",".join(stance.get("fallback", ())) or "nil"]
+        assert cfg == [["CFG", "teleport", want_type, str(stance["cooldown"]), str(stance["reserve"])] + opt]
+
+
+# The variants live runs have used: their headers, and so their policies, must not change.
+OLD_HEADERS = {
+    "t15": ('"teleport"', "0.15", "read teleportation at p >= 0.15, at most once in 20 turns"),
+    "tier": ('"teleport"', "{ 0.25, 0.15, 0.1 }",
+             "p >= 0.25 with the last scroll, 0.15 with two, 0.10 with three or more; once in 20 turns"),
+    "t10": ('"teleport"', "0.1", "read teleportation at p >= 0.10, at most once in 20 turns"),
+    "t07": ('"teleport"', "0.07", "read teleportation at p >= 0.07, at most once in 20 turns"),
+    "t05": ('"teleport"', "0.05", "read teleportation at p >= 0.05, at most once in 20 turns"),
+}
+
+
+def test_old_stance_variants_are_unchanged():
+    for name, (action, threshold, note) in OLD_HEADERS.items():
+        assert export_lua.stance_header(name, export_lua.STANCES[name]) == "\n".join([
+            f"-- stance {name} (tools/risk/export_lua.py STANCES): {note}",
+            f"LADDER_RISK_STANCE = {action}",
+            f"LADDER_RISK_STANCE_THRESHOLD = {threshold}",
+            "LADDER_RISK_STANCE_COOLDOWN = 20",
+            "LADDER_RISK_STANCE_RESERVE = 0",
+            ""])
+
+
+# ---------------------------------------------------------------------------------------------------
+# the stance's options (after landing, read before berserk, the fallbacks)
+
+# more of qw, stubbed: the plans the options use, and a step() that shows the spec's veto
+QW_MORE = """
+wants_berserk, unid, moves, climbs, unid_reads = false, 1, 0, 0, 0
+function want_to_berserk() return wants_berserk end
+function can_read() return can_read_now end
+function read_unided_scroll() if unid > 0 then unid = unid - 1; unid_reads = unid_reads + 1; return true end return false end
+ladder_primitives.flee = function() moves = moves + 1; return true end
+ladder_primitives.stairs_up = function() climbs = climbs + 1; return true end
+function step(d, s)
+    local spec = ladder_choose(d, s)
+    local acted = nil
+    if spec and spec.force then acted = ladder_primitives[spec.force](spec, d) end
+    print("STEP", d, spec and spec.force or "-", tostring(acted), scrolls,
+          spec and spec.veto and table.concat(spec.veto, ",") or "-")
+end
+"""
+
+
+def _option_run(tmp_path: Path, body: str):
+    return _stance_run(tmp_path, QW_MORE + body)
+
+
+@needs_lua
+def test_after_landing_reads_again_once_the_teleport_has_landed(tmp_path):
+    steps, stance, _ = _option_run(tmp_path, """
+LADDER_RISK_STANCE, LADDER_RISK_STANCE_THRESHOLD, LADDER_RISK_STANCE_COOLDOWN = "teleport", 0.04, 20
+LADDER_RISK_STANCE_AFTER_LANDING = 0
+scrolls = 3
+step(0, st(100, 3))                               -- fires
+step(1, st(101, 2, { teleporting = true, can_teleport = false }))   -- pending: no read
+step(2, st(104, 2, { teleporting = true, can_teleport = false }))
+step(3, st(105, 2))                               -- landed, p still high: reads again at once
+step(4, st(106, 1))                               -- read but nothing pending yet: cooldown
+step(5, st(126, 1))                               -- the plain cooldown is over
+""")
+    assert [(s[1], s[2]) for s in steps] == [("0", "teleport"), ("1", "-"), ("2", "-"), ("3", "teleport"),
+                                             ("4", "-"), ("5", "teleport")]
+    assert [(s[2], s[4], s[5]) for s in stance] == [("100", "teleport", "1"), ("105", "teleport_landed", "1"),
+                                                    ("126", "teleport", "1")]
+
+
+@needs_lua
+def test_after_landing_grace_and_off(tmp_path):
+    body = """
+LADDER_RISK_STANCE, LADDER_RISK_STANCE_THRESHOLD, LADDER_RISK_STANCE_COOLDOWN = "teleport", 0.04, 20
+scrolls = 3
+step(0, st(100, 3))
+step(1, st(101, 2, { teleporting = true, can_teleport = false }))
+step(2, st(105, 2))                               -- landed at 105
+step(3, st(106, 2))
+step(4, st(107, 2))
+step(5, st(120, 2))
+"""
+    steps, _, _ = _option_run(tmp_path, "LADDER_RISK_STANCE_AFTER_LANDING = 2\n" + body)
+    assert [s[2] for s in steps] == ["teleport", "-", "-", "-", "teleport", "-"]
+    steps, _, _ = _option_run(tmp_path, body)    # off: the cooldown counts from the read
+    assert [s[2] for s in steps] == ["teleport", "-", "-", "-", "-", "teleport"]
+
+
+@needs_lua
+def test_read_before_berserk(tmp_path):
+    steps, stance, _ = _option_run(tmp_path, """
+LADDER_RISK_STANCE, LADDER_RISK_STANCE_THRESHOLD, LADDER_RISK_STANCE_COOLDOWN = "teleport", 0.04, 20
+LADDER_RISK_STANCE_BERSERK = 0.04
+scrolls = 4
+step(0, st(100, 4, { can_berserk = true }))       -- the rule fires, berserk vetoed with it
+wants_berserk = true
+step(1, st(105, 3, { can_berserk = true }))       -- cooldown, qw would berserk: read instead
+step(2, st(105, 2, { can_berserk = true }))       -- once a turn
+step(3, st(106, 2, { can_berserk = false }))      -- qw cannot berserk: nothing to pre-empt
+wants_berserk = false
+step(4, st(107, 2, { can_berserk = true }))       -- qw does not want to
+LADDER_RISK_STANCE_THRESHOLD = 0.5                 -- p 0.047 under the rule, over the berserk threshold
+wants_berserk = true
+step(5, st(300, 2, { can_berserk = true }))       -- read instead
+step(6, st(310, 1, { can_berserk = true, berserk = true, can_teleport = false }))  -- berserk already
+step(7, st(311, 1, { can_berserk = true, berserk = true, can_teleport = false }))  -- logged once
+LADDER_RISK_STANCE_BERSERK = 0.05
+step(8, st(400, 1, { can_berserk = true }))       -- p under the berserk threshold
+""")
+    assert [(s[2], s[5]) for s in steps] == [("teleport", "berserk"), ("teleport", "berserk"), ("-", "-"),
+                                             ("-", "-"), ("-", "-"), ("teleport", "berserk"), ("-", "-"),
+                                             ("-", "-"), ("-", "-")]
+    assert [(s[2], s[4], s[5]) for s in stance] == [
+        ("100", "teleport", "1"), ("105", "teleport_not_berserk", "1"), ("300", "teleport_not_berserk", "1"),
+        ("310", "berserk_blocked", "-")]
+
+
+@needs_lua
+def test_fallback_stairs(tmp_path):
+    steps, stance, _ = _option_run(tmp_path, """
+LADDER_RISK_STANCE, LADDER_RISK_STANCE_THRESHOLD = "teleport", 0.04
+LADDER_RISK_STANCE_FALLBACK = { "stairs" }
+LADDER_RISK_STANCE_STAIRS_MAX = 2
+local function nos(turn, extra)
+    local s = st(turn, 0, { can_flee_upstairs = true, flee_dist = 4, on_upstairs = false, branch = "D", depth = 3 })
+    for k, v in pairs(extra or {}) do s[k] = v end
+    return s
+end
+step(0, nos(100))                                 -- a step towards the stair
+step(1, nos(101, { on_upstairs = true }))         -- on it: up
+step(2, nos(102, { flee_dist = 11 }))             -- too far
+step(3, nos(103, { can_flee_upstairs = false }))  -- no stair to flee by (D:1, a portal, ...)
+step(4, nos(104, { teleporting = true }))         -- a teleport is pending
+step(5, st(105, 1, { can_flee_upstairs = true, flee_dist = 4, can_teleport = false }))  -- a scroll held: no fallback
+step(6, nos(106, { on_upstairs = true }))         -- second climb on D:3
+step(7, nos(107, { on_upstairs = true }))         -- capped
+step(8, nos(108, { on_upstairs = true, depth = 4 }))
+LADDER_RISK_STANCE_FALLBACK_THRESHOLD = 0.05
+step(9, nos(109))                                 -- p 0.047 under the fallback threshold
+""")
+    assert [s[2] for s in steps] == ["flee", "stairs_up", "-", "-", "-", "-", "stairs_up", "-", "stairs_up", "-"]
+    assert [(s[2], s[4], s[5]) for s in stance] == [("100", "flee_to_stairs", "1"), ("101", "stairs_up", "1"),
+                                                    ("106", "stairs_up", "1"), ("108", "stairs_up", "1")]
+
+
+@needs_lua
+def test_fallback_stairs_stops_when_the_stair_comes_no_nearer(tmp_path):
+    steps, _, _ = _option_run(tmp_path, """
+LADDER_RISK_STANCE, LADDER_RISK_STANCE_THRESHOLD = "teleport", 0.04
+LADDER_RISK_STANCE_FALLBACK = { "stairs" }
+local function at(turn, d) return st(turn, 0, { can_flee_upstairs = true, flee_dist = d }) end
+for i, t in ipairs({ 200, 201, 202, 203, 204 }) do step(i, at(t, 4)) end   -- four steps, none nearer
+step(10, at(205, 3))                              -- nearer (qw's own move): steps again
+for i, t in ipairs({ 206, 207, 208, 209 }) do step(10 + i, at(t, 3)) end
+step(20, at(219, 3))                              -- 11 turns since the last step: tries again
+""")
+    assert [s[2] for s in steps] == ["flee"] * 4 + ["-"] + ["flee"] * 4 + ["-"] + ["flee"]
+
+
+@needs_lua
+def test_fallback_unknown_scroll_and_no_loop(tmp_path):
+    steps, stance, _ = _option_run(tmp_path, """
+LADDER_RISK_STANCE, LADDER_RISK_STANCE_THRESHOLD = "teleport", 0.04
+LADDER_RISK_STANCE_FALLBACK = { "stairs", "unknown_scroll" }
+unid = 1
+step(0, st(100, 0, { unid_scroll_stacks = 1, can_read = true }))   -- no stair: read an unknown scroll
+step(1, st(101, 0, { unid_scroll_stacks = 1, can_read = false }))  -- cannot read (berserk, confused)
+step(2, st(102, 0, { unid_scroll_stacks = 0, can_read = true }))   -- none left
+unid = 0
+step(3, st(103, 0, { unid_scroll_stacks = 1, can_read = true }))   -- qw's read fails: logged, acted 0
+step(4, st(103, 0, { unid_scroll_stacks = 1, can_read = true }))   -- not again this turn
+step(5, st(104, 0, { unid_scroll_stacks = 1, can_read = true }))
+for d = 6, 10 do step(d, st(105, 0, { can_flee_upstairs = true, flee_dist = 2 })) end  -- 3 a turn at most
+""")
+    assert [s[2] for s in steps] == ["read_unknown_scroll", "-", "-", "read_unknown_scroll", "-",
+                                     "read_unknown_scroll", "flee", "flee", "flee", "-", "-"]
+    assert [(s[4], s[5]) for s in stance][:4] == [("unknown_scroll", "1"), ("unknown_scroll", "0"),
+                                                  ("unknown_scroll", "0"), ("flee_to_stairs", "1")]
+
+
+@needs_lua
+def test_options_unset_change_nothing(tmp_path):
+    """The scenarios the options act on, with them unset: the rule alone, as before."""
+    steps, stance, _ = _option_run(tmp_path, """
+LADDER_RISK_STANCE, LADDER_RISK_STANCE_THRESHOLD, LADDER_RISK_STANCE_COOLDOWN = "teleport", 0.04, 20
+scrolls, wants_berserk = 3, true
+step(0, st(100, 3, { can_berserk = true }))
+step(1, st(101, 2, { teleporting = true, can_teleport = false }))
+step(2, st(105, 2, { can_berserk = true }))                        -- landed; would berserk
+step(3, st(106, 2, { berserk = true, can_teleport = false }))
+step(4, st(107, 0, { can_flee_upstairs = true, on_upstairs = true, unid_scroll_stacks = 1, can_read = true }))
+""")
+    assert [(s[2], s[5]) for s in steps] == [("teleport", "-")] + [("-", "-")] * 4
+    assert [(s[2], s[4]) for s in stance] == [("100", "teleport")]
 
 
 @needs_lua

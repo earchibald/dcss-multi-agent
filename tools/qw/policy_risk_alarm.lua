@@ -545,8 +545,37 @@ do
     -- act, qw's own cascade decides that decision, as for any forced spec.
     -- Each firing writes, once the primitive has run:
     --   QWSTANCE decision turn probability action acted(0/1)
+    --
+    -- Options, each off unless its global is set (unset, the rule is exactly the one above):
+    --   LADDER_RISK_STANCE_AFTER_LANDING = g (turns, 0 or more). Once a teleport has landed (the
+    --     state's teleporting went from on to off) after the last firing, the cooldown no longer
+    --     applies: the rule may read again g turns after the landing. While a teleport is pending
+    --     it never reads (as above). Logged as action "teleport_landed".
+    --   LADDER_RISK_STANCE_BERSERK = true or a probability (true: the stance threshold). Read
+    --     before berserk: a firing also vetoes qw's berserk plan for its decision (it applies if the
+    --     read fails), and at a decision where the rule does not fire (cooldown, or p under the
+    --     stance threshold) but p >= this, a scroll can be read and qw wants to berserk now
+    --     (can_berserk and qw's want_to_berserk()), the scroll is read instead and berserk vetoed
+    --     ("teleport_not_berserk"; ignores the cooldown, once a turn). Already berserk, with a
+    --     scroll held and p >= this: nothing can be read; "berserk_blocked" is logged (acted "-")
+    --     once a berserk.
+    --   LADDER_RISK_STANCE_FALLBACK = a name or a list of names, tried in order, when no scroll of
+    --     teleportation is held (none above the reserve), no teleport is pending and p >=
+    --     LADDER_RISK_STANCE_FALLBACK_THRESHOLD (default the stance threshold with one scroll):
+    --       "stairs": on an upstair qw can flee by, ladder.lua's stairs_up primitive
+    --         ("stairs_up"); else, with such a stair at most LADDER_RISK_STANCE_STAIRS_DIST
+    --         (default 10) squares away by qw's flee distance, one step of ladder.lua's flee
+    --         primitive ("flee_to_stairs"). At most LADDER_RISK_STANCE_STAIRS_MAX (default 5)
+    --         climbs a level; after LADDER_RISK_STANCE_STAIRS_STUCK (default 3) steps running that
+    --         bring the stair no nearer, no more steps until it is nearer or 10 turns have passed.
+    --       "unknown_scroll": qw's read_unided_scroll(), when an unidentified scroll is held and
+    --         one can be read ("unknown_scroll").
+    --     A fallback fires at most 3 times a game turn, and not again in a turn where a stance
+    --     firing did not act.
 
-    local stance = { last_turn = nil, fired = 0, acted = 0, wrapped = false }
+    local stance = { last_turn = nil, fired = 0, acted = 0, wrapped = {}, pending = false,
+                     landed_turn = nil, failed_turn = nil, berserk_turn = nil,
+                     berserk_logged = false, fb_turn = nil, fb_count = 0, climbs = {} }
     ladder_risk.stance = stance
 
     local function stance_threshold(n)
@@ -562,26 +591,143 @@ do
             s.p, s.action, acted))
     end
 
-    -- Wrap the primitive once, so that a firing is logged with what it did; any other spec
+    -- Wrap a primitive once, so that a firing is logged with what it did; any other spec
     -- (a fork's override) passes through unchanged.
-    local function stance_wrap(action)
-        if stance.wrapped or type(ladder_primitives) ~= "table"
-                or type(ladder_primitives[action]) ~= "function" then
-            return stance.wrapped
+    local function stance_wrap(prim)
+        if stance.wrapped[prim] then
+            return true
+        elseif type(ladder_primitives) ~= "table" or type(ladder_primitives[prim]) ~= "function" then
+            return false
         end
-        local prim = ladder_primitives[action]
-        ladder_primitives[action] = function(spec, decision)
-            local acted = prim(spec, decision)
+        local f = ladder_primitives[prim]
+        ladder_primitives[prim] = function(spec, decision)
+            local acted = f(spec, decision)
             if type(spec) == "table" and spec.stance then
                 if acted then
                     stance.acted = stance.acted + 1
+                else
+                    stance.failed_turn = spec.stance.turn
                 end
                 stance_log(spec.stance, acted and 1 or 0)
             end
             return acted
         end
-        stance.wrapped = true
+        stance.wrapped[prim] = true
         return true
+    end
+
+    -- A firing: force primitive prim for this decision, logged as action name.
+    local function fire(decision, turn, prim, name, veto)
+        stance.fired = stance.fired + 1
+        local s = { decision = decision, turn = turn, p = ladder_risk.p, action = name }
+        if not stance_wrap(prim) then
+            stance_log(s, "-")   -- no ladder.lua primitives to wrap (outside qw)
+        end
+        return { force = prim, n = 1, veto = veto, stance = s }
+    end
+
+    -- qw's own test for its berserk plan (plan_berserk: can_berserk() and want_to_berserk()).
+    local function qw_wants_berserk(state)
+        if num(state.can_berserk) <= 0 or type(want_to_berserk) ~= "function" then
+            return false
+        end
+        local ok, want = pcall(want_to_berserk)
+        return ok and want and true or false
+    end
+
+    local function unknown_scroll_primitive()
+        if type(ladder_primitives) ~= "table" then
+            return false
+        end
+        if ladder_primitives.read_unknown_scroll == nil then
+            if type(read_unided_scroll) ~= "function" or type(can_read) ~= "function" then
+                return false
+            end
+            ladder_primitives.read_unknown_scroll = function()
+                return can_read() and read_unided_scroll() or false
+            end
+        end
+        return true
+    end
+
+    local function fallback(name, decision, state, turn)
+        if name == "stairs" then
+            if num(state.can_flee_upstairs) <= 0 then
+                return nil
+            end
+            local place = tostring(logged(state.branch)) .. ":" .. tostring(num(state.depth))
+            if (stance.climbs[place] or 0) >= (LADDER_RISK_STANCE_STAIRS_MAX or 5) then
+                return nil
+            elseif num(state.on_upstairs) > 0 then
+                stance.climbs[place] = (stance.climbs[place] or 0) + 1
+                return fire(decision, turn, "stairs_up", "stairs_up")
+            end
+            local d = num(state.flee_dist, -1)
+            if d < 0 or d > (LADDER_RISK_STANCE_STAIRS_DIST or 10) then
+                return nil
+            end
+            -- No progress (the flee distance not below its best) in STAIRS_STUCK steps running:
+            -- leave it to qw until the distance drops or 10 turns pass without a step.
+            local fl = stance.flee
+            if not fl or turn - fl.turn > 10 or d < fl.best then
+                stance.flee = { best = d, stuck = 0, turn = turn }
+            elseif fl.stuck >= (LADDER_RISK_STANCE_STAIRS_STUCK or 3) then
+                return nil
+            else
+                fl.stuck, fl.turn = fl.stuck + 1, turn
+            end
+            return fire(decision, turn, "flee", "flee_to_stairs")
+        elseif name == "unknown_scroll" then
+            if num(state.unid_scroll_stacks) > 0 and num(state.can_read) > 0
+                    and unknown_scroll_primitive() then
+                return fire(decision, turn, "read_unknown_scroll", "unknown_scroll")
+            end
+        end
+        return nil
+    end
+
+    -- The options after the rule (see above): read before berserk, then the fallbacks.
+    local function stance_options(decision, state, turn, n, reserve)
+        local R = ladder_risk
+        local b = LADDER_RISK_STANCE_BERSERK
+        if b then
+            local bt = b == true and stance_threshold(math.max(n - reserve, 1)) or b
+            if num(state.berserk) > 0 then
+                if n > reserve and R.p >= bt and not stance.berserk_logged then
+                    stance.berserk_logged = true
+                    stance_log({ decision = decision, turn = turn, p = R.p,
+                                 action = "berserk_blocked" }, "-")
+                end
+            else
+                stance.berserk_logged = false
+                if n > reserve and R.p >= bt and num(state.can_teleport) > 0
+                        and num(state.teleporting) <= 0 and stance.berserk_turn ~= turn
+                        and qw_wants_berserk(state) then
+                    stance.berserk_turn = turn
+                    stance.last_turn = turn
+                    return fire(decision, turn, "teleport", "teleport_not_berserk", { "berserk" })
+                end
+            end
+        end
+        local fb = LADDER_RISK_STANCE_FALLBACK
+        if fb and n <= reserve and num(state.teleporting) <= 0
+                and R.p >= (LADDER_RISK_STANCE_FALLBACK_THRESHOLD or stance_threshold(1))
+                and stance.failed_turn ~= turn then
+            if stance.fb_turn ~= turn then
+                stance.fb_turn, stance.fb_count = turn, 0
+            end
+            if stance.fb_count >= 3 then
+                return nil
+            end
+            for _, name in ipairs(type(fb) == "table" and fb or { fb }) do
+                local spec = fallback(name, decision, state, turn)
+                if spec then
+                    stance.fb_count = stance.fb_count + 1
+                    return spec
+                end
+            end
+        end
+        return nil
     end
 
     function ladder_risk.stance_choose(decision, state)
@@ -593,26 +739,31 @@ do
         if R.p == nil or R.decision ~= decision then
             return nil
         end
+        local turn = num(state.turn)
+        if num(state.teleporting) > 0 then
+            stance.pending = true
+        elseif stance.pending then
+            stance.pending, stance.landed_turn = false, turn
+        end
+        local options = LADDER_RISK_STANCE_BERSERK or LADDER_RISK_STANCE_FALLBACK
         local reserve = LADDER_RISK_STANCE_RESERVE or 0
         local n = num(state.n_teleport)
-        if n <= reserve or num(state.can_teleport) <= 0 or num(state.teleporting) > 0 then
-            return nil
+        if n <= reserve or num(state.can_teleport) <= 0 or num(state.teleporting) > 0
+                or R.p < stance_threshold(n - reserve) then
+            return options and stance_options(decision, state, turn, n, reserve) or nil
         end
-        if R.p < stance_threshold(n - reserve) then
-            return nil
-        end
-        local turn = num(state.turn)
+        local name = action
         local cooldown = math.max(LADDER_RISK_STANCE_COOLDOWN or 20, 1)
         if stance.last_turn and turn - stance.last_turn < cooldown then
-            return nil
+            local grace = LADDER_RISK_STANCE_AFTER_LANDING
+            if not (grace and stance.landed_turn and stance.landed_turn > stance.last_turn
+                    and turn - stance.landed_turn >= grace) then
+                return options and stance_options(decision, state, turn, n, reserve) or nil
+            end
+            name = "teleport_landed"
         end
         stance.last_turn = turn
-        stance.fired = stance.fired + 1
-        local s = { decision = decision, turn = turn, p = R.p, action = action }
-        if not stance_wrap(action) then
-            stance_log(s, "-")   -- no ladder.lua primitives to wrap (outside qw)
-        end
-        return { force = action, n = 1, stance = s }
+        return fire(decision, turn, action, name, LADDER_RISK_STANCE_BERSERK and { "berserk" } or nil)
     end
 
     function ladder_choose(decision, state)

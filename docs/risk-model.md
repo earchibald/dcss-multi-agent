@@ -360,7 +360,7 @@ firing, so a read that fails cannot repeat at every decision) and `LADDER_RISK_S
 
 ```sh
 uv run --group risk python tools/risk/export_lua.py export runs/risk/N50-zk --stance all
-    # -> policy_risk_alarm.lua and policy_risk_stance_{t15,tier,t10}.lua (export_lua.STANCES)
+    # -> policy_risk_alarm.lua and policy_risk_stance_<name>.lua for each of export_lua.STANCES
 caffeinate -i uv run python tools/qw/run.py --seeds 100500-100699 --no-build --lib-dir /data/qw/lib-zk \
     --lua runs/qw/combo1-lua/MiBe_mace.lua --time-limit 3600 --workers 9 --state-log \
     --policy runs/risk/N50-zk/policy_risk_stance_t15.lua --name stance-live-t15
@@ -381,6 +381,55 @@ only check the mechanics. They are not a measure of the rule.
 primitive, the cooldown, no firing without a readable scroll or while teleporting, a fixed override
 first, a read qw refuses (logged with acted 0, no repeat in the same turn), the thresholds by scrolls
 held and the reserve, and that each exported variant switches the stance on.
+
+### More stance options
+
+`t10`'s 194 deaths on seeds 100500–100699 had three patterns the rule did not touch: 131 with the
+alarm on and no scroll left (or none ever), 48 that teleported and died anyway (13 of them held a
+scroll that the 20-turn cooldown kept unread after landing in danger again) and 11 that held a scroll
+and did not read it (8 were berserk, and berserk stops reading). Three options in the template's
+stance section answer them. Each is off unless its global is set, so `t15`, `tier`, `t10`, `t07` and
+`t05` are unchanged: their headers are the same, and replaying logged games through the old and the
+re-exported policies gives identical `QWRISK`, `QWSTANCE` lines and specs.
+
+- **After landing** (`LADDER_RISK_STANCE_AFTER_LANDING = g`). While a teleport is pending the rule
+  never reads, as before. Once the state's `teleporting` has gone from on to off after the last
+  firing, the cooldown stops applying: the rule may read again `g` turns after the landing (`0`:
+  at once) if p is still over its threshold. Logged as `teleport_landed`.
+- **Read before berserk** (`LADDER_RISK_STANCE_BERSERK = true` or a probability). ladder.lua runs a
+  forced primitive before qw's cascade, so berserk never pre-empts a firing; qw goes berserk at
+  decisions where the rule does not fire. In `t10`, of 1,720 berserks with a readable scroll, 20
+  came at p ≥ 0.10 (during the cooldown) and 278 at p ≥ 0.05; in six of the eight deaths the
+  berserk came at p 0.04–0.09, under the rule's threshold. So the option does two things: a firing also vetoes qw's `berserk`
+  plan (`{ force = "teleport", veto = { "berserk" } }`; the veto applies only if the read fails),
+  and at a decision where the rule does not fire but p ≥ the option's threshold, a scroll can be
+  read and qw wants to berserk (`can_berserk` and qw's own `want_to_berserk()`, asked before the
+  cascade), it reads instead (`teleport_not_berserk`, once a turn, cooldown ignored). Already
+  berserk with a scroll held, nothing can be read: `berserk_blocked` is logged once a berserk.
+- **Fallback with no scroll** (`LADDER_RISK_STANCE_FALLBACK = { names }`, tried in order, at p ≥ the
+  stance threshold with one scroll and no teleport pending). `"stairs"`: on an upstair qw can flee
+  by, ladder.lua's `stairs_up` primitive (`stairs_up`); otherwise, with one at most
+  `LADDER_RISK_STANCE_STAIRS_DIST` (10) squares away by qw's flee distance, one step of ladder.lua's
+  `flee` primitive (`flee_to_stairs`); at most `LADDER_RISK_STANCE_STAIRS_MAX` (5) climbs a level,
+  and after `LADDER_RISK_STANCE_STAIRS_STUCK` (3) steps running that bring the stair no nearer, no
+  more steps until it is nearer or 10 turns have passed (the first smoke test had a 15-step walk
+  that stayed 3 squares away while HP fell from 82 to 27).
+  `"unknown_scroll"`: qw's own `read_unided_scroll()` (its identify-by-use plan, which qw otherwise
+  runs only when safe), when an unidentified scroll is held and one can be read (`unknown_scroll`).
+  A fallback fires at most three times a game turn, and not again in a turn where a firing did not
+  act. Both use only what qw and ladder.lua already have; no new movement.
+
+| Variant | Settings |
+| --- | --- |
+| `t10a` | `t10`, after landing with no grace |
+| `t10ab` | `t10a`, read before berserk at p ≥ 0.05 |
+| `t10abs` | `t10ab`, fallback `stairs` |
+| `t10abu` | `t10ab`, fallback `unknown_scroll` |
+
+`want_to_berserk()` runs before the cascade only at decisions where everything else for the option
+holds; it is qw's own function, but its threat assessment can compute hit chances, which can draw from
+the game's random numbers, so such a decision can play out differently even when the option then
+does nothing.
 
 ## Leakage checks
 
