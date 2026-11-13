@@ -175,6 +175,72 @@ I don't know how to get there" on D:3 (500053), and two unclassified (100047, 50
 still open: `unwield_weapon`, `stairdance_up`, `upgrade_equipment` and `brothers_in_arms`
 "failed despite returning true".
 
+## Poison and the rage: when the lethal dose arrives (stage `zr`)
+
+The 0.34.0 source (in the container at `/crawl`) shows that a rage does not make poison you
+already have any worse:
+
+- `go_berserk` (`player-act.cc` 697–700) and `player_end_berserk` (`player.cc` 9184–9205) both
+  call `calc_hp(true)`, which rescales current HP by new max / old max and keeps the fraction in
+  `hit_points_regeneration` (`player.cc` 2798–2817). The rage's +50% and its end's 2/3 cancel, so
+  poison present before a rage is lethal after it exactly when it is lethal now
+  (`poison_survival() <= 0`). Poison that lands during a rage costs only 2/3 as much once the rage is
+  over. In a rage, poison is lethal at the end once `poison_survival <= hp - hp * base / mhp`
+  (about `hp / 3`).
+- What the rage changes is that nothing can be drunk (`item-name.cc` 3233), read (3068) or
+  invoked (`ability.cc` 1816; Trog's Hand has no `berserk_ok` flag) until it ends. Attacks reset
+  `berserk_penalty` (`fight.cc` 600); each non-attack action in a row takes 1, 2, 3… more turns off
+  the rage (`main.cc` 2851–2876). The rage expires in `_decrement_durations`, and that turn's
+  poison tick comes after it (`player-reacts.cc` 1355, 1370), against the rescaled HP. A single
+  tick cannot kill a character the rage left alive, so qw always gets one action after the rage.
+
+The 34 zk games on training seeds 100000–100149 that ended poisoned, replayed with the state log
+(33 replayed identically). The onset is the first decision at which the poison would be lethal once
+any rage is over:
+
+| Lethal onset | Games | Of them XL 11+ | Detail |
+|---|---|---|---|
+| During a rage, no poison before it | 5 | 4 | all of the poison landed in the rage |
+| During a rage, some poison before it | 9 | 2 | zk's half-HP cure rule held in 2 (no potion); in 6 of the other 7, curing was in the pack |
+| After a rage (slowed, on cooldown) | 6 | 3 | 4 of the 6 read teleportation with curing in the pack; 2 were lethal on the first action after the rage |
+| Outside a rage | 2 | 1 | 100088: read teleportation with 5 curing, 7 turns after a clean rage |
+| Before the rage | 1 | 0 | XL 1, no potion |
+| Never lethal from poison | 11 | | killed outright; the morgue says "lethally poisoned" only because HP is ≤ 0 |
+
+There is no fix during the rage that the game allows. After it, there is: zk's lethal-poison cure
+is seventh in the emergency cascade, behind `stairdance_up` and `teleport`, and a teleport scroll
+read with lethal poison means 3–5 more turns of poison with no cure. Stage `zr`
+(`runs/qw/build-zr`, `/data/qw/lib-zr`, `build.py --stage zr`) adds one plan at the head of the
+emergency cascade: lethal poison and a potion of curing mean drink. There is no new berserk rule.
+On zk's half-HP rule: since the rage is neutral to poison you already have, the rule only decides
+whether to spend an unraged turn so that potions are not needed mid-rage. 6 of the rage deaths
+started below it with curing in the pack. A lower threshold would be another rule of thumb and
+has not been tried.
+
+zk against zr, tuned settings, training seeds 100000–100149, 3600 s limit:
+
+| | `zk` (`zk1-fix`) | `zr` (`zr1-fix`) |
+|---|---|---|
+| Unfinished | 0 | 0 |
+| Died of poison | 8 (6 in a rage, 2 after one) | 6 (6 in a rage) |
+| Died with the end of a rage in the last messages | 44 (3 lethally poisoned) | 43 (0) |
+| Quit | 4 | 6 |
+| Mean XL | 10.55 ± 0.42 | 10.73 ± 0.45 (paired +0.18 ± 0.10) |
+| Deepest D level, mean | 8.65 ± 0.38 | 8.69 ± 0.39 (paired +0.04 ± 0.08) |
+| Reached XL 15 | 38 | 39 |
+| Runes | 14 | 24 |
+
+- The new plan acted 29 times in 17 games. In 11 of them it did what zk's cure would have done
+  one plan later, and the game is identical. 2 had already diverged by noise (below). In 4 it
+  replaced a teleport: 100022 (Shoals:2 XL 17
+  became Vaults:5 XL 24, 2 runes), 100023 (XL 16 became 18, 1 rune), and 100082 and 100118, which
+  died where they did before (re-poisoned, or the HP was already gone).
+- The other 12 changed games diverge before any lethal poison, at crawl-side splits (a different
+  artefact on the floor, a different level). That is replay noise and not the patch. It includes
+  both of zk's after-rage poison deaths (100006, 100088) and most of the runes. The part that can
+  be attributed is +9 XL and +3 runes over 150 games (+0.06 XL a game). That is real but small,
+  and inside the noise of a 150-game comparison.
+
 ## Other builds
 
 qw plays any species and background through `--combo`, with the gods in its list (Trog,
@@ -270,6 +336,8 @@ controls `reroll` and `reroll2`. A veto names any plan in qw's cascade.
 
 ```sh
 uv run python tools/qw/build.py --deploy
+uv run python tools/qw/build.py --stage zr --out runs/qw/build-zr --deploy --lib-dir /data/qw/lib-zr
+caffeinate -i uv run python tools/qw/run.py --seeds 100000-100149 --no-build --lib-dir /data/qw/lib-zr --lua runs/qw/combo1-lua/MiBe_mace.lua --time-limit 3600 --workers 9 --name zr1-fix
 caffeinate -i uv run python tools/qw/run.py --seeds 500000-500199 --state-log --name NAME
 uv run python tools/qw/forks.py runs/qw/BASE --out runs/qw/JOBS.json --kinds crowd --max-turn 9000
 caffeinate -i uv run python tools/qw/run.py --jobs runs/qw/JOBS.json --state-log --name FORKS --no-build
@@ -299,8 +367,10 @@ uv run python tools/qw/compare.py qw-base-200 NAME
    once, as a bug-fix re-measure. The fixes came from reading held-out deaths, so the result
    flatters them.
 3. The rune-branch wall is berserk itself: poison and slowness land during and after the rage.
-   Things to try, on training seeds: no berserk in a poison cloud or without poison resistance
-   in Spider, Snake and Swamp; choose the rune branches by resistances held.
+   Most lethal poison lands during the rage (14 of 23 games above), where the game allows no
+   potion. Things to try, on training seeds: no berserk in a poison cloud or without poison
+   resistance in Spider, Snake and Swamp, with poisoners in view; choose the rune branches by
+   resistances held. Measure `zr` on more seeds before deploying it.
 4. Search the Minotaur Fighter of Okawaru's settings (heroism, finesse, when to flee): a second
    teacher that does not depend on rage.
 5. For the imitation step, record games from the Minotaur Berserker (both weapons) and the
