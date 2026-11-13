@@ -1,0 +1,22 @@
+ Dungeon Crawl Stone Soup version 0.34.1 (webtiles) character file.
+
+Branches:
+Dungeon (12/15)            Temple (0/1) D:5            Lair (5/5) D:9
+  Swamp (4/4) Lair:3        Snake (0/4) Lair:2        Slime (0/5) Lair:4
+    Orc (2/2) D:11
+
+Notes
+Turn   | Place    | Note
+--------------------------------------------------------------
+     0 | D:1      | Reached XP level 1. HP: 19/19 MP: 0/0
+  2000 | D:3      | Reached XP level 6. HP: 50/50 MP: 3/3
+  4100 | D:5      | Entered Level 5 of the Dungeon
+  7000 | D:8      | Entered Level 8 of the Dungeon
+  8000 | D:9      | Reached XP level 11. HP: 99/99 MP: 7/7
+  9500 | Lair:1   | Entered Level 1 of the Lair of Beasts
+ 12000 | Orc:1    | Entered Level 1 of the Orcish Mines
+ 14000 | Swamp:4  | Reached XP level 14. HP: 140/140 MP: 9/9
+ 14500 | Swamp:4  | Got a decaying rune of Zot
+ 16000 | D:12     | Entered Level 12 of the Dungeon
+
+The rest of the dump.

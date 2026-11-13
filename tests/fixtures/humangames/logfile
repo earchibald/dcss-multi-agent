@@ -1,0 +1,9 @@
+v=0.34.1:name=alice:char=MiBe:xl=4:place=D::3:br=D:lvl=3:absdepth=3:god=Trog:start=20260101000000S:end=20260101010000S:dur=300:turn=2500:ktyp=mon:killer=a gnoll:urune=0
+v=0.34.1:name=alice:char=MiBe:xl=27:place=D::1:br=D:lvl=1:absdepth=1:god=Trog:start=20260102000000S:end=20260110120000S:dur=90000:turn=60000:ktyp=winning:urune=3:nrune=3
+v=0.34.0:name=bob:char=MiBe:xl=13:place=Lair::2:br=Lair:lvl=2:absdepth=12:god=Trog:start=20260103000000S:end=20260103050000S:dur=5000:turn=15000:ktyp=mon:killer=bob's ghost:urune=0
+v=0.34.0:name=bob:char=MiBe:xl=1:place=D::1:br=D:lvl=1:absdepth=1:god=:start=20260104000000S:end=20260104000100S:dur=20:turn=40:ktyp=quitting:urune=0
+v=0.34.0:name=bob:char=MiBe:xl=10:place=Necropolis:br=Necropolis:lvl=1:absdepth=9:god=Trog:start=20260105000000S:end=20260105020000S:dur=3000:turn=9000:ktyp=pois:urune=0
+v=0.34.1:name=carol:char=OpSh:xl=27:place=D::1:br=D:lvl=1:absdepth=1:god=Okawaru:start=20260106000000S:end=20260109000000S:dur=80000:turn=50000:ktyp=winning:urune=3
+v=0.34.1:name=carol:char=MiBe:xl=15:place=Spider::3:br=Spider:lvl=3:absdepth=17:god=Trog:start=20260110000000S:end=20260111000000S:dur=9000:turn=30000:ktyp=beam:killer=an orb spider:urune=1
+v=0.34.1:name=qw:char=MiBe:xl=20:place=Vaults::3:br=Vaults:lvl=3:absdepth=21:god=Trog:start=20260111000000S:end=20260111020000S:dur=500:turn=40000:ktyp=mon:killer=a vault guard:urune=2
+v=0.33.4:name=dave:char=MiBe:xl=5:place=D::4:br=D:lvl=4:absdepth=4:god=Trog:start=20250101000000S:end=20250101010000S:dur=100:turn=3000:ktyp=mon:killer=a jackal:urune=0
