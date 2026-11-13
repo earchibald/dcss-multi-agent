@@ -1,8 +1,9 @@
 # Death-risk model
 
 A first model of one number: the chance that the character dies within the next N game turns, given
-one logged moment. It is offline work on existing logs and is not wired into play. Code in
-`tools/risk/`, data and models in `runs/risk/` (ignored by git). Measured 2026-11-12.
+one logged moment. It was built offline on existing logs. qw can now compute it at every decision
+(see [In qw](#in-qw-the-lua-export)), but nothing acts on it yet. Code in `tools/risk/`, data and
+models in `runs/risk/` (ignored by git). Measured 2026-11-12.
 
 **In short:** at N = 50 turns, gradient-boosted trees reach AUROC 0.86 on the brain's held-out games and
 0.91 on qw's, against 0.68 and 0.79 for HP fraction alone. The probabilities are close to calibrated below
@@ -14,20 +15,35 @@ plan a descent. The deep slice is thin: 51 qw games, 46 deaths, 14 of them in a 
 ## Data
 
 One row per logged moment: a brain choice (`steps.jsonl`, the observation dict) or a qw decision (its
-`QWS` state line, before it acts). Only qw runs with `--state-log` can be used: `train-base-r1`,
-`qw-base-200` and the fork runs `forks-r1`, `forks-r1c`, `forks-r2` and `choke1`–`3`. A fork keeps only its
-rows from the fork onwards. qw fork rows are thinned to one in three. The brain's 17 human recordings are
-left out (no seed, and most are take-overs). So are forks whose replay diverged and 446 brain evaluation
-games that exactly repeat another one on the same seed.
+`QWS` state line, before it acts). Only qw runs with `--state-log` can be used (`dataset.QW_BASE_RUNS`
+and `QW_FORK_RUNS`):
+
+- `train-base-r1`: training seeds 100000–100299, the old build (8698adc with qw's own settings).
+- `zk-train-400`: training seeds 100000–100399, the `zk` build with the tuned MiBe settings
+  (`runs/qw/combo1-lua/MiBe_mace.lua`).
+- `qw-base-200` and `zk-heldout-200`: the held-out seeds 500000–500199, on the old build and on `zk`
+  with the tuned settings.
+- The fork runs `forks-r1`, `forks-r1c`, `forks-r2` and `choke1`–`3`, on training seeds.
+
+A fork keeps only its rows from the fork onwards. qw fork rows are thinned to one in three. The brain's 17
+human recordings are left out (no seed, and most are take-overs). So are forks whose replay diverged and
+446 brain evaluation games that exactly repeat another one on the same seed.
 
 | Source | Split | Games | Deaths | Rows | Died within 50 | Died within 200 |
 | --- | --- | --- | --- | --- | --- | --- |
 | brain | train, games | 1,126 | 1,079 | 409,784 | 7.7% | 18.5% |
 | brain | train, forks | 2,190 | 1,871 | 399,333 | 11.5% | 22.9% |
 | brain | test (seeds 500000+) | 1,028 | 961 | 436,919 | 6.7% | 15.4% |
-| qw | train, games | 300 | 286 | 744,064 | 1.2% | 2.4% |
+| qw | train, games (`train-base-r1`) | 300 | 286 | 744,064 | 1.2% | 2.4% |
+| qw | train, games (`zk-train-400`) | 400 | 388 | 1,299,457 | 1.0% | 1.9% |
 | qw | train, forks | 7,779 | 3,642 | 916,075 | 3.2% | 6.0% |
 | qw | test (`qw-base-200`) | 200 | 189 | 538,756 | 1.1% | 2.2% |
+| qw | test (`zk-heldout-200`) | 200 | 196 | 649,115 | 1.0% | 2.1% |
+
+**The held-out seeds stay out of training.** `dataset.py` builds rows for every run, held-out seeds
+included, and defines the rule (`HOLDOUT_SEED = 500000`). `train.splits` applies it: training and
+validation take only seeds below 500000, and it asserts that no held-out seed reaches either.
+`zk-heldout-200` (seeds 500000–500199) is therefore test only, like `qw-base-200`.
 
 **Labels and censoring.** In a game that ended in a death, every row is labelled: 1 if the death came
 within N turns, 0 otherwise. Every other ending is censored at its last turn: qw quitting, timeout, stall,
@@ -67,15 +83,16 @@ names.
 ## Method
 
 - Splits are by dungeon seed. Test is seeds 500000+ (1,028 brain evaluation games, all 200 of
-  `qw-base-200`). It was predicted and scored once, after all choices were made.
-- Validation is one training seed in six, by hash, original games only (241 games). It was used for
-  early stopping, the hyperparameters and including the forks: with the same tree settings, forks raised
-  validation AUROC from 0.878 to 0.888.
-- Training uses the other training seeds plus their forks (2.07M rows at N = 50). One model covers both
-  sources.
+  `qw-base-200`, and for the retrained models all 200 of `zk-heldout-200`). It was predicted and scored
+  once, after all choices were made.
+- Validation is one training seed in six, by hash (`crc32(str(seed)) % 6 == 0`), original games only
+  (241 games; 310 once `zk-train-400` was added). It was used for early stopping, the hyperparameters
+  and including the forks: with the same tree settings, forks raised validation AUROC from 0.878 to 0.888.
+- Training uses the other training seeds plus their forks (2.07M rows at N = 50; 3.17M with
+  `zk-train-400`). One model covers both sources.
 - **Baseline**: logistic regression on HP fraction, fitted per source.
 - **Trees**: LightGBM, 31 leaves, at least 1,000 rows per leaf, learning rate 0.05, early stopped (406
-  rounds at N = 50).
+  rounds at N = 50; 315 for the retrained `N50-zk`, 159 for `N200-zk`).
 - **MLP**: 113 → 256 → 128 → 1, dropout 0.2, AdamW. Inputs are signed-log scaled and standardised, NaN
   set to 0.
 
@@ -89,6 +106,31 @@ uv run --group risk python tools/risk/report.py leakage --horizon 50
 
 LightGBM is in a new dependency group `risk` (`lightgbm>=4.5`). LightGBM and torch each load their own
 OpenMP and abort in one process on macOS, so the MLP trains in a second invocation.
+
+## Retrained with the `zk` runs (`N50-zk`, `N200-zk`)
+
+The same settings, retrained after `zk-train-400` and `zk-heldout-200` joined the data
+(`runs/risk/N50-zk`, `runs/risk/N200-zk`; the first models are `runs/risk/N50` and `N200`). Early
+stopping on validation: N = 50 reaches AUROC 0.916 (all sources; qw rows 0.900, AP 0.308) at 315
+rounds, N = 200 reaches 0.864 at 159 rounds. On the held-out runs, qw rows, AUROC / average precision:
+
+| Held-out run | Horizon | Retrained | First model | HP fraction |
+| --- | --- | --- | --- | --- |
+| `zk-heldout-200` | 50 | **0.889** / **0.252** | 0.887 / 0.227 | 0.800 / 0.149 |
+| `zk-heldout-200` | 200 | **0.775** / **0.187** | 0.773 / 0.164 | 0.659 / 0.107 |
+| `qw-base-200` | 50 | **0.916** / **0.318** | 0.910 / 0.295 | 0.786 / 0.185 |
+| `qw-base-200` | 200 | **0.839** / **0.230** | 0.837 / 0.203 | 0.679 / 0.135 |
+| `zk-heldout-200`, deep | 50 | **0.902** / **0.263** | 0.899 / 0.236 | 0.844 / 0.174 |
+| `qw-base-200`, deep | 50 | **0.951** / **0.311** | 0.937 / 0.269 | 0.870 / 0.205 |
+
+The first model was scored on the current rows with its own trees. The retrain gains little in AUROC
+and 2–4 points of average precision. The `zk` games are harder to read than the old build's: HP alone
+does better on them (0.800 against 0.786) and the trees do worse (0.889 against 0.916). The held-out
+deep slice is now larger: 97 `zk-heldout-200` games reach it and 94 die there, 36 of those deaths in a
+rune branch. On qw validation rows, the alarm threshold at 5% false alarms is 0.0365 (recall 65%,
+median final-episode lead 19 turns).
+
+The tables below are the first models (`N50`, `N200`), before the `zk` runs were added.
 
 ## Results, held-out seeds
 
@@ -179,6 +221,67 @@ The MLP gives the same numbers within a turn. Deaths with an alarm 50 to 200 tur
 brain and 35% for qw at 5% false alarms. Some of those are chance alarms, since 5% of safe moments
 alarm too. The warning that can be trusted is the final episode: about a dozen turns.
 
+## In qw: the Lua export
+
+`N50-zk` runs inside qw as a policy that takes no action: at every decision it computes the
+probability from the state qw decided from, writes it to the state log and sets `ladder_risk.alarm_on`
+(p ≥ 0.0365, qw's 5% false-alarm threshold on validation) for a later stance rule.
+
+```sh
+uv run --group risk python tools/risk/export_lua.py export runs/risk/N50-zk     # -> policy_risk_alarm.lua
+uv run python tools/qw/run.py --seeds 100400-100407 --no-build --lib-dir /data/qw/lib-zk \
+    --lua runs/qw/combo1-lua/MiBe_mace.lua --state-log --policy runs/risk/N50-zk/policy_risk_alarm.lua --name NAME
+uv run --group risk python tools/risk/export_lua.py parity runs/qw/NAME --model runs/risk/N50-zk
+```
+
+- **The whole model, not a smaller one.** `export_lua.py` writes each of the 315 trees as a Lua
+  function of nested ifs. Splits on features that are constant for qw (`is_qw`, the brain's own fields,
+  and the paralysis, weakness and drain statuses, which qw does not log) are decided at export. That
+  leaves 8,210 of 9,450 splits. The policy is about 1 MB of rc text and 3 MB of Lua heap. A decision
+  costs about 13,000 Lua VM instructions (7,000 of them the trees; at most 14,200), 0.05 ms, measured on
+  3,000 logged decisions with a stock Lua 5.5 on the Mac. Crawl's Lua throttle (a sleep every 50,000 instructions, the script killed after
+  15) is off outside `DGAMELAUNCH` builds, which ours is not; even with it on, a decision stays under
+  one unit. A smaller booster would save nothing that matters, so none was trained.
+- **The features come from one definition.** `tools/qw/policy_risk_alarm.lua` mirrors `dataset.qw_row`.
+  The tables it reads (monster book, branch depths, feature order, tags) are written from `dataset.py`
+  at export, so they cannot drift. To reproduce the offline number exactly, it takes these steps:
+  - It reads each state value as the `QWS` line logs it: floats to 4 significant digits, flags as 0/1,
+    NaN and `err` as missing. The trees were trained on logged values, not on live ones.
+  - It rounds every feature to float32, as the dataset stores rows.
+  - It computes the derived values from those float32 values where Python does: the history and
+    monster HP over own HP.
+  - It sums monster values the way Python 3.12's `sum()` does (Neumaier compensation).
+  - It sorts the monsters stably by distance.
+  - It keeps the history (HP trend, rows in the last 20 turns, turns since full HP) itself, from the
+    game's earlier decisions, like `dataset.History`.
+
+  Every feature can be computed live; none had to be dropped. `mhp_log` uses `log(1 + mhp)` where
+  Python uses `log1p`; `1 + mhp` is exact for an integer `mhp`, and the two agreed after float32
+  rounding on every row checked.
+- **Verified in game.** These are 8 games on fresh training seeds 100400–100407 (`runs/qw/risk-alarm-100400`),
+  with the feature row also logged. Over 17,445 decisions, 17,420 probabilities are identical to what
+  LightGBM computes in Python from the same `QWS` lines. The other 25 differ by at most 7e-18, the last
+  bit of `exp()` in two C libraries. Every feature matched. The alarm bit agreed on all 17,445 decisions
+  (1,237 alarms).
+- **Behaviour unchanged.** The same 8 seeds without the policy (`runs/qw/risk-base-100400`, also with
+  the state log) ended identically: same place, XL, turn, killer and score. Every `QWACT` and `QWS` line
+  was identical. Total wall time was 478 s with the policy and 481 s without.
+- `tests/test_risk.py` checks:
+  - Lua features on live-style states (booleans, full-precision floats, odd monster names) against
+    `qw_row` on the logged values.
+  - The Lua trees against LightGBM on rows with NaNs.
+  - Pruning.
+  - That the policy only returns the rc's fixed overrides and has no line that would end the rc's
+    Lua block.
+  - With the local model and logs present, the real model on a real game.
+
+  The tests need `lua` (5.4+) on `PATH`.
+
+Log lines: `QWRISK decision turn p raw alarm`, `QWRISKF decision features…` with
+`LADDER_RISK_FEATURES = true`, and `QWRISKERR` if the computation fails (qw carries on). The
+probability is "risk under qw as it plays now": once a stance rule acts on the alarm, the future the
+label measured changes (see Limits).
+
 ## Leakage checks
 
 - **Structure.** No row is after its game's end or at 0 HP. Each row is the state before the action
@@ -196,11 +299,10 @@ alarm too. The warning that can be trusted is the final episode: about a dozen t
 
 ## Limits
 
-- **The deep slice is thin, and is the old qw.** The only held-out qw games with state logs are
-  `qw-base-200`: build 8698adc with qw's settings before the berserk fixes. 51 games reach XL 12 and 46
-  die there, but only 14 of those deaths are in a rune branch. The later `fix1`/`zk` runs on held-out
-  seeds have no state logs. Re-running the 200 held-out seeds on the current build with `--state-log`
-  is the cheapest way to measure the deep slice properly.
+- **The deep slice was thin, and was the old qw.** In `qw-base-200` (build 8698adc with qw's settings
+  before the berserk fixes) 51 games reach XL 12 and 46 die there, only 14 of them in a rune branch.
+  `zk-heldout-200` reruns the 200 held-out seeds on the `zk` build with state logs: 97 games reach the
+  deep slice, 94 die there, 36 in a rune branch (see the retrained results above).
 - **The brain never goes deep.** It dies on D:3–8 and never reaches XL 12, so nothing here shows that
   brain-style features work deeper.
 - **What the logs lack.** Monster HP and wounds, the map beyond distances to stairs, clouds (qw has

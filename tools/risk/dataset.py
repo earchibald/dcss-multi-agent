@@ -8,8 +8,11 @@ Two sources:
 - **brain**: every `steps.jsonl` under the main checkout's `runs/brain/` (the trained brain, the rules of
   thumb, their forks). One row per choice, from the observation dict `features.observe` wrote.
 - **qw**: the devteam's bot, from runs that kept a state log (`--state-log`): `train-base-r1` (training
-  seeds 100000-100299), `qw-base-200` (held-out seeds 500000-500199) and the fork runs on the training
-  seeds. One row per qw decision, from its `QWS` line (the state before it acts).
+  seeds 100000-100299) and `zk-train-400` (training seeds 100000-100399, the `zk` build with the tuned
+  MiBe settings), `qw-base-200` and `zk-heldout-200` (held-out seeds 500000-500199, the old build and
+  `zk`), and the fork runs on the training seeds. One row per qw decision, from its `QWS` line (the
+  state before it acts). Rows are built for every seed; train.py's splits keep seeds from HOLDOUT_SEED
+  up out of training and validation.
 
 A fork (brain or qw) replays a game to one moment and plays on from there; only its rows from that
 moment on are kept (the earlier ones are the original game's), and qw's are thinned to one in

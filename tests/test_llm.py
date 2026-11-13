@@ -29,7 +29,10 @@ class FakeAnthropic:
         self.calls = []
         msg = NS(content=content, stop_reason=stop_reason, model="claude-opus-5",
                  usage={"input_tokens": 120, "output_tokens": 30})
-        create = lambda **kw: (self.calls.append(kw), msg)[1]
+        def create(**kw):
+            self.calls.append(kw)
+            return msg
+
         self.messages = NS(create=create)
         self.beta = NS(messages=NS(create=create))
 
