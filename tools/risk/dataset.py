@@ -55,7 +55,7 @@ QW_ROOT = REPO / "runs" / "qw"
 OUT = REPO / "runs" / "risk"
 MONSTERS = REPO / "docs" / "data" / "monsters-0.34.json"
 
-QW_BASE_RUNS = ("train-base-r1", "qw-base-200")
+QW_BASE_RUNS = ("train-base-r1", "qw-base-200", "zk-train-400", "zk-heldout-200")
 QW_FORK_RUNS = ("forks-r1", "forks-r1c", "forks-r2", "choke1", "choke2", "choke3")
 QW_FORK_KEEP = 3                # keep one qw fork row in this many
 NOT_DEATH = {None, "", "quitting", "winning", "leaving"}   # qw ktyp values that are not a death
