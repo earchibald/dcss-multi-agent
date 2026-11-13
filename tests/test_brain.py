@@ -17,7 +17,8 @@ from ladder.brain.features import (ACTIONS, COMPONENTS, FEATURE_VERSION, MAX_MON
                                    N_COMPONENTS, SELF_DIM, encode, inventory, observe, path, progress_depth)
 from ladder.brain.net import ModelMismatch, TrainedNet, contract
 from ladder.brain.policy import (BLOCK_TURNS, FORK_DONE, IDLE_LIMIT, ITEM_PROMPTS, REPLAY_DIVERGED, UNTIL_LEVEL,
-                                 BrainTiers, Style, available, baseline)
+                                 BrainTiers, Style, available, baseline, heal_potion, poison_lethal_after_rage,
+                                 poison_share)
 from ladder.brain.selfplay import summarize
 from ladder.conn import ActResult
 from ladder.interrupts import Before, Interrupt
@@ -68,7 +69,9 @@ def test_inventory_classifies_consumables():
              s5=item("a +0 dagger", 0, 1, 102))
     inv = inventory(state)
     assert (inv["heal"], inv["unknown_potions"], inv["unknown_scrolls"], inv["teleport"]) == (2, 3, 1, 2)
-    assert inv["letters"] == {"heal": "a", "unknown_potions": "b", "unknown_scrolls": "c", "teleport": "d"}
+    assert (inv["curing"], inv["heal_wounds"]) == (2, 0)
+    assert inv["letters"] == {"heal": "a", "curing": "a", "unknown_potions": "b", "unknown_scrolls": "c",
+                              "teleport": "d"}
 
 
 def test_inventory_heal_wounds_and_unknown_tag():
@@ -84,7 +87,8 @@ def test_inventory_heal_wounds_and_unknown_tag():
 
 def test_inventory_empty():
     inv = inventory(make_state(["@."]))
-    assert inv == {"heal": 0, "unknown_potions": 0, "unknown_scrolls": 0, "teleport": 0, "letters": {}}
+    assert inv == {"heal": 0, "curing": 0, "heal_wounds": 0, "unknown_potions": 0, "unknown_scrolls": 0,
+                   "teleport": 0, "letters": {}}
 
 
 def test_inventory_ignores_empty_stacks():
@@ -1485,3 +1489,116 @@ def test_old_evaluations_without_a_new_style_weight_are_still_reused():
     old = {k: v for k, v in Style().to_dict().items() if k != "wiki"}
     assert {**Style().to_dict(), **old} == Style().to_dict()
     assert {**Style().to_dict(), **old} != Style(wiki=1).to_dict()
+
+
+# --- curing or heal wounds, and poison against the end of a rage --------------------------------
+
+def potions(curing=0, heal_wounds=0):
+    return {"heal": curing + heal_wounds, "curing": curing, "heal_wounds": heal_wounds,
+            "unknown_potions": 0, "unknown_scrolls": 0, "teleport": 0}
+
+
+def test_inventory_counts_curing_and_heal_wounds_apart():
+    state = with_inv(make_state(["@."]), s0=item("potion of heal wounds", POTIONS, 2, 97),
+                     s1=item("potion of curing", POTIONS, 1, 98))
+    inv = inventory(state)
+    assert (inv["heal"], inv["curing"], inv["heal_wounds"]) == (3, 1, 2)
+    assert inv["letters"]["curing"] == "b" and inv["letters"]["heal_wounds"] == "a"
+    o = observe(state, [], {})
+    assert o["inv"]["curing"] == 1 and o["inv"]["heal_wounds"] == 2
+    # not inputs: the vector is the one models were trained on
+    s, _, _ = encode(o, ["rest"])
+    assert s.shape == (SELF_DIM,)
+    assert np.array_equal(s, encode({**o, "inv": {k: v for k, v in o["inv"].items()
+                                                  if k not in ("curing", "heal_wounds")}}, ["rest"])[0])
+
+
+def test_poison_share_counts_as_the_status_line_does():
+    assert poison_share(obs(hp=20, poison_survival=20)) == 0
+    assert poison_share(obs(hp=20, poison_survival=7)) == 65              # "quite poisoned"
+    assert poison_share(obs(hp=20, poison_survival=6)) == 70              # "seriously poisoned"
+    assert poison_share(obs(hp=20, poison_survival=0)) == 100             # lethal (webtiles sends max(0, ...))
+    assert poison_share({k: v for k, v in obs(hp=12).items() if k != "poison_survival"}) == 0
+
+
+def test_heal_potion_is_chosen_by_the_need():
+    both = potions(curing=1, heal_wounds=1)
+    assert heal_potion(obs(hp=8, poison_survival=0, status=["Pois"], inv=both)) == "curing"     # lethal poison
+    assert heal_potion(obs(hp=8, poison_survival=2, status=["Pois"], inv=both)) == "curing"     # serious
+    assert heal_potion(obs(hp=8, poison_survival=6, status=["Pois"], inv=both)) == "heal_wounds"  # mild: HP first
+    assert heal_potion(obs(hp=8, inv=both)) == "heal_wounds"                                    # just hurt
+    assert heal_potion(obs(hp=20, status=["Conf"], inv=both)) == "curing"       # heal wounds refused at full HP
+
+
+def test_heal_potion_falls_back_to_the_one_held():
+    lethal = dict(hp=8, poison_survival=0, status=["Pois"])
+    assert heal_potion(obs(inv=potions(heal_wounds=1), **lethal)) == "heal_wounds"   # better than nothing
+    assert heal_potion(obs(hp=8, inv=potions(curing=1))) == "curing"
+    assert heal_potion(obs(hp=8, inv=potions())) is None
+    # an observation from before the split (old step logs) has neither count
+    assert heal_potion(obs(hp=8, inv={"heal": 1, "unknown_potions": 0, "unknown_scrolls": 0, "teleport": 0})) is None
+
+
+def test_curing_is_drinkable_at_full_hp_only_when_poisoned_or_confused():
+    assert "quaff_heal" in available(obs(status=["Pois"], inv=potions(curing=1)), False, set(), False)
+    assert "quaff_heal" in available(obs(status=["Conf"], inv=potions(curing=1)), False, set(), False)
+    assert "quaff_heal" not in available(obs(status=["Pois"], inv=potions(heal_wounds=1)), False, set(), False)
+    assert "quaff_heal" not in available(obs(inv=potions(curing=1)), False, set(), False)
+
+
+@pytest.mark.parametrize("survival,want,letter", [(0, "curing", "c"), (2, "curing", "c"),
+                                                  (6, "heal_wounds", "d"), (8, "heal_wounds", "d")])
+def test_perform_drinks_the_potion_the_moment_needs(survival, want, letter):
+    state = make_state(["@..."], hp=8, poison_survival=survival,
+                       status=[{"light": "Pois"}] if survival < 8 else [])
+    with_inv(state, s0=item("potion of curing", POTIONS, 1, ord("c")),
+             s1=item("potion of heal wounds", POTIONS, 1, ord("d")))
+    conn = ScriptedConn([ActResult(blocking="menu")])
+    BrainTiers().perform(SimpleNamespace(state=state, conn=conn), "quaff_heal")
+    assert conn.sent == [(("q",), {}), ((letter,), {"through_menu": True})], want
+
+
+def test_perform_falls_back_to_heal_wounds_while_poisoned_without_curing():
+    state = make_state(["@..."], hp=8, poison_survival=0, status=[{"light": "Pois"}])
+    with_inv(state, s0=item("potion of heal wounds", POTIONS, 1, ord("d")))
+    conn = ScriptedConn([ActResult(blocking="menu")])
+    BrainTiers().perform(SimpleNamespace(state=state, conn=conn), "quaff_heal")
+    assert conn.sent == [(("q",), {}), (("d",), {"through_menu": True})]
+
+
+def test_poison_lethal_after_rage_follows_the_hp_scaling():
+    # not raging: x3/2 at the start and x2/3 at the end give the HP back, so only poison lethal now counts
+    assert not poison_lethal_after_rage(obs(hp=12))
+    assert not poison_lethal_after_rage(obs(hp=12, poison_survival=1, status=["Pois"]))
+    assert poison_lethal_after_rage(obs(hp=12, poison_survival=0, status=["Pois"]))
+    # raging: the end leaves 2/3 of the HP shown, and the poison still to come is not scaled
+    assert not poison_lethal_after_rage(obs(hp=30, poison_survival=11, status=["Berserk", "Pois"]))
+    assert poison_lethal_after_rage(obs(hp=30, poison_survival=10, status=["Berserk", "Pois"]))
+    assert not poison_lethal_after_rage(obs(hp=30, poison_survival=30, status=["Berserk"]))
+
+
+def test_no_rage_with_poison_that_would_kill_after_it():
+    lethal = hostile_obs(god="Trog", hp=12, poison_survival=0, status=["Pois"])
+    assert "berserk" not in available(lethal, False, set(), False)
+    assert "berserk" in available({**lethal, "poison_survival": 3}, False, set(), False)
+    # without curing, the baseline fights on rather than raging
+    assert baseline(lethal, available(lethal, False, set(), False), False) == "fight"
+
+
+def test_baseline_cures_serious_poison_before_raging():
+    o = obs(hp=8, poison_survival=2, status=["Pois"], god="Trog", n_hostiles=1, mons=[mon()],
+            inv=potions(curing=1, heal_wounds=1))
+    avail = available(o, False, set(), False)
+    assert "berserk" in avail                                        # survivable: allowed, just not first
+    assert baseline(o, avail, False) == "quaff_heal"
+    assert baseline(o, avail, False, wiki=True) == "quaff_heal"
+    assert heal_potion(o) == "curing"
+    # mild poison: the rage comes first as before
+    mild = {**o, "poison_survival": 6}
+    assert baseline(mild, available(mild, False, set(), False), False) == "berserk"
+    # alone and seriously poisoned: cure rather than rest it off
+    alone = {**o, "n_hostiles": 0, "mons": []}
+    assert baseline(alone, available(alone, False, set(), False), False) == "quaff_heal"
+    lethal = {**o, "poison_survival": 0}
+    avail = available(lethal, False, set(), False)
+    assert "berserk" not in avail and baseline(lethal, avail, False) == "quaff_heal"

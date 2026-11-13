@@ -36,7 +36,11 @@ STATUSES = ["Pois", "Conf", "Slow", "Fast", "Berserk", "-Berserk", "Might", "Hel
             "Drain", "Weak", "Invis", "Constr", "silenced", "Blind", "Vertigo"]
 
 POTIONS, SCROLLS = 7, 5
-HEALING = ("curing", "heal wounds")
+# Both count as `heal` (one input, one action), but they do different things (potion.cc): curing heals
+# 5-11 and ends poison and confusion; heal wounds heals 10-37 and cures nothing. `inventory` also counts
+# them apart, and `quaff_heal` picks one by the need (policy.heal_potion). Not inputs: no contract change.
+CURING, HEAL_WOUNDS = "curing", "heal wounds"
+HEALING = (CURING, HEAL_WOUNDS)
 # places below the Dungeon count as deeper than its early floors
 BRANCH_BASE = {"Dungeon": 0, "Temple": 4, "Lair": 9, "Orcish Mines": 10, "Sewer": 3, "Ossuary": 4,
                "Bailey": 8, "Ice Cave": 10, "Volcano": 10}
@@ -80,7 +84,8 @@ def inventory(state: GameState, largest: bool = False) -> dict:
     The letter is the first stack found, or with `largest` the biggest stack: among unknowns that is the
     likeliest to be a common kind (curing, identify), and trying it tells the most.
     """
-    out = {"heal": 0, "unknown_potions": 0, "unknown_scrolls": 0, "teleport": 0, "letters": {}}
+    out = {"heal": 0, "curing": 0, "heal_wounds": 0, "unknown_potions": 0, "unknown_scrolls": 0, "teleport": 0,
+           "letters": {}}
     biggest: dict[str, int] = {}
     for item in (state.player.get("inv") or {}).values():
         name, qty, base = item.get("name", ""), item.get("quantity", 1) or 0, item.get("base_type")
@@ -91,10 +96,12 @@ def inventory(state: GameState, largest: bool = False) -> dict:
             kind = ("heal" if any(h in name for h in HEALING) else None) if known else "unknown_potions"
         else:
             kind = ("teleport" if "teleportation" in name else None) if known else "unknown_scrolls"
-        if kind:
-            out[kind] += qty
-            if kind not in out["letters"] or (largest and qty > biggest[kind]):
-                out["letters"][kind], biggest[kind] = chr(item.get("letter", ord("a"))), qty
+        # a healing potion is also counted as itself, so `perform` can choose between the two
+        which = ("curing" if CURING in name else "heal_wounds") if kind == "heal" else None
+        for k in filter(None, (kind, which)):
+            out[k] += qty
+            if k not in out["letters"] or (largest and qty > biggest[k]):
+                out["letters"][k], biggest[k] = chr(item.get("letter", ord("a"))), qty
     return out
 
 

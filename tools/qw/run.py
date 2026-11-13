@@ -565,6 +565,8 @@ def main() -> None:
                          "or replace its functions (see tools/qw/variants.py)")
     ap.add_argument("--combo", default=None, help="override the combo, e.g. GrBe.handaxe")
     ap.add_argument("--stock", action="store_true", help="build without qw bug fixes")
+    ap.add_argument("--stage", default=None,
+                    help="build this stage (tools/qw/patches.py STAGES); default up to zk")
     ap.add_argument("--no-build", action="store_true", help="use the qw already deployed")
     ap.add_argument("--lib-dir", default=LIB_DIR,
                     help="container dir holding qw.lua and qw-ladder.rc (deployed there)")
@@ -592,7 +594,8 @@ def main() -> None:
                 for k in range(1, args.repeat + 1) for s in seeds]
 
     if not args.no_build:
-        qwbuild.deploy(qwbuild.build(REPO / "runs/qw/src", args.build_dir, stock=args.stock),
+        qwbuild.deploy(qwbuild.build(REPO / "runs/qw/src", args.build_dir, stock=args.stock,
+                                     stage=args.stage),
                        args.container, args.lib_dir)
     version = in_container(args.container, "cat", f"{args.lib_dir}/VERSION").stdout.strip()
 

@@ -117,7 +117,7 @@ at every step it picks one of these, from those possible right now (`policy.avai
 | `rest` | rest (`5`) |
 | `descend` | one step toward the nearest known `>`, or `>` when standing on it |
 | `flee_up` | one step toward the nearest known `<`, or `<` when standing on it (not from D:1) |
-| `quaff_heal` | drink a known potion of curing or heal wounds |
+| `quaff_heal` | drink a known potion of curing or heal wounds: curing when seriously poisoned or at full HP, heal wounds otherwise, the other when only one is held (`policy.heal_potion`) |
 | `quaff_unknown` | drink an unidentified potion |
 | `read_unknown` | read an unidentified scroll |
 | `read_teleport` | read a known scroll of teleportation |
@@ -138,6 +138,16 @@ no progress) the brain picks another action instead, so a game runs until the ch
 The **rules of thumb** (`policy.baseline`) are what plays when there is no model, and what the model is
 measured against: berserk when hurt or facing something tough, drink a healing potion at half HP, fight,
 change to better equipment, rest below 80%, read and drink unknowns when safe, explore, then go down.
+Before all of these, seriously poisoned (the poison will take over 65% of current HP, the game's own
+"seriously poisoned") with curing in the pack: drink it.
+
+`berserk` is never available while the poison already in the character would kill it once a rage
+ended (`policy.poison_lethal_after_rage`). A rage multiplies current HP by 3/2 at its start and by 2/3
+at its end (`calc_hp(true)` in `player::go_berserk` and `player_end_berserk`); the poison still to
+come is not scaled. So in a rage the poison is lethal at its end once `poison_survival <= hp/3`, and
+before one the HP comes back whole, so it is lethal afterwards exactly when it is lethal now
+(`poison_survival` 0). What the rage adds is that nothing can be drunk until it is over. These are
+rules in `available`, so a model can't choose otherwise; `FEATURE_VERSION` did not change for them.
 
 `--style wiki=1` plays a variant that follows the DCSS wiki's strategy guides (`policy.baseline_wiki`):
 rest to full, drink before the rage, go up nearby stairs when hurt, teleport and try unknowns as last

@@ -41,7 +41,8 @@ the wiki's version**, **12 not checkable** from these sources. The wrong and cha
 - Trog no longer minds pain-branded weapons (0.31): the brand simply does nothing for his worshippers.
 - Floating eyes are no longer generated (`cant_spawn`).
 - Known scrolls of fear, silence, vulnerability, immolation and torment **open a targeter prompt** in
-  0.34, so `scroll:fear` is not `prompt=None` as `brain-consumables.md` has it.
+  0.34, so `scroll:fear` is not `prompt=None` as `brain-consumables.md` had it (corrected there
+  2026-11-12 to `prompt="targeter"`).
 - Monsters left behind now **gather at the staircase you used** (0.34), so "go up, rest, come back down
   the same stairs" walks into them.
 - **Autoexplore already rests to full HP** and waits out Slow and `-Berserk` (0.34 defaults), so "explore
@@ -192,9 +193,13 @@ the wiki's version**, **12 not checkable** from these sources. The wrong and cha
 4. **Don't go berserk with poison you can't outlast.** For the brain's rules and for qw's rune-branch
    wall. Poison is a fixed number of HP still to come (`player.cc` `poison_player`,
    `handle_player_poison`), and the end of a rage scales current HP down by a third (`calc_hp(true)`).
-   So 30 HP with 25 poison to come is safe in the rage and lethal at 20 HP after it, and nothing can
+   So 30 HP shown *during a rage* with 25 poison to come is lethal at 20 HP after it, and nothing can
    be drunk in between *(inferred from the two functions)*. The game says "You are lethally poisoned!"
-   when it crosses over. Cure first; or compare `poison_survival` with two thirds of HP.
+   when it crosses over. *Correction, 2026-11-12:* starting a rage adds the same 50% (`go_berserk` →
+   `calc_hp(true)`), so the round trip is neutral: poison held before a rage is lethal after it exactly
+   when it is lethal now (`poison_survival <= 0`). The two-thirds comparison applies only to the HP
+   shown while already berserk, which is where poison that lands during the rage is measured. What
+   raging with poison costs is the potion you cannot drink until it ends.
 5. **Poison runs on game time, not on actions.** It ticks per aut, so in a rage (2/3 time per action)
    each action costs less poison, and slowed (1.5×) each costs more. Slowed after a rage with poison
    left is the worst case: the fixed HP loss arrives over fewer of your actions *(inferred)*.

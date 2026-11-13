@@ -1,6 +1,7 @@
 """Build a 0.34-patched qw from a qw checkout and (optionally) copy it into the DCSS container.
 
     uv run python tools/qw/build.py [--src runs/qw/src] [--out runs/qw/build] [--deploy]
+                                    [--stage zr --out runs/qw/build-zr --lib-dir /data/qw/lib-zr]
 
 Steps (the same as qw's make-qw.sh, plus our patches):
   1. read qw's Lua files (variables.lua first, then the rest sorted by name),
@@ -27,7 +28,7 @@ HERE = Path(__file__).resolve().parent
 REPO = HERE.parent.parent
 sys.path.insert(0, str(HERE))
 
-from patches import PATCHES  # noqa: E402
+from patches import STAGES, patches_for  # noqa: E402
 
 CONTAINER = "dcss-multi-agent-dcss-1"
 LIB_DIR = "/data/qw/lib"
@@ -70,11 +71,11 @@ def apply_patches(texts: dict[str, str], patches: list) -> dict[str, str]:
     return out
 
 
-def build(src: Path, out: Path, stock: bool = False) -> Path:
-    patches = [p for p in PATCHES if not (stock and p.kind == "bugfix")]
+def build(src: Path, out: Path, stock: bool = False, stage: str | None = None) -> Path:
+    patches = [p for p in patches_for(stage) if not (stock and p.kind == "bugfix")]
     original = read_lua(src)
     patched = apply_patches(original, patches)
-    version = qw_version(src) + ("-stock" if stock else "")
+    version = qw_version(src) + ("-stock" if stock else "") + (f"-{stage}" if stage else "")
 
     out.mkdir(parents=True, exist_ok=True)
 
@@ -127,8 +128,10 @@ def main() -> None:
                     help="only the 0.34 port patches, not fixes for qw's own bugs")
     ap.add_argument("--container", default=CONTAINER)
     ap.add_argument("--lib-dir", default=LIB_DIR, help="where --deploy puts the build")
+    ap.add_argument("--stage", choices=STAGES, default=None,
+                    help="include the patches of this stage and earlier ones (default: up to zk)")
     args = ap.parse_args()
-    out = build(args.src, args.out, stock=args.stock)
+    out = build(args.src, args.out, stock=args.stock, stage=args.stage)
     if args.deploy:
         deploy(out, args.container, args.lib_dir)
 

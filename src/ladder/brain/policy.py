@@ -62,6 +62,61 @@ class Style:
         return asdict(self)
 
 
+SERIOUS_POISON = 65       # % of current HP the poison will take: the game's "seriously poisoned" (status.cc)
+
+
+def _has(obs: dict, *prefixes: str) -> bool:
+    return any(x.startswith(prefixes) for x in obs.get("status") or [])
+
+
+def poison_share(obs: dict) -> int:
+    """How much of the current HP the poison will have taken once it has run its course, in percent,
+    counted as the game's status line does (`_describe_poison`): 100 or more is lethal."""
+    hp = obs["hp"]
+    if hp <= 0:
+        return 100
+    return (hp - max(0, obs.get("poison_survival", hp))) * 100 // hp
+
+
+def poison_lethal_after_rage(obs: dict) -> bool:
+    """Whether the poison now in the character would kill it after a rage, if the rage ended at once.
+
+    A rage multiplies current HP by 3/2 when it starts (`player::go_berserk`) and by 2/3 when it ends
+    (`player_end_berserk`), both through `calc_hp(true)`, which keeps the fraction, so the round trip
+    loses under 1/100 HP. Poison still to come is a fixed amount and is not scaled.
+    - Raging now: HP at the end is 2/3 of what is shown, so with P = hp - poison_survival still to come,
+      it is lethal once 2*hp/3 <= P, that is poison_survival <= hp/3.
+    - Not raging yet: the HP held now comes back at the end, so the poison is lethal afterwards exactly
+      when it is lethal now (poison_survival <= 0, `poison_is_lethal`). What the rage adds is that no
+      potion can be drunk until it is over, so a cure has to come first.
+    """
+    hp, survival = obs["hp"], max(0, obs.get("poison_survival", obs["hp"]))
+    if survival >= hp:
+        return False                                    # not poisoned, or regeneration outpaces it
+    if _has(obs, "Berserk"):
+        return 3 * survival <= hp
+    return survival <= 0
+
+
+def heal_potion(obs: dict) -> str | None:
+    """Which healing potion `quaff_heal` drinks: "curing", "heal_wounds", or None with neither.
+
+    Curing when the poison is serious (it ends the poison; heal wounds cures nothing) or when HP is full
+    (heal wounds is refused then, curing isn't while poisoned or confused). Heal wounds otherwise: it
+    heals 10-37 against curing's 5-11. Either way the other one when only the other is held.
+    """
+    inv = obs["inv"]
+    held = {"curing": inv.get("curing", 0) > 0, "heal_wounds": inv.get("heal_wounds", 0) > 0}
+    want = "curing" if poison_share(obs) > SERIOUS_POISON or obs["hp"] >= obs["hp_max"] else "heal_wounds"
+    other = "heal_wounds" if want == "curing" else "curing"
+    return want if held[want] else other if held[other] else None
+
+
+def needs_cure(obs: dict) -> bool:
+    """Seriously poisoned, with curing in the pack: drink it before anything else, a rage above all."""
+    return poison_share(obs) > SERIOUS_POISON and obs["inv"].get("curing", 0) > 0
+
+
 def available(obs: dict, level_explored: bool, blocked: set[str], rest_stalled: bool) -> list[str]:
     """The actions that can be carried out right now, in ACTIONS order."""
     inv, hostiles = obs["inv"], obs["n_hostiles"] > 0
@@ -70,6 +125,8 @@ def available(obs: dict, level_explored: bool, blocked: set[str], rest_stalled: 
     status = obs.get("status") or []
     calm = not any(x.startswith("Berserk") for x in status)             # no potions or scrolls in a rage
     can_read = calm and not any(x.startswith(("silenced", "Conf")) for x in status)
+    # curing can be drunk at full HP while poisoned or confused; heal wounds can't
+    ailing = inv.get("curing", 0) > 0 and _has(obs, "Pois", "Conf")
     can = {
         "explore": not hostiles and not level_explored,
         "fight": hostiles,
@@ -78,13 +135,15 @@ def available(obs: dict, level_explored: bool, blocked: set[str], rest_stalled: 
         # the stairs up from D:1 leave the dungeon
         "flee_up": hostiles and (obs["on_up"] or obs["dist_up"] >= 0)
                    and not (obs["place"] in ("", "Dungeon") and obs["depth"] <= 1),
-        "quaff_heal": inv["heal"] > 0 and hurt and calm,
+        "quaff_heal": inv["heal"] > 0 and (hurt or ailing) and calm,
         "quaff_unknown": inv["unknown_potions"] > 0 and calm,
         "read_unknown": inv["unknown_scrolls"] > 0 and can_read,
         "read_teleport": inv["teleport"] > 0 and hostiles and can_read,
         "wait": hostiles and not adjacent,
-        # Trog's Berserk: refused while berserk or exhausted, which the no-progress block then handles
-        "berserk": hostiles and obs.get("god") == "Trog" and not any(x.startswith(("Berserk", "-Berserk")) for x in status),
+        # Trog's Berserk: refused while berserk or exhausted, which the no-progress block then handles.
+        # Never with poison that would kill once the rage is over: the rage would block the cure.
+        "berserk": hostiles and obs.get("god") == "Trog" and not any(x.startswith(("Berserk", "-Berserk")) for x in status)
+                   and not poison_lethal_after_rage(obs),
         # changing equipment takes several turns: never with something watching
         "wield": bool(inv.get("wield")) and not hostiles and calm,
         "wear": bool(inv.get("wear")) and not hostiles and calm,
@@ -100,13 +159,14 @@ def baseline(obs: dict, avail: list[str], level_explored: bool, wiki: bool = Fal
     if wiki:
         return baseline_wiki(obs, avail, level_explored)
     frac = obs["hp"] / max(obs["hp_max"], 1)
+    cure = ["quaff_heal"] if needs_cure(obs) else []      # serious poison: curing first, before any rage
     if obs["n_hostiles"]:
         near = [m for m in obs["mons"] if max(abs(m["dx"]), abs(m["dy"])) <= 2]
         rage = frac <= 0.5 or any(m["threat"] >= 2 for m in near) or len(near) >= 3
-        order = (["berserk"] if rage and near else []) + (["quaff_heal"] if frac <= 0.5 else []) + \
+        order = cure + (["berserk"] if rage and near else []) + (["quaff_heal"] if frac <= 0.5 else []) + \
                 ["fight", "descend", "flee_up", "wait"]
     else:
-        order = ["wield", "wear"] + (["rest"] if frac < 0.8 else ["read_unknown", "quaff_unknown"]) + \
+        order = cure + ["wield", "wear"] + (["rest"] if frac < 0.8 else ["read_unknown", "quaff_unknown"]) + \
                 (["descend"] if level_explored else ["explore"]) + ["rest", "descend", "explore"]
     return next((a for a in order if a in avail), avail[0])
 
@@ -122,14 +182,16 @@ def baseline_wiki(obs: dict, avail: list[str], level_explored: bool) -> str:
     - A rage blocks potions and scrolls, so a healing potion is drunk before going berserk, not after.
     - Hurt, with stairs up close and nothing adjacent yet: go up. Only adjacent monsters follow.
     - Berserk exhausted or refused and HP at 30%: teleport, then try unknown potions, then unknown scrolls.
+    Both drink curing first when seriously poisoned (`needs_cure`).
     """
     frac = obs["hp"] / max(obs["hp_max"], 1)
+    cure = ["quaff_heal"] if needs_cure(obs) else []
     if obs["n_hostiles"]:
         dists = [max(abs(m["dx"]), abs(m["dy"])) for m in obs["mons"]]
         near = [m for m, d in zip(obs["mons"], dists) if d <= 2]
         adjacent = any(d <= 1 for d in dists)
         tough = any(m["threat"] >= 2 for m in near) or len(near) >= 3
-        order = []
+        order = list(cure)
         if frac <= 0.5:
             order.append("quaff_heal")
             if not adjacent and (obs["on_up"] or 0 <= obs["dist_up"] <= STAIRS_IN_REACH):
@@ -140,7 +202,7 @@ def baseline_wiki(obs: dict, avail: list[str], level_explored: bool) -> str:
             order += ["read_teleport", "quaff_unknown", "read_unknown"]
         order += ["fight", "descend", "flee_up", "wait"]
     else:
-        order = ["wield", "wear"] + (["rest"] if frac < 1.0 else ["read_unknown", "quaff_unknown"]) + \
+        order = cure + ["wield", "wear"] + (["rest"] if frac < 1.0 else ["read_unknown", "quaff_unknown"]) + \
                 (["descend"] if level_explored else ["explore"]) + ["rest", "descend", "explore"]
     return next((a for a in order if a in avail), avail[0])
 
@@ -256,11 +318,16 @@ class BrainTiers(StubTiers):
 
     def perform(self, reflex, action: str) -> ActResult | None:
         state, conn = reflex.state, reflex.conn
-        letters = inventory(state, largest=bool(self.style.wiki))["letters"]
+        inv = inventory(state, largest=bool(self.style.wiki))
+        letters = inv["letters"]
         item = {"quaff_heal": ("q", "heal"), "quaff_unknown": ("q", "unknown_potions"),
                 "read_unknown": ("r", "unknown_scrolls"), "read_teleport": ("r", "teleport")}
         if action in item:
             verb, kind = item[action]
+            if action == "quaff_heal":
+                # which of the two, by what is needed now (heal_potion)
+                kind = heal_potion({"hp": state.hp, "hp_max": state.hp_max, "status": state.statuses, "inv": inv,
+                                    "poison_survival": state.player.get("poison_survival", state.hp)}) or kind
             if kind not in letters:
                 return ActResult()
             result = self.through_menu(conn, verb, letters[kind])

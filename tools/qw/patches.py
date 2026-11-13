@@ -24,6 +24,23 @@ class Patch:
     # version and changes play (build.py --stock leaves these out). "crashfix": a qw bug
     # that raises a Lua error every turn (always applied). "hook": calls into ladder.lua.
     kind: str = "port"
+    # The build stage that added the patch. "" is in every build (up to and including
+    # stage zk); a named stage is in `build.py --stage NAME` for that stage or a later
+    # one in STAGES, so adding a stage never changes what an earlier stage builds.
+    stage: str = ""
+
+
+# Named build stages after zk, in order. build.py --stage NAME includes NAME and the
+# stages before it.
+STAGES: list[str] = ["zr"]
+
+
+def patches_for(stage: str | None) -> list[Patch]:
+    """The patches that make up a stage's build (None: the unstaged build, i.e. zk)."""
+    if stage is not None and stage not in STAGES:
+        raise SystemExit(f"unknown stage {stage!r}; stages: {', '.join(STAGES)}")
+    allowed = {""} | (set(STAGES[: STAGES.index(stage) + 1]) if stage else set())
+    return [p for p in PATCHES if p.stage in allowed]
 
 
 PATCHES: list[Patch] = [
@@ -448,5 +465,41 @@ PATCHES: list[Patch] = [
         "Veto overrides: skip named plans for one decision (always false without an "
         "override).",
         kind="hook",
+    ),
+    # --- stage zr: poison and the end of a rage (applied after the zk patches above) ----
+    Patch(
+        "plans-emergency.lua",
+        "function plan_berserk()\n",
+        "function plan_cure_lethal_poison()\n"
+        "    if you.poison_survival() <= 0 and can_drink()\n"
+        "            and drink_by_name(\"curing\") then\n"
+        "        say(\"(to cure lethal poison before anything else)\")\n"
+        "        return true\n"
+        "    end\n"
+        "\n"
+        "    return false\n"
+        "end\n"
+        "\n"
+        "function plan_berserk()\n",
+        "Stage zr: defines plan_cure_lethal_poison(), the first emergency plan (next patch).",
+        kind="bugfix",
+        stage="zr",
+    ),
+    Patch(
+        "plans-emergency.lua",
+        "    plans.emergency = cascade {\n"
+        "        {plan_stairdance_up, \"stairdance_up\"},\n",
+        "    plans.emergency = cascade {\n"
+        "        {plan_cure_lethal_poison, \"cure_lethal_poison\"},\n"
+        "        {plan_stairdance_up, \"stairdance_up\"},\n",
+        "Stage zr, the rage-end case. Nothing can be drunk, read or invoked in a rage, so "
+        "when the rage's end leaves the poison lethal, the only fix the game allows is "
+        "curing on the first action after it. zk's lethal-poison cure sits behind "
+        "stairdance_up, teleport and five other emergency plans, and a teleport scroll "
+        "read while lethally poisoned is 3-5 turns of poison with no cure (2 of zk's 8 "
+        "poison deaths on training seeds 100000-100149 ended 'about to teleport'). "
+        "Lethal poison with a potion of curing in the pack is now cured first.",
+        kind="bugfix",
+        stage="zr",
     ),
 ]

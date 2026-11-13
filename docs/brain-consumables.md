@@ -53,7 +53,7 @@ New module `src/ladder/brain/consumables.py`, two parts.
 
 ```python
 KINDS = {
-  "scroll:fear":    Kind(use="fight",   prompt=None,       needs="hostiles"),
+  "scroll:fear":    Kind(use="fight",   prompt="targeter", needs="hostiles"),
   "scroll:blinking":Kind(use="fight",   prompt="blink",    needs="hostiles"),
   "scroll:enchant weapon": Kind(use="at_once", prompt="enchant_weapon", needs="ranked_weapon"),
   "scroll:identify":Kind(use="identify",prompt="identify", needs="unknown_stack"),
@@ -142,6 +142,7 @@ answer is given and the scroll is no longer wasted.
 | identify | the item given by the identify rule below |
 | enchant weapon, brand weapon | the wielded weapon, if `gear.weapon` ranks it (brand only if it has none). Otherwise cancel **without** wasting when the scroll was known |
 | enchant armour | the worn piece `gear.py` scores highest among those that can still take a plus; body armour first. (The wiki's Minotaur Fighter guide goes the other way: boots, gloves, hat, cloak, then body, since the small pieces are kept all game and the body armour is replaced. Try both in step 1) |
+| targeter (known fear; also silence, vulnerability, immolation, torment) | Enter, to read it; Esc cancels and keeps the scroll at no cost in turns. 0.34 shows a static targeter for these before the scroll takes effect (`force_scroll_targeter` defaults to them, `initfile.cc`; `read` in `item-use.cc` runs `_scroll_targeting_check` for a known scroll that has a targeter). It is a look-around prompt ("Dir - look around, f - activate") that accepts any square, since the scroll's targeting behaviour is untargeted (`directn.cc` `move_is_ok`), and Enter is `CMD_TARGET_SELECT` (`cmd-keys.h`). `conn.classify_error` has no name for it yet. An unknown scroll of fear opens nothing: the targeter only runs for known ones. Not yet tried in a game |
 | blinking | the visible, walkable, unoccupied square that is furthest from the nearest hostile; ties go to the one nearer known stairs. Deterministic, so replays and forks hold. The wiki's version: out of the middle of a pack to its edge, toward stairs or a corridor, so a square with two or fewer open neighbours should win a tie as well |
 
 ### Identify
@@ -194,7 +195,9 @@ The rules of thumb get a deliberately small set, so the baseline moves and the r
   Built as `read_teleport` under `--style wiki=1`. The wiki says to read it early, since it takes 3 to 5
   turns, and not on an unexplored level; both are for the model to weigh (`level_explored` is an input).
 - `quaff:heal wounds` at HP ≤ 50%, `quaff:curing` when poisoned and `poison_survival` is low, or at ≤ 50%
-  with no heal wounds.
+  with no heal wounds. (Done ahead of this plan without a new action: `quaff_heal` picks the potion by
+  `policy.heal_potion`, and the rules of thumb drink curing first when the poison will take over 65% of
+  current HP.)
 - `quaff:haste` or `quaff:might` in place of `berserk` when the rage condition holds and berserk isn't
   possible.
 - Nothing else. Fear, fog, blinking, summoning, butterflies and resistance are reached by exploration

@@ -36,7 +36,9 @@ These use inputs and actions that exist (`Pois`, `Slow`, `Berserk`, `-Berserk` i
 1. **When a rage ends, current HP is multiplied by 2/3.** (src: `player_end_berserk` calls
    `calc_hp(true)`, which rescales HP to the new maximum.) Remaining poison is not scaled. So poison that
    is survivable during the rage becomes lethal at its end once it exceeds 2/3 of the HP shown, and the
-   next action is taken slowed. While berserk, poison is lethal-after-the-rage once
+   next action is taken slowed. (Starting a rage multiplies HP by 3/2 through the same function, so
+   the round trip is neutral: the 2/3 applies to HP shown *during* the rage, and poison held before a
+   rage is lethal after it exactly when it is lethal now.) While berserk, poison is lethal-after-the-rage once
    `poison_survival <= hp / 3`, not `<= 0`. This is the mechanism behind qw's "the poison turns lethal
    mid-rage ... dies as the rage ends", and LearnDB lists "You are too berserk!" under
    *famous last messages*. Poison already present when the rage starts is the smaller worry: it drains
@@ -61,8 +63,9 @@ These use inputs and actions that exist (`Pois`, `Slow`, `Berserk`, `-Berserk` i
    and 3. The "blinks" half needs the monster flag (section 2).
 6. **Curing and heal wounds are different potions.** (src) Curing heals 5–11 and ends poison and
    confusion, not slowness. Heal wounds heals 10+random2avg(28,3) (10–37, about 23) and cures nothing.
-   `features.HEALING` counts both as `heal`, so `quaff_heal` may drink heal wounds while lethally
-   poisoned. With `Pois` or `Conf`, drink curing; with neither, heal wounds first.
+   With `Pois` or `Conf`, drink curing; with neither, heal wounds first. (Fixed 2026-11-12:
+   `features.inventory` now counts `curing` and `heal_wounds` separately and `policy.heal_potion`
+   picks between them; before that `quaff_heal` could drink heal wounds while lethally poisoned.)
 7. **rPois stops 2 of 3 poisonings outright and does nothing to the third.** (src: `poison_player`; the
    same 2/3 guards curare and the slow/paralysis riders.) LearnDB's *strong poison* entry ("rPois merely
    reduces it to medium poison") is outdated. Poison per landed bite, from `mons_do_poison`, applied on
