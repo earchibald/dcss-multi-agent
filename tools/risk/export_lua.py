@@ -51,6 +51,10 @@ STANCES = {
              "note": "p >= 0.25 with the last scroll, 0.15 with two, 0.10 with three or more; once in 20 turns"},
     "t10": {"action": "teleport", "threshold": 0.10, "cooldown": 20, "reserve": 0,
             "note": "read teleportation at p >= 0.10, at most once in 20 turns"},
+    "t07": {"action": "teleport", "threshold": 0.07, "cooldown": 20, "reserve": 0,
+            "note": "read teleportation at p >= 0.07, at most once in 20 turns"},
+    "t05": {"action": "teleport", "threshold": 0.05, "cooldown": 20, "reserve": 0,
+            "note": "read teleportation at p >= 0.05, at most once in 20 turns"},
 }
 
 
