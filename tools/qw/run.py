@@ -394,6 +394,7 @@ class Runner:
                     self.kill_game(w, name)
             rc = p.wait()
         wall = time.time() - t0
+        killed = killed or lv.get("kill")
 
         row: dict = {"tag": tag, "seed": seed, "rep": job.get("rep", 1), "worker": w,
                      "overrides": job.get("overrides") or None,
@@ -485,9 +486,26 @@ class Runner:
         tmp.write_text(json.dumps(doc), encoding="utf-8")
         os.replace(tmp, self.out / "live.json")
 
+    def end_hung(self) -> None:
+        """End games that have logged nothing for --hung-limit seconds: they are inside one
+        decision that is not returning, and would only stop at the time limit."""
+        limit = self.args.hung_limit
+        now = time.time()
+        with self.lock:
+            hung = [lv for lv in self.live.values()
+                    if limit and not lv.get("kill") and now - lv["last_line"] >= limit]
+            for lv in hung:
+                lv["kill"] = "hung"
+        for lv in hung:
+            print(f"hung: {lv['tag']} w{lv['worker']} silent for "
+                  f"{now - lv['last_line']:.0f}s at turn {lv['turn']} {lv['place']}; ending it",
+                  flush=True)
+            self.kill_game(lv["worker"], f"q{lv['seed']}")
+
     def live_loop(self) -> None:
         while not self.finished:
             try:
+                self.end_hung()
                 with self.lock:
                     self.write_live()
             except Exception as e:  # the status file must never stop a run
@@ -667,6 +685,9 @@ def main() -> None:
     ap.add_argument("--build-dir", type=Path, default=REPO / "runs/qw/build",
                     help="local build output")
     ap.add_argument("--container", default=CONTAINER)
+    ap.add_argument("--hung-limit", type=int, default=120,
+                    help="end a game that logs nothing for this many seconds, with status "
+                         "'hung' (0: never; it then runs to the time limit)")
     ap.add_argument("--slots", type=Path, default=None,
                     help="directory of lock files shared with other runs: together they play "
                          "at most --workers games at once (tools/qw/chain.py sets it)")
@@ -706,6 +727,7 @@ def main() -> None:
         "meta": {"name": args.name, "qw_version": version, "lib_dir": args.lib_dir,
                  "seeds": args.seeds, "jobs": str(args.jobs) if args.jobs else None,
                  "workers": args.workers, "time_limit_s": args.time_limit,
+                 "hung_limit_s": args.hung_limit,
                  "repeat": args.repeat, "action_log": args.action_log or args.state_log,
                  "state_log": args.state_log,
                  "lua": str(args.lua) if args.lua else None, "policy": str(args.policy) if args.policy else None,

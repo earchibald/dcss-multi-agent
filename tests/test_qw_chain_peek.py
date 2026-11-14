@@ -91,3 +91,29 @@ def test_rows_sort_worst_first():
     doc = {"name": "r", "time_limit_s": 3600, "games": [
         game(seed=1), game(seed=2, last_line=NOW - 90), game(seed=3, turn_changed=NOW - 120)]}
     assert [r["seed"] for r in peek.rows([doc], NOW)] == [2, 3, 1]
+
+
+def test_runner_ends_only_silent_games():
+    import threading
+    import time
+    import types
+
+    run = load("run")
+    r = object.__new__(run.Runner)
+    r.args = types.SimpleNamespace(hung_limit=120)
+    r.lock = threading.Lock()
+    killed = []
+    r.kill_game = lambda w, name: killed.append((w, name))
+    now = time.time()
+    r.live = {
+        1: {"worker": 1, "seed": 11, "tag": "11", "last_line": now - 300, "turn": 5, "place": "D:1"},
+        2: {"worker": 2, "seed": 22, "tag": "22", "last_line": now - 5, "turn": 9, "place": "D:2"},
+    }
+    r.end_hung()
+    r.end_hung()  # a game already marked is not ended twice
+    assert killed == [(1, "q11")]
+    assert r.live[1]["kill"] == "hung" and "kill" not in r.live[2]
+    r.args.hung_limit = 0
+    r.live[2]["last_line"] = now - 300
+    r.end_hung()
+    assert killed == [(1, "q11")]
