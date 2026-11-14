@@ -67,7 +67,13 @@ def fork_regret(group: np.ndarray, fork: np.ndarray, true: np.ndarray, pred: np.
 
 def train(corpus: str | Path, out: str | Path, *, hidden: int = 64, epochs: int = 20, batch: int = 512,
           lr: float = 1e-3, wd: float = 1e-2, dropout: float = 0.2, danger_weight: float = 0.15, prior_weight: float = 0.1, fork_weight: float = 20.0,
-          seed: int = 0, note: str = "", log=print) -> dict:
+          seed: int = 0, note: str = "", log=print, strict: bool = True, save_val: str | Path | None = None) -> dict:
+    """Train on `corpus` and write the model to `out`.
+
+    `strict=False` trains on a corpus whose inputs are not this code's contract (a subset of the columns,
+    for comparing inputs offline); the model then records the corpus's contract and can't be played.
+    `save_val` writes the validation rows' predictions (.npz) for comparisons across models.
+    """
     import torch
     import torch.nn as nn
     import torch.nn.functional as F
@@ -75,8 +81,9 @@ def train(corpus: str | Path, out: str | Path, *, hidden: int = 64, epochs: int 
     torch.manual_seed(seed)
     data = np.load(corpus)
     meta = json.loads(Path(f"{corpus}.meta.json").read_text())
+    want_contract = contract() if strict else {k: meta.get(k) for k in contract()}
     for key, want in contract().items():
-        if meta.get(key) != want:
+        if strict and meta.get(key) != want:
             raise ValueError(f"corpus was built for another {key}; rebuild it")
     val = data["val"]
     if not val.any() or val.all():                   # too few games to hold any out
@@ -161,6 +168,7 @@ def train(corpus: str | Path, out: str | Path, *, hidden: int = 64, epochs: int 
         hit = (logp.argmax(-1) == V["action"]).numpy()
         w_style = Style().weights()
         forks = fork_regret(data["group"][val], data["fork"][val], true @ w_style, pred @ w_style)
+        validate.last = {"pred": pred, "danger": torch.sigmoid(d).numpy()}
         return {"q_loss": float(lq), "danger_bce": float(ld), "prior_ce": float(lp), "forks": forks,
                 "danger_auc": auc(torch.sigmoid(d).numpy(), V["danger"].numpy()),
                 "danger_rate": float(V["danger"].mean()),
@@ -194,6 +202,9 @@ def train(corpus: str | Path, out: str | Path, *, hidden: int = 64, epochs: int 
     net.load_state_dict(best_state)
     ev = validate()
     log(f"kept epoch {best_epoch} of {epochs}")
+    if save_val:
+        np.savez_compressed(save_val, rows=np.flatnonzero(val), pred=validate.last["pred"],
+                            danger=validate.last["danger"])
 
     def b64(t):
         return base64.b64encode(t.detach().numpy().astype(np.float16).tobytes()).decode()
@@ -202,7 +213,7 @@ def train(corpus: str | Path, out: str | Path, *, hidden: int = 64, epochs: int 
                      "b": b64(getattr(net, name).bias)} for name in LAYERS}
     nparams = sum(p.numel() for p in net.parameters())
     model = {
-        "format": FORMAT, "version": 1, **contract(), "hidden": hidden, "dtype": "f16",
+        "format": FORMAT, "version": 1, **want_contract, "hidden": hidden, "dtype": "f16",
         "norm": {"self_mean": self_mean.round(5).tolist(), "self_std": self_std.round(5).tolist(),
                  "mon_mean": mon_mean.round(5).tolist(), "mon_std": mon_std.round(5).tolist()},
         # the policy only trusts an action's predictions once it has seen enough of that action

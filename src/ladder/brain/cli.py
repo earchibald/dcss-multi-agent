@@ -59,7 +59,13 @@ def learn_from(args: argparse.Namespace) -> list[str]:
 
 def cmd_corpus(args: argparse.Namespace) -> None:
     from .corpus import build
-    print(json.dumps(build(learn_from(args), args.corpus), indent=1))
+    print(json.dumps(build(learn_from(args), args.corpus, sidecars=args.sidecars), indent=1))
+
+
+def cmd_reobserve(args: argparse.Namespace) -> None:
+    from .reobserve import run
+    s = run(args.roots or [args.runs], args.sidecars, workers=args.workers, fresh=args.fresh)
+    print(json.dumps({k: v for k, v in s.items() if k != "by_top"}, indent=1))
 
 
 def cmd_forks(args: argparse.Namespace) -> None:
@@ -146,7 +152,7 @@ def cmd_iterate(args: argparse.Namespace) -> None:
                                  background=args.background, weapon=args.weapon, max_steps=args.max_steps,
                                  max_turns=args.max_turns)
             print(f"  {forks['games']} played, {forks['lost']} lost, {forks['seconds']} s")
-        meta = build(learn_from(args), args.corpus)
+        meta = build(learn_from(args), args.corpus, sidecars=args.sidecars)
         print(f"  corpus: {meta['rows']} rows from {meta['games']} games ({meta['deaths']} deaths), {meta['by_source']}")
         candidate = champion.parent / f"iter{n}.json"
         info = train(args.corpus, candidate, hidden=args.hidden, epochs=args.epochs, note=f"round {n}",
@@ -183,6 +189,8 @@ def add_parser(sub) -> None:
         q.add_argument("--out", default="runs/brain", help="where self-play games are written and read")
         q.add_argument("--runs", default="runs", help="searched for step logs and recordings of your own games")
         q.add_argument("--corpus", default="runs/brain/corpus.npz")
+        q.add_argument("--sidecars", default="runs/brain/obsx",
+                       help="where `reobserve` writes, and `corpus` reads, sight fields for old step logs")
         if not play:
             return
         from ..conn import DEFAULT_URL
@@ -208,6 +216,13 @@ def add_parser(sub) -> None:
     common(q, play=False)
     q.add_argument("roots", nargs="*", help="directories to search for steps.jsonl (default: --runs)")
     q.set_defaults(fn=cmd_corpus)
+
+    q = bsub.add_parser("reobserve", help="rebuild the sight fields of old step logs from their protocol logs")
+    common(q, play=False)
+    q.add_argument("roots", nargs="*", help="directories to search for steps.jsonl (default: --runs)")
+    q.add_argument("--workers", type=int, default=4)
+    q.add_argument("--fresh", action="store_true", help="redo sidecars that are already there")
+    q.set_defaults(fn=cmd_reobserve)
 
     q = bsub.add_parser("forks", help="replay recorded games to a choice and try the other actions there")
     common(q)

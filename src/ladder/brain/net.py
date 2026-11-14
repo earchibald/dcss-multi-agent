@@ -20,7 +20,7 @@ from pathlib import Path
 
 import numpy as np
 
-from .features import ACTIONS, COMPONENTS, FEATURE_VERSION, MAX_MONS, MON_DIM, SELF_DIM
+from .features import ACTIONS, COMPONENTS, FEATURE_VERSION, MAX_MONS, MON_DIM, SELF_DIM, V4_MON, V4_SELF
 
 FORMAT = "dcss-trained-brain"
 LAYERS = ("self1", "mon1", "mon2", "trunk", "head1", "head2", "danger", "prior")
@@ -39,7 +39,16 @@ class TrainedNet:
     def __init__(self, model: dict, name: str = "model"):
         if model.get("format") != FORMAT:
             raise ModelMismatch(f"{name} is not a {FORMAT} file")
-        for key, want in contract().items():
+        # A version 4 model reads the front of each version 5 vector, which holds version 4's
+        # numbers unchanged (features.SELF_GROUPS, MON_GROUPS), so the champion still loads.
+        want_all = contract()
+        # (Version 5 training on version 4's columns only, train(strict=False), saves the same shape.)
+        if (model.get("self_dim"), model.get("mon_dim")) == (V4_SELF, V4_MON) \
+                and model.get("feature_version") in (4, FEATURE_VERSION):
+            want_all = {**want_all, "feature_version": model["feature_version"],
+                        "self_dim": V4_SELF, "mon_dim": V4_MON}
+        self.self_dim, self.mon_dim = want_all["self_dim"], want_all["mon_dim"]
+        for key, want in want_all.items():
             if model.get(key) != want:
                 raise ModelMismatch(f"{name} was trained for another {key} ({model.get(key)!r}, code has {want!r}). Retrain.")
         self.name = name
@@ -64,6 +73,7 @@ class TrainedNet:
     def forward(self, s: np.ndarray, mons: np.ndarray, mask: np.ndarray) -> tuple[np.ndarray, float, np.ndarray]:
         """One moment in: (q [actions, components], danger, prior logits [actions]) out."""
         relu = lambda x: np.maximum(x, 0)  # noqa: E731
+        s, mons = s[:self.self_dim], mons[:, :self.mon_dim]
         s = relu(self._lin("self1", (s - self.norm["self_mean"]) / self.norm["self_std"]))
         n = int(mask.sum())
         if n:
@@ -86,7 +96,7 @@ def check_parity(model_path: str | Path, tol: float = 2e-3) -> float:
     worst = 0.0
     for i in range(len(p["self"])):
         q, danger, prior = net.forward(np.asarray(p["self"][i], dtype=np.float32),
-                                       np.asarray(p["mons"][i], dtype=np.float32).reshape(MAX_MONS, MON_DIM),
+                                       np.asarray(p["mons"][i], dtype=np.float32).reshape(MAX_MONS, -1),
                                        np.asarray(p["mask"][i], dtype=np.float32))
         worst = max(worst, float(np.abs(q.ravel() - np.asarray(p["q"][i])).max()),
                     abs(danger - p["danger"][i]), float(np.abs(prior - np.asarray(p["prior"][i])).max()))

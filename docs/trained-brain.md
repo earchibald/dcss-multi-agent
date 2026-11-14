@@ -7,6 +7,9 @@ runs in numpy in well under a millisecond. It is the same idea as the trained br
 
 ## Where it stands
 
+**2026-11-14:** `iter2` is still the champion. On 200 evaluation dungeons it averages 5.51 (500000–500199)
+and 5.48 (530000–530199). The version 5 inputs (below) did not beat it.
+
 Measured 2026-11-09 on this Mac, Minotaur Berserker, 60 fixed evaluation dungeons (seeds 500000–500059)
 that training never sees. "Depth" is the deepest floor reached. The last column compares model and
 baseline dungeon by dungeon.
@@ -75,6 +78,82 @@ Rounds 3 and 4 (2026-11-10) did not move it. `iter2` stays the champion, replaye
   with no random choices.
 
 The first three candidates (before equipment, 3.75 to 4.30 against the old 4.36) are in `models/v2/`.
+
+### Version 5: richer inputs (2026-11-14)
+
+`FEATURE_VERSION` 5 adds the monster table and what the game state shows beyond names ("What it sees"
+below). Measured offline first, then in games.
+
+**Offline.** One corpus (810,581 rows, the same rows and the same validation split by dungeon for every
+variant: 167,251 validation rows, 240 held-out forked moments), sliced by columns, each variant trained at 5
+seeds with the usual settings. Mean ± standard deviation over the seeds; fork regret is the default style's
+value lost against the best action tried at a forked moment (random choice loses 1.46).
+
+| inputs | q_loss | R² died_soon | R² depth_end | danger AUC | fork regret |
+| --- | --- | --- | --- | --- | --- |
+| `v4`: version 4's | 0.7565 ± 0.0036 | 0.309 ± 0.006 | 0.212 ± 0.009 | 0.800 ± 0.002 | 1.34 ± 0.08 |
+| `s1`: + the monster table | 0.7545 ± 0.0045 | 0.309 ± 0.005 | 0.211 ± 0.010 | 0.802 ± 0.002 | 1.39 ± 0.08 |
+| `s12`: + the table and sight (version 5) | **0.7503 ± 0.0021** | **0.319 ± 0.005** | 0.215 ± 0.006 | 0.800 ± 0.003 | 1.28 ± 0.07 |
+| control: `s12` with the new columns shuffled across rows | 0.7540 ± 0.0012 | 0.307 ± 0.003 | 0.218 ± 0.004 | 0.800 ± 0.002 | 1.34 ± 0.08 |
+| `s12` without the name hash | 0.7503 ± 0.0032 | 0.323 ± 0.010 | 0.211 ± 0.008 | 0.798 ± 0.003 | 1.26 ± 0.08 |
+
+Paired over the 240 held-out forked moments (seeds averaged), fork regret against `v4`: `s1` +0.04
+[−0.03, +0.12], `s12` −0.06 [−0.13, +0.02], control −0.00 [−0.09, +0.08], no hash −0.08 [−0.18, +0.02]
+(95% bootstrap over moments).
+
+- **The monster table alone (stage 1) does nothing measurable.** Every difference from `v4` is inside the
+  seed-to-seed spread. The name hash and the threat level already carried most of it.
+- **The table plus sight (stage 1+2) is a small, real gain on two numbers**: outcome loss −0.006 (about 2
+  standard deviations, and 0.004 better than the shuffled control, which itself drifts 0.002) and R² of
+  dying soon +0.010 (about 2 sd; the control is −0.002). It does **not** move what the policy uses to
+  choose: R² of `depth_end`, danger AUC and fork regret are all within the spread, and the fork interval
+  includes zero. So it passes the offline gate narrowly, on predicting death, not on choosing.
+- Dropping the name hash makes no difference either way, so it stays (it keeps version 4's columns a clean
+  prefix).
+- The training numbers stop improving after 3–6 epochs whatever the inputs; the network memorises games
+  from there.
+
+**In games it is worse, and that is real.** `models/v5-seen.json` (the `s12` inputs, trained the usual way
+at seed 0, chosen before any game) against the champion `iter2`, both with no random choices, 8 at once, on
+two blocks of 200 evaluation dungeons. The champion was played with this branch's previous commit, since
+version 5 refuses it. Block A is the usual 500000–500199; block B, 530000–530199, had never been played by
+anything. Differences are paired by dungeon over the games both finished, with a 95% bootstrap interval.
+
+| | block | finished (hung) | mean depth | died | mean XL | game turns | `descend` share of choices |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| champion `iter2` | A | 199 (1) | 5.51 | 193 | 5.65 | 1817 | 28.9% |
+| `v5-seen` | A | 199 (1) | 4.84 | 188 | 4.70 | 1294 | 38.0% |
+| control: version 4 inputs, retrained on the same rows (`v5-v4control`) | A | 199 (1) | 5.26 | 180 | 5.40 | 2019 | 38.8% |
+| champion `iter2` | B | 194 (6) | 5.48 | 183 | 5.32 | 1743 | 31.7% |
+| `v5-seen` | B | 195 (5) | 4.69 | 187 | 4.54 | 1239 | 37.3% |
+
+| paired | block | dungeons | depth difference | 95% interval | deeper / same / shallower |
+| --- | --- | --- | --- | --- | --- |
+| `v5-seen` − champion | A | 198 | **−0.66** | [−1.10, −0.22] | 59 / 44 / 95 |
+| `v5-seen` − champion | B (fresh) | 190 | **−0.82** | [−1.35, −0.30] | 63 / 38 / 89 |
+| control − champion | A | 198 | −0.23 | [−0.65, +0.19] | 75 / 44 / 79 |
+| `v5-seen` − control | A | 198 | −0.42 | [−0.89, +0.05] | 70 / 41 / 87 |
+
+- Under the promotion rule (higher mean depth, at least 90% of games finished) `v5-seen` is not promoted,
+  and the fresh block says the loss is not a fluke of block A. `iter2` stays the champion.
+- It **dives again**: the same kind of floor in 30% fewer turns, a level lower, more `descend`. The
+  control, which sees only version 4's inputs of the same rows, does not (2,019 turns) and is level with
+  the champion within the interval. So retraining on today's corpus costs little or nothing, and most of
+  the loss comes with the new inputs, though `v5-seen` against the control alone is only borderline.
+- Read with the offline table: the new inputs predict *dying soon* better and *depth gained* no better,
+  and the policy acts on `depth_end − died_soon`. A sharper `died_soon` on a few moments can't explain
+  diving, so the likelier cause is that the extra inputs let the network fit the self-play policy's own
+  habits more closely (the corpus is 73% rules of thumb and 21% earlier models, which already dived), and
+  the 0.25 margin then lets it act on that more often. Measured on block A: `v5-seen` leaves the rules of
+  thumb at **34%** of its choices, the champion at 16% and the control at 20%, and its commonest change is
+  explore → descend (10,244 times; the champion's is drinking an unknown potion → descend). The cause is
+  inferred, not verified, and with one training seed per model the spread of play between seeds is
+  unmeasured.
+- About 1 in 200 games hangs without random choices on block A and 1 in 35 on block B, for every model.
+
+What would test it next, cheapest first: play `v5-seen` at `margin=0.6` or `1.0` (the earlier way to hold a
+diving model near the baseline), train 2–3 more seeds of `s12` and of the control and play them on block A
+to see the spread in games, and add forks (the rows that compare actions) before adding inputs.
 
 Throughput: about 28 s per game, 6 at once (240 games in 11 minutes); a fork costs about 18 s of one
 worker, since it replays the game to the fork and then plays on. Training takes under a minute. A model
@@ -170,7 +249,30 @@ turns it into numbers:
 - **Per monster** (a set): distance, direction, adjacent, unique, webtiles' threat level (0–3), and its name
   hashed into 24 buckets.
 
-It does not see the map, monster HP, what is wielded or worn (only the AC it adds up to), skills or spells. Those are the obvious next features.
+Those are version 4's inputs (81 numbers, 33 per monster). `FEATURE_VERSION` 5 keeps them as the front of
+each vector and adds two groups (`features.SELF_GROUPS`, `MON_GROUPS`):
+
+- **From the monster table** ("table", 15 per monster, 7 totals). `src/ladder/brain/monsters-0.34.json` is a
+  53 KB copy of `docs/data/monsters-0.34.json` shipped inside the package, so every worker has it
+  (`monsters.lookup` handles "the", zombies, spectral, vault names; 99.99% of the corpus's sightings are
+  found). Per monster: found or not, hit dice, average HP against our max HP, its attacks' maximum damage
+  times its speed against our current HP, fast, slow, eight kinds of threat (hits from range, poison,
+  disables, blinks, summons, drains or corrodes, smites, reach), experience. Totals: summed HP and damage,
+  the worst damage, the highest HD, how many are fast, ranged, not in the table. Computed from the names
+  alone, so every step ever logged re-encodes.
+- **From the game state** ("seen", 12 per monster, 11 in the character vector), read by `features.sight`:
+  each monster's damage level and the HP that leaves (its `avghp` from webtiles times the middle of the
+  damage band), asleep / unaware / fleeing / paralysed, poisoned, in a net or web, and status icons
+  (summoned, buffed, debuffed); the score `gear.py` gives the weapon in hand; and the map around the
+  character: walkable squares within 2, a corridor (walls on both sides), the shortest, mean and longest of
+  eight rays to a wall (up to 7), unknown squares within 3. `observe` logs these from now on. Older steps
+  get them from `ladder brain reobserve`, which replays each game's protocol log (below). A step that has
+  none has `seen_missing` set: zeros never stand for "not known".
+
+The name hash stays. It is part of version 4's prefix, which keeps the comparison below clean, and removing
+it made no measurable difference either way (the version 5 table under "Where it stands").
+
+Still not seen: what is worn (only the AC it adds up to), skills, spells, and the map as a picture.
 
 ## What it predicts
 
@@ -262,11 +364,33 @@ Self-play uses its own accounts, `ladderbrain1` to `ladderbrain<workers>`, so it
 `FEATURE_VERSION`, run `ladder brain corpus` (old step logs are re-encoded from their observation dicts,
 so no game is lost; a new field is simply missing from old observations) and train again.
 
+A version 4 model still loads: version 5 keeps version 4's numbers at the front of each vector, and
+`TrainedNet` gives such a model only that front part. So the champion `iter2` keeps playing under version
+5's code. (The comparison below was played before this was added, with the champion run from the code it
+was trained with.) Models older than version 4 are refused.
+
+Fields that need the game state, not only the observation dict, can be rebuilt for old steps:
+
+```bash
+uv run ladder brain reobserve --sidecars runs/brain/obsx      # protocol logs -> steps.x.jsonl per step log
+uv run ladder brain corpus --sidecars runs/brain/obsx         # folds them in
+```
+
+`reobserve` replays every `game<seed>.protocol.jsonl.gz` through `GameState` and lines each logged step up
+with its moment in the log (the `_ladder` key notes, or `input_mode` messages in round 0's logs), checking
+that turn, HP, depth and every monster's position agree and that `observe` there reproduces the logged
+fields. Over the whole corpus (1,495,092 steps, replayed fork steps included, 3 minutes on 6 cores):
+**99.92% of the steps that have a protocol log are placed** (99.66% exactly), 96.66% of all steps; 48,816
+have no protocol log (round 0's lost ones, some forks, your games). Of the 810,581 training rows, 786,235
+have sight fields and 24,346 (3.0%) are marked missing. Evaluation dungeons and qw runs are never read.
+
 ## Files
 
 | | |
 | --- | --- |
 | `src/ladder/brain/features.py` | actions, components, `observe` (state to dict) and `encode` (dict to numbers) |
+| `src/ladder/brain/monsters.py`, `monsters-0.34.json` | the shipped monster table and the name lookup |
+| `src/ladder/brain/reobserve.py` | rebuilds `sight` fields for old step logs from their protocol logs |
 | `src/ladder/brain/net.py` | model file format, numpy forward pass, parity check |
 | `src/ladder/brain/gear.py` | ranks weapons and armour, and says which piece in the pack is better than the one in use |
 | `src/ladder/brain/policy.py` | `available`, `baseline`, `baseline_wiki`, `Style`, and `BrainTiers`, which sits in Reflex where `StubTiers` did |
@@ -355,6 +479,10 @@ In the order I would take them:
    is (hits from range, one-hit killer, fast, paralyses, blinks), since each wants a different answer
    and 24 name buckets can't tell them apart; and weapon skill, so `gear.py` stops taking a great mace
    it swings too slowly.*
+   *Done in part as version 5 (2026-11-14): the monster table, monster HP and behaviour, the weapon,
+   map summaries. It predicts death a little better and plays worse (0.7 to 0.8 depths, on two blocks of
+   200 dungeons), because it dives. Not done: worn armour (only the brain's own belief exists), skills (not
+   sent), the map patch. Inputs are not the bottleneck while the labels can't tell actions apart.*
 4. **Promote on more than 60 dungeons.** Differences under 0.3 depths can't be seen with 60; the same
    baseline replayed varies by 0.1. 200 evaluation dungeons would take about 15 minutes per model.
 5. **The remaining dead ends**: games that hang (1 in 20 with random choices in round 4, 1 in 40

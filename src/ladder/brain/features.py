@@ -6,20 +6,31 @@ can be re-encoded after the features change.
 
 Changing ACTIONS, COMPONENTS or what `encode` emits breaks the model contract: bump
 FEATURE_VERSION, rebuild the corpus and retrain. `TrainedNet` refuses a mismatched model.
+
+Version 5 keeps version 4's numbers as the front of each vector (SELF_GROUPS, MON_GROUPS) and adds:
+  - "table": per monster, what the shipped monster table (monsters.py) says about its name; totals over
+    the view in the character vector. Needs only the names, so every logged step re-encodes.
+  - "seen": what `sight` reads from the game state beyond names: each monster's damage level,
+    behaviour, poison, net or web, status icons and estimated HP left; the weapon in hand; a few
+    numbers about the map around the character. Steps logged before version 5 get these from
+    `ladder brain reobserve`, which replays the protocol log; a step without them has `seen_missing`
+    set and zeros, never zeros alone.
 """
 
 from __future__ import annotations
 
+import math
 import zlib
 from collections import deque
 
 import numpy as np
 
-from ..state import MF_STAIR_DOWN, MF_STAIR_UP, MF_TRAP, NOT_WALKABLE, GameState, Monster
+from ..state import MF_STAIR_DOWN, MF_STAIR_UP, MF_TRAP, MF_UNEXPLORED, MF_UNSEEN, NOT_WALKABLE, GameState, Monster
 from ..travel import DIRECTIONS
-from . import gear
+from . import gear, monsters
 
-FEATURE_VERSION = 4
+FEATURE_VERSION = 5
+SIGHT_VERSION = 1          # the `obsx` field of an observation: which `sight` fields it carries
 
 # What the brain can ask Reflex to do. Order is the model's output order.
 ACTIONS = ["explore", "fight", "rest", "descend", "flee_up", "quaff_heal", "quaff_unknown",
@@ -105,6 +116,90 @@ def inventory(state: GameState, largest: bool = False) -> dict:
     return out
 
 
+# --- what `sight` reads beyond names (FEATURE_VERSION 5) ------------------------------------------------
+
+# A cell's foreground tile flags (webtiles enums.js, fg_flags), as one 64-bit number: an int, or
+# [low, high] 32-bit words once the high word is used.
+FG_BEH_SHIFT, FG_MDAM_SHIFT, FG_POISON_SHIFT = 20, 30, 59
+FG_NET, FG_WEB = 0x00800000, 0x01000000
+# behaviour: STAB is asleep (or otherwise helpless), MAY_STAB unaware or wandering
+BEHAVIOUR = {1: "asleep", 2: "unaware", 3: "fleeing", 4: "paralysed"}
+# damage level -> share of max HP left, the middle of the band `mons_get_damage_level` (mon-util.cc)
+# reports: none, light (<100%), moderate (<=80%), heavy (<=60%), severe (<=40%), almost dead (<=20%)
+MDAM_LEFT = {0: 1.0, 1: 0.9, 2: 0.7, 3: 0.5, 4: 0.3, 7: 0.1}
+# status icons on a monster's cell (t.icons): tile numbers of DCSS 0.34's TILEI_* (tiledef-icons.h)
+ICONS = {10192: "summoned", 10191: "summoned", 10201: "berserk", 10202: "frenzied", 10203: "slowed",
+         10204: "hasted", 10205: "might", 10206: "petrifying", 10207: "petrified", 10208: "blind",
+         10211: "confused", 10219: "corroded", 10220: "swift", 10228: "dazed", 10237: "weakened",
+         10245: "paralysed", 10198: "sticky_flame", 10200: "constricted", 10238: "teleporting"}
+BUFFED = {"berserk", "frenzied", "hasted", "might", "swift"}
+DEBUFFED = {"slowed", "petrifying", "petrified", "blind", "confused", "corroded", "dazed", "weakened",
+            "paralysed", "sticky_flame", "constricted"}
+RAY = 7                    # how far the map rays look
+
+
+def fg_bits(cell: dict) -> int | None:
+    """A cell's foreground flags as one number, or None if the cell has none."""
+    fg = (cell.get("t") or {}).get("fg")
+    if fg is None:
+        return None
+    if isinstance(fg, list):
+        return (fg[0] & 0xFFFFFFFF) | ((fg[1] if len(fg) > 1 else 0) << 32)
+    return fg & 0xFFFFFFFF
+
+
+def _walkable(state: GameState, pos: tuple[int, int]) -> bool:
+    c = state.cells.get(pos)
+    return c is not None and c.get("mf", 0) not in NOT_WALKABLE
+
+
+def sight(state: GameState, mons: list[Monster]) -> dict:
+    """The observation fields added in FEATURE_VERSION 5 that need the game state, not only names.
+
+    `mons` are the monsters in the order of the observation's "mons". Returns {"mons": [per monster],
+    "wpn", "wpn_held", "map", "obsx"}; observe() merges it in, and `reobserve` rebuilds it for steps logged
+    before it existed.
+    """
+    px, py = state.pos
+    per = []
+    for m in mons:
+        cell = state.cells.get(m.pos, {})
+        v = fg_bits(cell)
+        icons = (cell.get("t") or {}).get("icons") or []
+        avghp = (state.monster_info.get(m.id, {}).get("typedata") or {}).get("avghp")
+        per.append({"fg": v is not None,
+                    "mdam": 0 if v is None else (v >> FG_MDAM_SHIFT) & 7,
+                    "beh": 0 if v is None else (v >> FG_BEH_SHIFT) & 7,
+                    "pois": 0 if v is None else (v >> FG_POISON_SHIFT) & 3,
+                    "caught": bool(v and v & (FG_NET | FG_WEB)),
+                    "st": sorted({ICONS[i] for i in icons if isinstance(i, int) and i in ICONS}),
+                    "avghp": avghp})
+    rays = []
+    for dx, dy in DIRECTIONS:
+        n = 0
+        while n < RAY and _walkable(state, (px + dx * (n + 1), py + dy * (n + 1))):
+            n += 1
+        rays.append(n)
+    near = [(px + dx, py + dy) for dx in range(-3, 4) for dy in range(-3, 4) if (dx, dy) != (0, 0)]
+    open2 = sum(_walkable(state, p) for p in near if max(abs(p[0] - px), abs(p[1] - py)) <= 2)
+    unseen3 = sum(1 for p in near if (state.cells.get(p) or {}).get("mf", MF_UNSEEN) in (MF_UNSEEN, MF_UNEXPLORED))
+    wall = {d: not _walkable(state, (px + d[0], py + d[1])) for d in ((0, -1), (0, 1), (-1, 0), (1, 0))}
+    corridor = (wall[(0, -1)] and wall[(0, 1)]) or (wall[(-1, 0)] and wall[(1, 0)])
+    inv = state.player.get("inv") or {}
+    wielded = inv.get(str(state.player.get("weapon_index", -1)))
+    w = gear.weapon(wielded) if wielded else None
+    return {"mons": per, "wpn": round(w[0], 2) if w else None, "wpn_held": wielded is not None,
+            "map": {"open2": open2, "unseen3": unseen3, "corridor": bool(corridor), "rays": rays},
+            "obsx": SIGHT_VERSION}
+
+
+def merge_sight(obs: dict, extra: dict) -> dict:
+    """`obs` with a `sight` result folded in (per monster into its "mons" entries, the rest at the top)."""
+    out = {**obs, **{k: v for k, v in extra.items() if k != "mons"}}
+    out["mons"] = [{**m, **x} for m, x in zip(obs["mons"], extra["mons"])]
+    return out
+
+
 def observe(state: GameState, hostiles: list[Monster], ctx: dict) -> dict:
     """The moment as a JSON dict. `ctx` is what the tiers object remembers (see policy.BrainTiers)."""
     p = state.player
@@ -116,7 +211,7 @@ def observe(state: GameState, hostiles: list[Monster], ctx: dict) -> dict:
     better = gear.upgrades(state, ctx.get("worn") or {})
     open_n = sum(1 for dx, dy in DIRECTIONS
                  if (c := state.cells.get((px + dx, py + dy))) and c.get("mf", 0) not in NOT_WALKABLE)
-    return {
+    obs = {
         "turn": state.turn, "place": p.get("place", ""), "depth": p.get("depth", 0),
         "hp": state.hp, "hp_max": state.hp_max, "mp": p.get("mp", 0), "mp_max": p.get("mp_max", 0),
         "xl": p.get("xl", 1), "progress": p.get("progress", 0),
@@ -136,10 +231,38 @@ def observe(state: GameState, hostiles: list[Monster], ctx: dict) -> dict:
         "level_steps": ctx.get("level_steps", 0), "level_turns": state.turn - ctx.get("level_turn", state.turn),
         "hp_delta": ctx.get("hp_delta", 0.0), "last_action": ctx.get("last_action"),
     }
+    return merge_sight(obs, sight(state, mons[:MAX_MONS]))
 
 
 def _cap(x: float, hi: float) -> float:
     return max(0.0, min(float(x), hi)) / hi
+
+
+def table_stats(m: dict, hp: float, hp_max: float) -> tuple[list[float], dict | None]:
+    """The "table" numbers for one monster (TABLE_MON of them), and its table entry."""
+    k = monsters.lookup(m["name"])
+    if k is None:
+        return [0.0] * TABLE_MON, None
+    per_turn = k["dmg"] * k["speed"] / 10                   # most it can deal in one of our turns
+    row = [1.0, _cap(k["hd"], 30), _cap(k["hp"] / hp_max, 4), _cap(per_turn / max(hp, 1), 2),
+           float(k["speed"] > 10), float(k["speed"] < 10)]
+    row += [float(kind in k["kinds"]) for kind in monsters.KINDS]
+    row.append(min(math.log1p(k["exp"]) / 10, 1.0))
+    return row, k
+
+
+def seen_stats(m: dict, k: dict | None, hp_max: float) -> list[float]:
+    """The "seen" numbers for one monster (SEEN_MON of them); zeros when the step has no `sight` fields."""
+    if not m.get("fg"):
+        return [0.0] * SEEN_MON
+    left = MDAM_LEFT.get(m.get("mdam", 0), 1.0)
+    avg = m.get("avghp") or (k["hp"] if k else 0.0)
+    st = set(m.get("st") or [])
+    row = [1.0, left, _cap(avg * left / hp_max, 4)]
+    row += [float(m.get("beh") == b) for b in BEHAVIOUR]
+    row += [float(m.get("pois", 0) > 0), float(bool(m.get("caught"))), float("summoned" in st),
+            float(bool(st & BUFFED)), float(bool(st & DEBUFFED))]
+    return row
 
 
 def encode(obs: dict, avail: list[str]) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -170,15 +293,49 @@ def encode(obs: dict, avail: list[str]) -> tuple[np.ndarray, np.ndarray, np.ndar
     s += [float(a in avail) for a in ACTIONS]
     m_arr = np.zeros((MAX_MONS, MON_DIM), dtype=np.float32)
     mask = np.zeros(MAX_MONS, dtype=np.float32)
+    table_rows, seen_rows = [], []
     for i, (m, d) in enumerate(zip(mons[:MAX_MONS], dists)):
         row = [_cap(d, 8), m["dx"] / 8, m["dy"] / 8, float(d <= 1), float(m["unique"])]
         row += [float(m["threat"] == t) for t in range(4)]
         bucket = zlib.crc32(m["name"].lower().encode()) % NAME_BUCKETS
         row += [float(b == bucket) for b in range(NAME_BUCKETS)]
-        m_arr[i] = row
+        trow, k = table_stats(m, obs["hp"], hp_max)
+        srow = seen_stats(m, k, hp_max)
+        table_rows.append(trow)
+        seen_rows.append(srow)
+        m_arr[i] = row + trow + srow
         mask[i] = 1
+    # "table" totals over the view. Columns of a table row: known, hd, hp, per-turn damage, fast, slow,
+    # the kinds (ranged first), experience
+    t = np.asarray(table_rows, dtype=np.float32).reshape(-1, TABLE_MON)
+    s += [_cap(t[:, 2].sum() * 4, 8), _cap(t[:, 3].sum() * 2, 4), float(t[:, 3].max(initial=0)),
+          float(t[:, 1].max(initial=0)), _cap(t[:, 4].sum(), 8), _cap(t[:, 6].sum(), 8),
+          _cap(len(t) - t[:, 0].sum(), 8)]
+    # "seen": whether the step has them at all, the weapon, the map around, then totals over the view
+    # (estimated HP left, monsters asleep or unaware)
+    have = obs.get("obsx") is not None
+    mp = obs.get("map") or {}
+    rays = mp.get("rays") or [0] * len(DIRECTIONS)
+    sr = np.asarray(seen_rows, dtype=np.float32).reshape(-1, SEEN_MON)
+    s += [float(not have),
+          _cap(obs.get("wpn") or 0, 20), float(have and bool(obs.get("wpn_held")) and obs.get("wpn") is None),
+          _cap(mp.get("open2", 0), 24), float(bool(mp.get("corridor"))),
+          _cap(min(rays), RAY), _cap(sum(rays) / len(rays), RAY), _cap(max(rays), RAY),
+          _cap(mp.get("unseen3", 0), 48),
+          _cap(sr[:, 2].sum() * 4, 8), _cap(sr[:, 3].sum() + sr[:, 4].sum(), 8)]
     return np.asarray(s, dtype=np.float32), m_arr, mask
 
 
-MON_DIM = 5 + 4 + NAME_BUCKETS
-SELF_DIM = 37 + len(STATUSES) + 2 * N_ACTIONS
+V4_MON = 5 + 4 + NAME_BUCKETS
+TABLE_MON = 6 + len(monsters.KINDS) + 1
+SEEN_MON = 3 + len(BEHAVIOUR) + 5
+MON_DIM = V4_MON + TABLE_MON + SEEN_MON
+V4_SELF = 37 + len(STATUSES) + 2 * N_ACTIONS
+TABLE_SELF, SEEN_SELF = 7, 11
+SELF_DIM = V4_SELF + TABLE_SELF + SEEN_SELF
+# Where each group of inputs sits, as [start, end) columns: version 4's, the table's, then sight's.
+# "name" is the name hash inside "v4". The offline comparison (docs/trained-brain.md) trains on subsets.
+SELF_GROUPS = {"v4": (0, V4_SELF), "table": (V4_SELF, V4_SELF + TABLE_SELF),
+               "seen": (V4_SELF + TABLE_SELF, SELF_DIM)}
+MON_GROUPS = {"v4": (0, V4_MON), "name": (9, V4_MON), "table": (V4_MON, V4_MON + TABLE_MON),
+              "seen": (V4_MON + TABLE_MON, MON_DIM)}

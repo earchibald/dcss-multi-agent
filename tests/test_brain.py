@@ -14,7 +14,8 @@ from helpers import add_monster, make_state, player
 from ladder.brain import corpus, policy
 from ladder.brain.cli import compare
 from ladder.brain.features import (ACTIONS, COMPONENTS, FEATURE_VERSION, MAX_MONS, MON_DIM, N_ACTIONS,
-                                   N_COMPONENTS, SELF_DIM, encode, inventory, observe, path, progress_depth)
+                                   N_COMPONENTS, SELF_DIM, V4_SELF, encode, inventory, observe, path,
+                                   progress_depth)
 from ladder.brain.net import ModelMismatch, TrainedNet, contract
 from ladder.brain.policy import (BLOCK_TURNS, FORK_DONE, IDLE_LIMIT, ITEM_PROMPTS, REPLAY_DIVERGED, UNTIL_LEVEL,
                                  BrainTiers, Style, available, baseline, heal_potion, poison_lethal_after_rage,
@@ -122,9 +123,9 @@ def test_encode_caps_monsters_at_max():
 
 def test_encode_marks_available_and_last_action():
     s, _, _ = encode(obs(last_action="rest"), ["explore", "rest"])
-    n = len(s)
+    n = V4_SELF                              # the version-4 inputs end with these two blocks
     assert s[n - 2 * N_ACTIONS:n - N_ACTIONS].tolist() == [float(a == "rest") for a in ACTIONS]
-    assert s[n - N_ACTIONS:].tolist() == [float(a in ("explore", "rest")) for a in ACTIONS]
+    assert s[n - N_ACTIONS:n].tolist() == [float(a in ("explore", "rest")) for a in ACTIONS]
 
 
 def test_observe_reads_a_game_state():

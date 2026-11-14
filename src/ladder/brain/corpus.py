@@ -26,12 +26,13 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import zlib
 from pathlib import Path
 
 import numpy as np
 
-from .features import ACTIONS, MAX_MONS, MON_DIM, N_COMPONENTS, SELF_DIM, encode, progress_depth
+from .features import ACTIONS, MAX_MONS, MON_DIM, N_COMPONENTS, SELF_DIM, encode, merge_sight, progress_depth
 from .net import contract
 from .policy import REPLAY_DIVERGED
 
@@ -50,11 +51,23 @@ def seed_of(game) -> int:
     return int(head) if head.isdigit() else -1
 
 
+def step_files(root: str | Path) -> list[Path]:
+    """Every steps.jsonl under `root`, without looking inside a game directory on an evaluation dungeon
+    (`g<seed>...` with seed >= HOLDOUT_SEED) or a qw run (`qw...`), neither of which is training data."""
+    out = []
+    for here, dirs, files in os.walk(root):
+        dirs[:] = sorted(d for d in dirs if not d.startswith("qw")
+                         and not (d.startswith("g") and seed_of(d[1:]) >= HOLDOUT_SEED))
+        if "steps.jsonl" in files:
+            out.append(Path(here) / "steps.jsonl")
+    return out
+
+
 def read_games(roots: list[str | Path]) -> list[dict]:
-    """[{id, steps, end}] for every game in every steps.jsonl under `roots`."""
+    """[{id, dir, steps, end}] for every game in every steps.jsonl under `roots`."""
     games = []
     # ids are relative to the root, so the held-out games stay the same wherever the corpus lives
-    files = {f.resolve(): f.parent.relative_to(root) for root in roots for f in Path(root).rglob("steps.jsonl")}
+    files = {f.resolve(): f.parent.relative_to(root) for root in roots for f in step_files(root)}
     for f, rel in sorted(files.items()):
         by_game: dict = {}
         for line in f.read_text().splitlines():
@@ -62,7 +75,8 @@ def read_games(roots: list[str | Path]) -> list[dict]:
                 r = json.loads(line)
             except json.JSONDecodeError:
                 continue                       # the last line of a game that was killed
-            g = by_game.setdefault(r.get("game"), {"id": f"{rel}#{r.get('game')}", "steps": [], "end": None})
+            g = by_game.setdefault(r.get("game"), {"id": f"{rel}#{r.get('game')}", "dir": str(rel), "steps": [],
+                                                   "end": None})
             if r.get("type") == "end":
                 g["end"] = r
             else:
@@ -141,20 +155,53 @@ def label(game: dict) -> np.ndarray:
     return out
 
 
-def build(roots: list[str | Path], out: str | Path) -> dict:
-    """Encode and label every game under `roots` into `out` (.npz) and `out`.meta.json."""
+def load_sidecar(sidecars: str | Path | None, rel: str) -> dict:
+    """{(game, step): sight dict} from `ladder brain reobserve`'s sidecar for the step log in `rel`."""
+    if sidecars is None:
+        return {}
+    path = Path(sidecars) / rel / "steps.x.jsonl"
+    if not path.exists():
+        return {}
+    out = {}
+    for line in path.read_text().splitlines():
+        x = json.loads(line)
+        if x.get("ok") and x.get("x"):
+            out[(str(x["game"]), x["step"])] = x["x"]
+    return out
+
+
+def build(roots: list[str | Path], out: str | Path, sidecars: str | Path | None = None) -> dict:
+    """Encode and label every game under `roots` into `out` (.npz) and `out`.meta.json.
+
+    `sidecars` is where `ladder brain reobserve` wrote the sight fields of steps logged without them.
+    """
     games = read_games(roots)
+    # evaluation dungeons never become training rows (read_games drops them; this is the backstop)
+    assert all(seed_of(s.get("game")) < HOLDOUT_SEED for g in games for s in g["steps"]), "evaluation seed in corpus"
     cols: dict[str, list] = {k: [] for k in ("self", "mons", "mask", "avail", "action", "base", "q", "human", "fork", "group", "val")}
     sources: dict[str, int] = {}
+    seen = {"live": 0, "sidecar": 0, "missing": 0}
+    side_cache: dict[str, dict] = {}
     for g in games:
         q = label(g)
         # held out by dungeon where there is one, so a game and its forks land on the same side
         seed = seed_of(g["steps"][0].get("game"))
         val = zlib.crc32((str(seed) if seed >= 0 else g["id"]).encode()) % VAL_FOLD == 0
+        if g.get("dir") not in side_cache:
+            side_cache = {g.get("dir"): load_sidecar(sidecars, g.get("dir", ""))}   # one file's worth at a time
+        side = side_cache[g.get("dir")]
         for step, row in list(zip(g["steps"], q))[g.get("skip", 0):]:
             if step["action"] not in ACTIONS:
                 continue
-            s, m, mask = encode(step["obs"], step["avail"])
+            o = step["obs"]
+            if "obsx" in o:
+                seen["live"] += 1
+            elif (x := side.get((str(step.get("game")), step.get("step")))) is not None:
+                o = merge_sight(o, x)
+                seen["sidecar"] += 1
+            else:
+                seen["missing"] += 1
+            s, m, mask = encode(o, step["avail"])
             cols["self"].append(s)
             cols["mons"].append(m)
             cols["mask"].append(mask)
@@ -187,7 +234,8 @@ def build(roots: list[str | Path], out: str | Path) -> dict:
     np.savez_compressed(out, **arrays)
     ends = [g["end"] or {} for g in games]
     meta = {**contract(), "rows": n, "val_rows": int(arrays["val"].sum()), "games": len(games),
-            "deaths": sum(bool(e.get("died")) for e in ends), "by_source": sources,
+            "deaths": sum(bool(e.get("died")) for e in ends), "by_source": sources, "sight": seen,
+            "sidecars": str(sidecars) if sidecars else None,
             "by_action": {a: int((arrays["action"] == i).sum()) for i, a in enumerate(ACTIONS)},
             "roots": [str(r) for r in roots],
             "labels": {"soon_turns": SOON_TURNS, "xp_turns": XP_TURNS, "tau_go": TAU_GO, "tau_death": TAU_DEATH,
