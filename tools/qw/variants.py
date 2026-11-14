@@ -433,6 +433,119 @@ end"""),
         end
     end
 end"""),
+    "portal_expire": ("forget a timed portal when it closes in view ('the gate leading to a gauntlet "
+                      "disappears!'), and apply qw's 800-turn portal timeout whenever qw heads for a "
+                      "portal: qw only drops a portal on 'The walls and floor vibrate strangely', the "
+                      "message for a portal closing out of sight, and checks the timeout only when it "
+                      "re-plans. Seed 100532 (t10a) fought beside a Gauntlet gate until it closed and "
+                      "walked to the empty arch for 26,000 turns",
+                      """do
+    local old_message = c_message
+    function c_message(text, channel)
+        local result = old_message(text, channel)
+        if text:find(" disappears!", 1, true) or text:find("vanishes just as you enter", 1, true) then
+            local where = you.where()
+            local expiring = c_persist.expiring_portals and c_persist.expiring_portals[where]
+            if expiring and expiring[1] then
+                crawl.stderr("QWDBG\\t" .. you.turns() .. "\\tunstick portal_expire: " .. tostring(expiring[1])
+                    .. " on " .. where .. " closed in view")
+                remove_expired_portal(where)
+            end
+        end
+        return result
+    end
+
+    local old_go = plan_go_to_portal_entrance
+    function plan_go_to_portal_entrance()
+        update_expired_portals()
+        return old_go()
+    end
+end"""),
+    "stairs_backtrack": ("after 20 searches for unexplored stairs on one visit to a level, take qw's "
+                         "own backtrack plan (back through the stairs we know, the stair search reset) "
+                         "instead of searching again: qw only concludes 'no more reachable unexplored "
+                         "stairs' after two searches from the same square, and the autoexplore between "
+                         "searches moves it every time. Seed 100705 came back up into a tree-ringed "
+                         "grove on D:1 whose last unexplored down stair is outside the ring, and "
+                         "searched for it for 15,000 turns",
+                         """do
+    local LIMIT = 20
+    local where_seen, tries = nil, 0
+    local old = plan_go_to_unexplored_stairs
+    function plan_go_to_unexplored_stairs()
+        local where = you.where()
+        if where ~= where_seen then
+            where_seen, tries = where, 0
+        end
+        if tries >= LIMIT then
+            local acted = plan_unexplored_stairs_backtrack()
+            if acted then
+                crawl.stderr("QWDBG\\t" .. you.turns() .. "\\tunstick stairs_backtrack: " .. tries
+                    .. " searches for unexplored stairs on " .. where .. ", backtracking")
+                tries = 0
+            end
+            return acted
+        end
+        local result = old()
+        if result ~= false then
+            tries = tries + 1
+        end
+        return result
+    end
+end"""),
+    # --- loops with no turn passing ---------------------------------------------------
+    # Crawl calls ready() at most 1000 times without a turn passing (main.cc,
+    # lua_calls_no_turn): the next call prints "Infinite lua loop detected, aborting." and
+    # ready() is never called again until a turn passes. Headless, nothing else ever acts, so
+    # crawl spins at 100% CPU with no qw output until the time limit: the "hung" games.
+    # ladder.lua's QWSTALL counts decisions (500), but a decision can take two ready() calls
+    # (a quiver change yields), so crawl's limit can come first.
+    "evoke_noturn": ("an evoke at the same turn as the last one is skipped: qw's attack_wand plan "
+                     "returns nil, so qw's own 'failed despite returning true' check never sees a "
+                     "zap that took no turn (quiver unchanged, line of fire blocked by a plant) and "
+                     "zaps forever: seed 100604 (t05) hung on Lair:5",
+                     """do
+    local last_turn
+    local said = {}
+    local old = plan_targeted_evoke
+    function plan_targeted_evoke()
+        local turn = you.turns()
+        if last_turn == turn then
+            local where = you.where()
+            if not said[where] then
+                said[where] = true
+                crawl.stderr("QWDBG\\t" .. turn .. "\\tunstick evoke_noturn: the last evoke took no turn on "
+                    .. where .. ", skipping evokes until a turn passes")
+            end
+            return false
+        end
+        local result = old()
+        if result == nil then
+            -- nil is qw's "evoked": remember the turn it was sent on.
+            last_turn = turn
+        end
+        return result
+    end
+end"""),
+    "ready_watchdog": ("after 900 ready() calls with no turn passing, write QWSTALL (run.py then ends "
+                       "the game as 'stalled') before crawl's own limit of 1000 bans ready() and the "
+                       "game idles to the time limit",
+                       """do
+    local LIMIT = 900
+    local calls, turn_seen = 0, nil
+    local old_ready = ready
+    function ready()
+        local turn = you.turns()
+        if turn ~= turn_seen then
+            turn_seen, calls = turn, 0
+        end
+        calls = calls + 1
+        if calls == LIMIT then
+            crawl.stderr("QWSTALL\\tready:" .. calls .. "\\t" .. turn .. "\\t" .. you.where())
+        end
+        return old_ready()
+    end
+end"""),
 }
 
 

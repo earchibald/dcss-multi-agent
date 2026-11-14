@@ -109,6 +109,18 @@ function count_stairs(b, d, dir, state) return 1 end
 function reset_stone_stairs(b, d, dir) RESETS = RESETS + 1 end
 function finalize_travel_depth(result) FINALIZED = FINALIZED + 1 end
 function update_goal() GOAL_UPDATES = GOAL_UPDATES + 1 end
+-- no-turn loops and stair searches
+EVOKES, EVOKE_RESULT = 0, nil
+function plan_targeted_evoke() EVOKES = EVOKES + 1; return EVOKE_RESULT end
+READY_CALLS = 0
+function ready() READY_CALLS = READY_CALLS + 1 end
+SEARCHES, SEARCH_RESULT, BACKTRACKS, BACKTRACK_RESULT = 0, nil, 0, true
+function plan_go_to_unexplored_stairs() SEARCHES = SEARCHES + 1; return SEARCH_RESULT end
+function plan_unexplored_stairs_backtrack() BACKTRACKS = BACKTRACKS + 1; return BACKTRACK_RESULT end
+REMOVED, EXPIRY_CHECKS, PORTAL_TRIPS = {}, 0, 0
+function remove_expired_portal(level) REMOVED[#REMOVED + 1] = level end
+function update_expired_portals() EXPIRY_CHECKS = EXPIRY_CHECKS + 1 end
+function plan_go_to_portal_entrance() PORTAL_TRIPS = PORTAL_TRIPS + 1; return true end
 function check(cond, msg) if not cond then error("FAILED: " .. msg, 2) end end
 """
 
@@ -318,8 +330,90 @@ check(#LOG == 1, "run broken by a third level")
 """)
 
 
+def test_evoke_noturn():
+    run_lua("evoke_noturn", r"""
+WHERE = "Lair:5"
+check(plan_targeted_evoke() == nil and EVOKES == 1, "first evoke: qw's plan runs")
+check(plan_targeted_evoke() == false and EVOKES == 1, "same turn: skipped, qw's plan not run")
+check(plan_targeted_evoke() == false and EVOKES == 1, "still the same turn: skipped")
+check(#LOG == 1 and LOG[1]:find("^QWDBG\t1000\tunstick evoke_noturn: the last evoke took no turn on Lair:5"),
+      "logged once")
+TURNS = 1001
+check(plan_targeted_evoke() == nil and EVOKES == 2, "a turn passed: evokes again")
+TURNS = 1002
+EVOKE_RESULT = false
+check(plan_targeted_evoke() == false and EVOKES == 3, "declined")
+check(plan_targeted_evoke() == false and EVOKES == 4, "a declined evoke is not remembered")
+TURNS = 1003
+EVOKE_RESULT = nil
+plan_targeted_evoke()
+check(plan_targeted_evoke() == false and #LOG == 1, "logged once a level")
+""")
+
+
+def test_ready_watchdog():
+    run_lua("ready_watchdog", r"""
+for i = 1, 899 do ready() end
+check(READY_CALLS == 899 and #LOG == 0, "899 calls in one turn: quiet")
+ready()
+check(#LOG == 1 and LOG[1] == "QWSTALL\tready:900\t1000\tD:11", "the 900th call in one turn: QWSTALL")
+for i = 1, 200 do ready() end
+check(#LOG == 1 and READY_CALLS == 1100, "once, and qw's ready() still runs")
+TURNS = 1001
+for i = 1, 899 do ready() end
+check(#LOG == 1, "the count starts again when a turn passes")
+TURNS = 1002
+for i = 1, 900 do ready() end
+check(#LOG == 2, "and fires again on another stuck turn")
+""")
+
+
+def test_stairs_backtrack():
+    run_lua("stairs_backtrack", r"""
+WHERE = "D:1"
+SEARCH_RESULT = false
+for i = 1, 30 do plan_go_to_unexplored_stairs() end
+check(SEARCHES == 30 and BACKTRACKS == 0, "declined searches are not counted")
+SEARCH_RESULT = nil
+for i = 1, 12 do check(plan_go_to_unexplored_stairs() == nil, "searches: qw's plan") end
+check(SEARCHES == 42 and BACKTRACKS == 0, "12 searches")
+WHERE = "D:2"
+for i = 1, 19 do plan_go_to_unexplored_stairs() end
+check(BACKTRACKS == 0, "another level: the count started again")
+WHERE = "D:1"
+for i = 1, 20 do plan_go_to_unexplored_stairs() end
+check(BACKTRACKS == 0 and SEARCHES == 81, "back on D:1: a new visit, counted from 0")
+check(plan_go_to_unexplored_stairs() == true and BACKTRACKS == 1 and SEARCHES == 81,
+      "the 21st: qw's backtrack plan instead")
+check(#LOG == 1 and LOG[1]:find("stairs_backtrack: 20 searches for unexplored stairs on D:1, backtracking"),
+      "logged")
+for i = 1, 20 do plan_go_to_unexplored_stairs() end
+check(BACKTRACKS == 1 and SEARCHES == 101, "after a backtrack the count starts again")
+BACKTRACK_RESULT = false
+check(plan_go_to_unexplored_stairs() == false and BACKTRACKS == 2 and #LOG == 1,
+      "backtrack declined: no search, nothing logged")
+""")
+
+
+def test_portal_expire():
+    run_lua("portal_expire", r"""
+WHERE = "D:15"
+c_message("the gate leading to a gauntlet disappears!", "plain")
+check(#REMOVED == 0, "no expiring portal heard on this level: nothing removed")
+c_persist.expiring_portals = { ["D:15"] = { "Gauntlet" } }
+c_message("You hear the deafening beating of a drum.", "timed_portal")
+check(#REMOVED == 0, "other messages: nothing removed")
+c_message("the gate leading to a gauntlet disappears!", "plain")
+check(#REMOVED == 1 and REMOVED[1] == "D:15", "closed in view: qw's remove_expired_portal")
+check(#LOG == 1 and LOG[1]:find("portal_expire: Gauntlet on D:15 closed in view"), "logged")
+check(plan_go_to_portal_entrance() == true and EXPIRY_CHECKS == 1 and PORTAL_TRIPS == 1,
+      "the timeout is checked before each trip to a portal")
+""")
+
+
 def test_stuck_variants_join():
-    run_lua("dest_giveup+travel_walk+bounce_giveup", r"""
+    run_lua("dest_giveup+travel_walk+bounce_giveup+evoke_noturn+ready_watchdog+stairs_backtrack+portal_expire",
+            r"""
 WHERE = "D:10"
 check(plan_move_towards_destination() == false, "loaded together")
 """)
