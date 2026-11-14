@@ -121,6 +121,27 @@ REMOVED, EXPIRY_CHECKS, PORTAL_TRIPS = {}, 0, 0
 function remove_expired_portal(level) REMOVED[#REMOVED + 1] = level end
 function update_expired_portals() EXPIRY_CHECKS = EXPIRY_CHECKS + 1 end
 function plan_go_to_portal_entrance() PORTAL_TRIPS = PORTAL_TRIPS + 1; return true end
+-- new-game setup: qw's branch_data and its two init steps, as in init.lua and branches.lua
+BRANCH_DATA = {}
+function initialize_branch_data()
+    BRANCH_DATA.Lair = { parent = "D", lo = 8, hi = 11 }
+    for level, _ in pairs(c_persist.branch_entries.Lair or {}) do
+        local d = tonumber(level:match("^D:(%d+)$"))
+        BRANCH_DATA.Lair.lo, BRANCH_DATA.Lair.hi = d, d
+    end
+end
+function parent_branch(b)
+    local data = BRANCH_DATA[b]
+    if not data then error("Unknown branch: " .. tostring(b)) end
+    return data.parent, data.lo, data.hi
+end
+function first_turn_initialize()
+    if you.turns() > 0 and c_persist.record then return end
+    c_persist.record = c_persist.record or {}
+    for key, _ in pairs(c_persist) do
+        if key ~= "record" then c_persist[key] = nil end
+    end
+end
 function check(cond, msg) if not cond then error("FAILED: " .. msg, 2) end end
 """
 
@@ -411,8 +432,38 @@ check(plan_go_to_portal_entrance() == true and EXPIRY_CHECKS == 1 and PORTAL_TRI
 """)
 
 
+def test_new_game_branches():
+    run_lua("new_game_branches", r"""
+-- qw's initialize() at turn 0, with the worker's c_persist file from a game whose Lair was on D:9.
+TURNS = 0
+c_persist = { record = { counter = 4 }, branch_entries = { Lair = { ["D:9"] = { feat = 3 } } } }
+initialize_branch_data()
+check(select(2, parent_branch("Lair")) == 9, "qw alone: the last game's Lair depth")
+first_turn_initialize()
+check(c_persist.record.counter == 4 and next(c_persist.branch_entries) == nil, "c_persist emptied")
+local _, lo, hi = parent_branch("Lair")
+check(lo == 8 and hi == 11, "rebuilt from the empty c_persist: D:8-11 again")
+check(#LOG == 1 and LOG[1]:find("new_game_branches: entrance depths left from the last game reset: "
+      .. "Lair D:9%-9 %-> D:8%-11"), "logged: " .. tostring(LOG[1]))
+-- This game's own entrance, found later, is kept: a reload mid-game doesn't rebuild.
+c_persist.branch_entries.Lair = { ["D:11"] = { feat = 3 } }
+BRANCH_DATA.Lair.lo, BRANCH_DATA.Lair.hi = 11, 11
+TURNS = 5000
+first_turn_initialize()
+check(select(2, parent_branch("Lair")) == 11 and c_persist.branch_entries.Lair["D:11"],
+      "a game already set up: nothing rebuilt or cleared")
+-- A clean c_persist (the first game on a worker): rebuilt, nothing to log.
+TURNS = 0
+c_persist = { branch_entries = {} }
+initialize_branch_data()
+first_turn_initialize()
+check(select(2, parent_branch("Lair")) == 8 and #LOG == 1, "first game: same depths, quiet")
+""")
+
+
 def test_stuck_variants_join():
-    run_lua("dest_giveup+travel_walk+bounce_giveup+evoke_noturn+ready_watchdog+stairs_backtrack+portal_expire",
+    run_lua("dest_giveup+travel_walk+bounce_giveup+evoke_noturn+ready_watchdog+stairs_backtrack+portal_expire"
+            "+new_game_branches",
             r"""
 WHERE = "D:10"
 check(plan_move_towards_destination() == false, "loaded together")

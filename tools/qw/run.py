@@ -312,8 +312,12 @@ class Runner:
 
     def clear_game(self, w: int, name: str) -> None:
         d = self.worker_dir(w)
+        # qw's c_persist file too: qw reads the last game's branch entrance depths from it
+        # before emptying it, so a game's play depended on which game its worker played
+        # before (and could loop between two levels looking for a branch).
+        persist = "" if self.args.keep_persist else f" {d}/qw.rc.persist"
         self.sh(f"rm -f {d}/saves/{name}.cs {d}/morgue/morgue-{name}-* "
-                f"{d}/morgue/{name}.* {d}/morgue/crash-{name}-*")
+                f"{d}/morgue/{name}.* {d}/morgue/crash-{name}-*{persist}")
 
     def play(self, w: int, job: dict) -> dict:
         seed, tag = job["seed"], job["tag"]
@@ -688,6 +692,9 @@ def main() -> None:
     ap.add_argument("--hung-limit", type=int, default=120,
                     help="end a game that logs nothing for this many seconds, with status "
                          "'hung' (0: never; it then runs to the time limit)")
+    ap.add_argument("--keep-persist", action="store_true",
+                    help="leave qw's c_persist file between a worker's games, as runs before "
+                         "2026-11-14 did (a game then depends on the game before it)")
     ap.add_argument("--slots", type=Path, default=None,
                     help="directory of lock files shared with other runs: together they play "
                          "at most --workers games at once (tools/qw/chain.py sets it)")
@@ -728,6 +735,7 @@ def main() -> None:
                  "seeds": args.seeds, "jobs": str(args.jobs) if args.jobs else None,
                  "workers": args.workers, "time_limit_s": args.time_limit,
                  "hung_limit_s": args.hung_limit,
+                 "keep_persist": args.keep_persist,
                  "repeat": args.repeat, "action_log": args.action_log or args.state_log,
                  "state_log": args.state_log,
                  "lua": str(args.lua) if args.lua else None, "policy": str(args.policy) if args.policy else None,

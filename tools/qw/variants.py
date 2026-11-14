@@ -493,6 +493,54 @@ end"""),
         return result
     end
 end"""),
+    "new_game_branches": ("rebuild qw's branch entrance depths once qw has emptied c_persist for a new "
+                          "game: initialize() runs initialize_branch_data() before first_turn_initialize() "
+                          "empties c_persist, so the depths come from the previous game's "
+                          "c_persist.branch_entries (run.py's workers keep one c_persist file across "
+                          "games), and qw only ever moves an entrance shallower. After a game with Lair on "
+                          "D:9, a Lair found on D:11 stays 'on D:9': when crawl's travel can't path to the "
+                          "real entrance (seed 100820: it is inside an exclusion), qw heads up the stairs "
+                          "towards D:9 instead of walking there, crawl's travel brings it back down, and it "
+                          "bounces until it quits (seeds 100820, 101021, 100724). Also makes a game "
+                          "independent of the game its worker played before",
+                          """do
+    local BRANCHES = { "Temple", "Orc", "Elf", "Lair", "Swamp", "Shoals", "Snake", "Spider", "Slime",
+        "Vaults", "Crypt", "Tomb", "Depths", "Zot" }
+    local function depths()
+        local d = {}
+        for _, br in ipairs(BRANCHES) do
+            local ok, parent, lo, hi = pcall(parent_branch, br)
+            d[br] = ok and (tostring(parent) .. ":" .. tostring(lo) .. "-" .. tostring(hi)) or "?"
+        end
+        return d
+    end
+
+    local old = first_turn_initialize
+    function first_turn_initialize()
+        -- qw's own test for a game it has not set up yet.
+        local new_game = not (you.turns() > 0 and c_persist.record)
+        local result = old()
+        if new_game then
+            local before = depths()
+            if not c_persist.branch_entries then
+                c_persist.branch_entries = {}
+            end
+            initialize_branch_data()
+            local after = depths()
+            local changed = {}
+            for _, br in ipairs(BRANCHES) do
+                if before[br] ~= after[br] then
+                    changed[#changed + 1] = br .. " " .. before[br] .. " -> " .. after[br]
+                end
+            end
+            if #changed > 0 then
+                crawl.stderr("QWDBG\\t" .. you.turns() .. "\\tunstick new_game_branches: entrance depths "
+                    .. "left from the last game reset: " .. table.concat(changed, ", "))
+            end
+        end
+        return result
+    end
+end"""),
     # --- loops with no turn passing ---------------------------------------------------
     # Crawl calls ready() at most 1000 times without a turn passing (main.cc,
     # lua_calls_no_turn): the next call prints "Infinite lua loop detected, aborting." and
