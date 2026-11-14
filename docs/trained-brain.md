@@ -8,7 +8,11 @@ runs in numpy in well under a millisecond. It is the same idea as the trained br
 ## Where it stands
 
 **2026-11-14:** `iter2` is still the champion. On 200 evaluation dungeons it averages 5.51 (500000–500199)
-and 5.48 (530000–530199). The version 5 inputs (below) did not beat it.
+and 5.48 (530000–530199). The version 5 inputs (below) did not beat it. On 400 dungeons it is level with the
+rules of thumb (−0.14 [−0.44, +0.16]). All six retrained models (3 training seeds each of the version 5 and
+version 4 inputs) are behind it on block A, and the seed alone moves a model by up to 0.8 depths. `v5-seen`
+at `margin=1.0` beats it on a fresh block (+0.41 [+0.00, +0.84]), but only by being the rules of thumb
+(follow-up, below).
 
 Measured 2026-11-09 on this Mac, Minotaur Berserker, 60 fixed evaluation dungeons (seeds 500000–500059)
 that training never sees. "Depth" is the deepest floor reached. The last column compares model and
@@ -153,7 +157,119 @@ anything. Differences are paired by dungeon over the games both finished, with a
 
 What would test it next, cheapest first: play `v5-seen` at `margin=0.6` or `1.0` (the earlier way to hold a
 diving model near the baseline), train 2–3 more seeds of `s12` and of the control and play them on block A
-to see the spread in games, and add forks (the rows that compare actions) before adding inputs.
+to see the spread in games, and add forks (the rows that compare actions) before adding inputs. *Done below.*
+
+#### Follow-up: noise, margins, training seeds and a fresh block (2026-11-14)
+
+All games with HEAD's code (which now plays version 4 models), no random choices, 7 at once (ladderbrain7
+is left out), runs in `runs/brain/v5/games/`. Paired by dungeon over games both finished, 95% bootstrap.
+**Block A (500000–500199) is now a tuning block**: margins and seeds were chosen on it. Only block C
+(540000–540199, never played before) counts as evidence.
+
+**The noise floor is small.** Games are nearly repeatable: the same model replayed gives the same game on
+97% of dungeons, and the old code gives the same games as HEAD's.
+
+| champion `iter2`, block A | finished (hung) | mean depth | died | turns | vs `A-brain-head` | 95% interval | deeper / same / shallower |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `A-brain-head` (HEAD's code) | 199 (1) | 5.51 | 192 | 1843 | | | |
+| `A-brain-head2` (the same again) | 200 (0) | 5.50 | 193 | 1830 | +0.02 | [−0.03, +0.06] | 3 / 194 / 2 (194 of 200 games identical) |
+| `eval-brain` (the previous commit's code) | 199 (1) | 5.51 | 193 | 1817 | +0.00 | [−0.09, +0.08] | 5 / 191 / 3 (190 identical) |
+
+A game that does diverge diverges a lot (one went from D:2 to D:7), so the noise is a few games, not a
+small shift in each. Any paired difference wider than about ±0.1 is the models, not the replay.
+
+**Margins (block A).** A larger margin removes the loss, but only by switching the model off.
+
+| model | margin | finished (hung) | mean depth | died | mean XL | turns | leaves the rules | `descend` share | vs champion at 0.25 | 95% interval | deeper / same / shallower |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| champion `iter2` | 0.25 | 199 (1) | 5.51 | 192 | 5.64 | 1843 | 15.6% | 29.9% | | | |
+| champion `iter2` | 0.6 | 197 (3) | 5.57 | 181 | 5.77 | 2167 | 1.3% | 29.7% | +0.03 | [−0.33, +0.38] | 69 / 65 / 62 |
+| `v5-seen` | 0.25 | 199 (1) | 4.84 | 188 | 4.70 | 1294 | 34.2% | 38.0% | −0.66 | [−1.10, −0.22] | 59 / 43 / 96 |
+| `v5-seen` | 0.4 | 196 (4) | 5.14 | 183 | 5.29 | 1919 | 17.7% | 35.3% | −0.36 | [−0.76, +0.04] | 61 / 46 / 88 |
+| `v5-seen` | 0.6 | 198 (2) | 5.58 | 179 | 5.74 | 2211 | 2.3% | 32.8% | +0.07 | [−0.37, +0.49] | 73 / 52 / 72 |
+| `v5-seen` | 1.0 | 197 (3) | 5.68 | 178 | 5.87 | 2276 | 0.4% | 30.9% | +0.14 | [−0.27, +0.55] | 71 / 61 / 64 |
+| rules of thumb (`baseline`) | | 197 (3) | 5.54 | 180 | 5.72 | 2178 | 0 | 30.8% | +0.03 | [−0.38, +0.43] | 69 / 67 / 61 |
+
+Both at 0.6, `v5-seen` − champion is +0.03 [−0.37, +0.42]. At 0.6 and above every model is the rules of
+thumb with a few changes, and **the champion at its default margin is itself only level with the rules of
+thumb on 200 dungeons** (−0.03 [−0.43, +0.38]).
+
+**Training seeds (block A, margin 0.25).** Training is deterministic: a retrain of `s12` seed 1 gave the
+same weights byte for byte, so the gate's seeds 1 and 2 are the "2 more seeds" (`models/v5-s12-s1.json`,
+`v5-s12-s2`, `v5-v4control-s1`, `v5-v4control-s2`, each with its parity file).
+
+| recipe | seed | mean depth | died | mean XL | turns | leaves the rules | commonest change | vs champion | 95% interval |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `s12` (version 5) | 0 (`v5-seen`) | 4.84 | 188 | 4.70 | 1294 | 34.2% | explore → descend | −0.66 | [−1.10, −0.22] |
+| `s12` | 1 | 4.66 | 194 | 4.40 | 926 | 25.5% | read_unknown → descend | −0.83 | [−1.21, −0.45] |
+| `s12` | 2 | 5.14 | 195 | 5.08 | 1640 | 36.5% | read_unknown → descend | −0.35 | [−0.71, +0.02] |
+| control (version 4 inputs) | 0 (`v5-v4control`) | 5.26 | 180 | 5.40 | 2019 | 20.3% | fight → descend | −0.23 | [−0.64, +0.18] |
+| control | 1 | 5.22 | 192 | 4.68 | 935 | 21.1% | explore → descend | −0.25 | [−0.69, +0.17] |
+| control | 2 | 4.50 | 193 | 4.08 | 1228 | 59.0% | read_unknown → descend | −1.01 | [−1.39, −0.64] |
+
+Mean over seeds: `s12` −0.61 (range 0.48), control −0.50 (range 0.78). **The seed matters more than the
+inputs**: the spread between seeds of one recipe is wider than the gap between recipes, every one of the six
+models is behind the champion, and each dives in its own way. What they share is the corpus (today's
+rows, 21% from earlier models), not the version 5 inputs.
+
+**The fresh block C (540000–540199).** The setting picked on block A before block C was played: `v5-seen` at
+`margin=1.0` (0.6 as a second).
+
+| block C | finished (hung) | mean depth | died | mean XL | turns | leaves the rules | vs champion | 95% interval | deeper / same / shallower | vs rules of thumb | 95% interval |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| champion `iter2` | 194 (6) | 5.12 | 186 | 5.25 | 1638 | 16.1% | | | | −0.26 | [−0.70, +0.17] |
+| `v5-seen`, `margin=1.0` | 194 (6) | 5.52 | 176 | 5.78 | 2113 | 0.4% | **+0.41** | [+0.00, +0.84] | 79 / 51 / 58 | +0.19 | [−0.04, +0.41] |
+| `v5-seen`, `margin=0.6` | 193 (7) | 5.27 | 183 | 5.56 | 2022 | 4.3% | +0.20 | [−0.25, +0.66] | 66 / 53 / 68 | −0.14 | [−0.53, +0.25] |
+| rules of thumb | 195 (5) | 5.36 | 176 | 5.66 | 2086 | 0 | +0.26 | [−0.17, +0.70] | 71 / 52 / 66 | | |
+
+- On the fresh block `v5-seen` at `margin=1.0` comes out ahead of the champion, with the interval's lower
+  end at zero. It does that by **being the rules of thumb**: it leaves them at 0.4% of choices (`wield` →
+  `descend` at full HP, and `fight` → `read_teleport`), and the rules of thumb alone are +0.26 against the
+  champion here. Against the rules of thumb it is +0.19 [−0.04, +0.41] (26 / 156 / 11), and +0.12 on block
+  A; pooled over A and C it is +0.15 [−0.02, +0.32]. That is a lead to follow, not a result.
+- The champion is behind the rules of thumb on block C and level on block A: −0.14 [−0.44, +0.16] pooled.
+  **No model has yet been shown better than the rules of thumb on 400 dungeons.** Its 2026-11-09 lead
+  (5.85 against 5.58) was on 60.
+
+**Where `v5-seen`'s games end (block A, 198 dungeons both finished; block B says the same).**
+
+| | champion | `v5-seen` |
+| --- | --- | --- |
+| mean depth, deaths | 5.52, 192 | 4.86, 187 |
+| died on D:1–3 (block B) | 33 (46) | 62 (69) |
+| at death: depth, XL, median turn | 5.55, 5.73, 1700 | 4.95, 4.81, 1145 |
+| reached D:4: games, XL, turn | 156, 3.87, 1277 | 126, 3.39, 1003 |
+| reached D:6: games, XL, turn | 98, 5.93, 1912 | 78, 5.40, 1444 |
+| last 10 choices before death | fight 53%, descend 22%, flee_up 8% | fight 66%, descend 12%, flee_up 3% |
+| most often in view at death | wight 12, gnoll 9, ogre 9 | gnoll 20, yak 8, wight 7 |
+| both died: `v5-seen` died shallower / same floor / deeper | | 88 / 38 / 57 |
+
+It reaches each floor about a quarter sooner and half a level lower, dies earlier, shallower and lower
+(gnolls on D:2–4 more than anything), and flees up less. At its 10,208 explore → descend overrides (in 578
+of 748 floor visits) its `depth_end` says descend is worth **+0.32** more than exploring, while
+`died_soon` is +0.02 *against* descending (worse for descend at 97% of them). So the dive comes from
+`depth_end`, not from the sharper death prediction. The champion, scoring the same moments, puts the gap at
++0.05 and would have overridden 2% of them. Once it has started for the stairs it keeps going (89% of the
+next choices), so most of those 10,208 are one decision repeated.
+
+The gap is a shift that depends on the seed. Scored on the champion's own games (8,995 moments where the
+rules said explore and the stairs were known), each model's preference for descend over explore:
+
+| model | `depth_end` gap | `died_soon` gap | value gap | above 0.25 | above 0.4 | above 0.6 |
+| --- | --- | --- | --- | --- | --- | --- |
+| champion `iter2` | +0.08 | +0.01 | +0.07 | 8% | 1% | 0% |
+| `s12` seeds 0 / 1 / 2 | +0.28 / +0.16 / +0.04 | +0.02 / +0.00 / +0.01 | +0.26 / +0.16 / +0.03 | 49% / 21% / 3% | 8% / 4% / 0% | 1% / 0% / 0% |
+| control seeds 0 / 1 / 2 | +0.13 / +0.28 / +0.10 | +0.04 / −0.01 / −0.00 | +0.10 / +0.29 / +0.10 | 15% / 60% / 10% | 3% / 15% / 1% | 0% / 2% / 0% |
+
+`v5-seen`'s average preference sits right at the 0.25 margin, so half the time it crosses it. That
+explains both the dive and why 0.6 stops it. This number does not predict a model's score, though:
+`s12` seed 2 and control seed 2 hardly prefer descend here and still lose, by overriding `read_unknown`
+over and over in their own games. A model that skips a scroll keeps the scroll, so the rules suggest it again
+at the next choice, and the same override is counted many times. The dive is a closed loop: each seed has a
+different bias of about ±0.15 depths, about the size of the margin, and play then amplifies it.
+**Verified**: the numbers above, and that the recomputed values match the logged ones. **Inferred**: that
+the seed-dependent offset is how `depth_end` handles actions the data seldom compares (descend vs explore
+from the same state), and that the loop through the model's own states amplifies it.
 
 Throughput: about 28 s per game, 6 at once (240 games in 11 minutes); a fork costs about 18 s of one
 worker, since it replays the game to the fork and then plays on. Training takes under a minute. A model
@@ -483,6 +599,9 @@ In the order I would take them:
    map summaries. It predicts death a little better and plays worse (0.7 to 0.8 depths, on two blocks of
    200 dungeons), because it dives. Not done: worn armour (only the brain's own belief exists), skills (not
    sent), the map patch. Inputs are not the bottleneck while the labels can't tell actions apart.*
+   *Follow-up: the training seed moves a model by up to 0.8 depths in games, more than the inputs do.
+   Before comparing inputs again, train an ensemble (average 3–5 seeds' predictions) or promote on the mean
+   of several seeds, and gate on forks that compare descend with explore from the same state.*
 4. **Promote on more than 60 dungeons.** Differences under 0.3 depths can't be seen with 60; the same
    baseline replayed varies by 0.1. 200 evaluation dungeons would take about 15 minutes per model.
 5. **The remaining dead ends**: games that hang (1 in 20 with random choices in round 4, 1 in 40
