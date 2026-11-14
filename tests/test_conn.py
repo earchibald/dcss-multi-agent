@@ -97,6 +97,16 @@ def test_catch_up_reads_a_late_ready_signal_and_hides_its_own_question():
     assert conn.web.frames == []
 
 
+def test_quit_game_catches_up_before_asking_to_quit():
+    """A late ready signal read as Ctrl-Q's reply hid the prompt, and the save was left behind."""
+    from ladder.conn import ActResult
+    conn, calls = _conn(FakeWeb()), []
+    conn.catch_up = lambda: calls.append("catch_up") or ActResult()
+    conn.act = lambda *keys, **kw: calls.append(keys) or ActResult()
+    conn.quit_game()
+    assert calls == ["catch_up", ("key_ctrl_q",)]
+
+
 def test_menu_left_open():
     from ladder.conn import menu_left_open
     use, yes_no, close = {"msg": "menu", "tag": "use_item"}, {"msg": "menu"}, {"msg": "close_menu"}

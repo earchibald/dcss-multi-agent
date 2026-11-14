@@ -71,7 +71,7 @@ def cmd_reobserve(args: argparse.Namespace) -> None:
 def cmd_forks(args: argparse.Namespace) -> None:
     from .forks import plan
     jobs = plan(args.roots or [args.runs], args.points, alternatives=args.alternatives, horizon=args.horizon,
-                seed=args.seed)
+                seed=args.seed, kind=args.kind)
     name = args.name or time.strftime("forks-%Y%m%d-%H%M%S")
     print(f"{name}: {len(jobs)} forks, continuing with {args.model or 'the rules of thumb'}")
     s = selfplay.run(name, jobs, workers=args.workers, model=args.model, epsilon=0.0, style=_style(args),
@@ -208,7 +208,8 @@ def add_parser(sub) -> None:
     q.add_argument("--name")
     q.add_argument("--games", type=int, default=20)
     q.add_argument("--seed", type=int, default=1)
-    q.add_argument("--model", help="model file; without one the rules of thumb play")
+    q.add_argument("--model", help="model file, ensemble manifest or files joined by commas; "
+                   "without one the rules of thumb play")
     q.add_argument("--epsilon", type=float, default=0.2, help="share of choices made at random")
     q.set_defaults(fn=cmd_selfplay)
 
@@ -234,6 +235,9 @@ def add_parser(sub) -> None:
                    help="game turns played after the fork; 0 = to the end, which the depth_end label needs")
     q.add_argument("--model", help="plays on after the fork; without one the rules of thumb do")
     q.add_argument("--seed", type=int, default=0, help="which moments are picked")
+    q.add_argument("--kind", choices=("any", "stairs"), default="any",
+                   help="any: late and other moments, other actions tried; stairs: explore-or-descend moments, "
+                        "forked both ways and committed for the rest of that level (forks.py)")
     q.set_defaults(fn=cmd_forks)
 
     q = bsub.add_parser("human", help="turn recordings of your own games (play<n>.jsonl) into step logs")

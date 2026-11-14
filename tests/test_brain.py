@@ -822,6 +822,28 @@ def test_summarize_when_nothing_was_played():
     assert summarize([{"game": 1, "ended_by": "hung"}]) == {"games": 0, "lost": 1}
 
 
+def test_a_resumed_save_is_quit_and_the_game_started_again(tmp_path, monkeypatch):
+    """A seeded start on an account that still holds a game resumes that game, not the seed's dungeon."""
+    from ladder.brain import selfplay
+    calls = []
+
+    def play(job, cfg, log, beat):
+        calls.append("play")
+        if calls.count("play") == 1 or job["seed"] == 2:
+            raise selfplay.StaleSave("resumed")
+        return {"type": "end", "game": job["seed"], "ended_by": "died"}
+
+    sent = []
+    pipe = SimpleNamespace(send=sent.append, close=lambda: None)
+    monkeypatch.setattr(selfplay, "_play", play)
+    monkeypatch.setattr(selfplay, "_clear_save", lambda cfg: calls.append("clear"))
+    selfplay._worker(1, {"seed": 1}, False, pipe, {"dir": str(tmp_path)})
+    assert calls == ["play", "clear", "play"] and sent[-1] == ("end", {"type": "end", "game": 1, "ended_by": "died"})
+    calls.clear()
+    selfplay._worker(1, {"seed": 2}, False, pipe, {"dir": str(tmp_path)})   # still stale: lost, and the slot dirty
+    assert calls == ["play", "clear", "play"] and sent[-1][1]["ended_by"] == "error"
+
+
 def test_compare_seed_by_seed():
     a = {"results": [result(1, 5), result(2, 3), result(3, 2), result(4, 9), {"game": 5, "ended_by": "hung"}]}
     b = {"results": [result(1, 4), result(2, 3), result(3, 6), result(5, 1), {"game": 6, "ended_by": "hung"}]}
@@ -1290,6 +1312,58 @@ def test_plan_needs_the_first_step_to_be_numbered_one(tmp_path):
     assert plan([root], 10) == []
 
 
+def record_stairs_game(directory, game, depths=(1, 1, 1, 2, 2, 3)):
+    """A seeded game whose steps can explore or descend (except where a monster is in view or the rules
+    chose to rest), one step per entry of `depths`."""
+    directory.mkdir(parents=True, exist_ok=True)
+    with (directory / "steps.jsonl").open("a") as f:
+        for i, d in enumerate(depths):
+            o = point(5 * i, 20, depth=d, n_hostiles=int(i == 1))
+            base = "rest" if i == 2 else "explore"
+            row = {"game": game, "step": i + 1, **step(o, base, ["explore", "rest", "descend"])}
+            f.write(json.dumps(row) + "\n")
+        f.write(json.dumps({"type": "end", "game": game, "died": True, "turn": 5 * len(depths)}) + "\n")
+
+
+def test_plan_stairs_forks_both_ways_once_per_level_visit_and_commits(tmp_path):
+    from ladder.brain.forks import plan
+    root = tmp_path / "runs"
+    record_stairs_game(root / "a", 7)
+    record_stairs_game(root / "eval", 500_007)                          # an evaluation dungeon: never forked
+    jobs = plan([root], 10, kind="stairs", seed=1, horizon=50)
+    assert {j["seed"] for j in jobs} == {7}
+    assert len(jobs) == 6                                               # D:1, D:2, D:3, two forks each
+    by_spot: dict = {}
+    for j in jobs:
+        by_spot.setdefault(spot(j), []).append(j["script"][-1])
+        assert j["commit"] and j["horizon"] == 50
+        i = len(j["script"]) - 1
+        assert i not in (1, 2)                                          # a monster in view; the rules rested
+        assert j["script"][:-1] == ["explore", "explore", "rest", "explore", "explore", "explore"][:i]
+    assert all(sorted(alts) == ["descend", "explore"] for alts in by_spot.values())
+    assert len(plan([root], 2, kind="stairs", seed=1)) == 4
+    with pytest.raises(ValueError, match="kind"):
+        plan([root], 2, kind="nope")
+
+
+def test_a_committed_descend_fork_keeps_descending_on_that_level_only():
+    state = stairs_state()
+    tiers = BrainTiers(rng=random.Random(0), script=["descend"], commit=True)
+    tiers.next_action(state)
+    assert tiers.last["source"] == "fork"
+    tiers.next_action(state)                                            # the rules would explore again
+    assert (tiers.last["action"], tiers.last["source"], tiers.last["baseline"]) == ("descend", "commit", "explore")
+    state.level_seq += 1                                                # a new level: the rules again
+    tiers.next_action(state)
+    assert (tiers.last["action"], tiers.last["source"]) == ("explore", "baseline")
+    # without commit the rules take over at once, and committing to explore changes nothing here
+    for script, commit in ((["descend"], False), (["explore"], True)):
+        tiers = BrainTiers(rng=random.Random(0), script=script, commit=commit)
+        tiers.next_action(stairs_state())
+        tiers.next_action(stairs_state())
+        assert (tiers.last["action"], tiers.last["source"]) == ("explore", "baseline")
+
+
 # --- train: fork rows --------------------------------------------------------------------------------
 
 def forked_corpus(tmp_path):
@@ -1420,6 +1494,8 @@ def test_a_fork_is_held_out_with_its_dungeon_and_shares_a_group_with_its_moment(
         assert val_by_game[str(seed)] == val_by_game[f"{seed}-3-fight"] and len(val_by_game[str(seed)]) == 1
         # the fork's own step (its 3rd) and the recorded game's 3rd step are the same moment
         assert group_by_game[f"{seed}-3-fight"][0] == group_by_game[str(seed)][2]
+        # ...but its next step is not the recorded game's 4th: a different state, in no group
+        assert group_by_game[f"{seed}-3-fight"][1] == -1 != group_by_game[str(seed)][3]
 
 
 def test_fork_regret_compares_the_actions_tried_at_one_moment():

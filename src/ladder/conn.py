@@ -189,7 +189,10 @@ class Connection:
 
         dcss-api's own quit always answers "yes", but DCSS asks an established character to type
         "quit" instead, and then dcss-api waits forever for a lobby that isn't coming.
+        Read anything already sent first: a late "ready" signal taken for Ctrl-Q's reply hid the prompt,
+        the game stayed saved, and the account's next seeded start resumed it.
         """
+        self.catch_up()
         asked = self.act("key_ctrl_q")
         if asked.blocking != "text_input":
             return

@@ -32,12 +32,16 @@ ACCOUNT = "ladderbrain"
 QUIET_SECONDS = 60
 
 
+class StaleSave(RuntimeError):
+    """The game that started is an old one the account had saved, not a new one on the seed asked for."""
+
+
 def _play(job: dict, cfg: dict, log, beat) -> dict:
     from ..conn import Connection
     from ..games import crawlrc
     from ..reflex import Hooks, Reflex
     from ..state import GameState
-    from .net import TrainedNet
+    from .net import load_model
     from .policy import BrainTiers
     from .steplog import StepLog
 
@@ -46,9 +50,9 @@ def _play(job: dict, cfg: dict, log, beat) -> dict:
     steps = StepLog(log.dir)
     raw = log.dir / f"game{seed}.protocol.jsonl"       # plain while playing, so a killed game's is readable
     record = raw.open("w", buffering=1)                # line by line: a killed game keeps its last lines
-    net = TrainedNet.load(cfg["model"]) if cfg["model"] else None
+    net = load_model(cfg["model"]) if cfg["model"] else None
     tiers = steps.attach(BrainTiers(net, Style(**cfg["style"]), cfg["epsilon"], random.Random(seed * 7919 + 1),
-                                    job.get("script"), job.get("horizon", 0)), game_id)
+                                    job.get("script"), job.get("horizon", 0), job.get("commit", False)), game_id)
 
     class Recorder(Hooks):
         def on_step(self, reflex, action):
@@ -64,6 +68,10 @@ def _play(job: dict, cfg: dict, log, beat) -> dict:
 
     state, conn = start()
     try:
+        if state.turn > 1:
+            # The account still held a game (one that ended without a death and wasn't quit), and a
+            # seeded start resumed it: that is not this seed's dungeon.
+            raise StaleSave(f"{user} resumed a saved game at turn {state.turn}")
         beat()
         game = Reflex(conn, state, log, seed, Recorder(), tiers).run(max_steps=cfg["max_steps"], max_turns=cfg["max_turns"])
         end = steps.end(game_id, state, game, tiers)
@@ -145,7 +153,12 @@ def _worker(k: int, job: dict, clear: bool, pipe, cfg: dict) -> None:
     game_id = job.get("id", job["seed"])
     log = RunLog(Path(cfg["dir"]) / f"g{game_id}")
     try:
-        end = _play(job, cfg, log, lambda: pipe.send(("beat", None)))
+        try:
+            end = _play(job, cfg, log, lambda: pipe.send(("beat", None)))
+        except StaleSave:
+            _clear_save(cfg)                                   # quit the old game, then start this one again
+            pipe.send(("beat", None))
+            end = _play(job, cfg, log, lambda: pipe.send(("beat", None)))
     except Exception as e:  # noqa: BLE001  (a lost game shouldn't lose the run)
         end = {"type": "end", "game": game_id, "ended_by": "error", "error": f"{type(e).__name__}: {e}"}
     finally:
@@ -180,7 +193,7 @@ def run(name: str, seeds: list, *, workers: int = 4, model: str | None = None, e
            "server": server or DEFAULT_URL, "species": species, "background": background, "weapon": weapon,
            "max_steps": max_steps, "max_turns": max_turns}
     ctx = mp.get_context("spawn")
-    # a job is a seed, or a dict with "seed" and, for a fork, "id", "script" and "horizon"
+    # a job is a seed, or a dict with "seed" and, for a fork, "id", "script", "horizon" and maybe "commit"
     todo = [s if isinstance(s, dict) else {"seed": s} for s in seeds]
     procs: dict[int, tuple] = {}                               # slot -> (process, seed, its pipe)
     seen: dict[int, float] = {}

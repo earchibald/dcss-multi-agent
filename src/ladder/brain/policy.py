@@ -22,7 +22,7 @@ from ..state import MF_STAIR_UP, GameState, strip_tags
 
 from . import gear
 from .features import ACTIONS, COMPONENTS, encode, inventory, observe, path
-from .net import TrainedNet
+from .net import Ensemble, TrainedNet
 
 # What a scroll can stop on (conn.classify_error's names). Anything else that comes up after using an
 # item, such as the level-up stat prompt when the potion's turn killed something, is Reflex's to answer.
@@ -33,6 +33,7 @@ IDLE_LIMIT = 60           # waits in a row, with nothing else possible, before i
 BLOCK_TURNS = 50         # an action that went nowhere is left alone for this many game turns
 FENCE_KEY = chr(9350)      # the rc's ladder_fence_shops macro (crawlrc.txt)
 UNTIL_LEVEL = 10 ** 9     # ...or until the next level, for scrolls and potions that wouldn't go down
+COMMITS = {"descend": "explore", "explore": "descend"}   # a committed fork's action, and the one it replaces
 
 
 @dataclass
@@ -210,14 +211,17 @@ def baseline_wiki(obs: dict, avail: list[str], level_explored: bool) -> str:
 class BrainTiers(StubTiers):
     """Reflex's tiers object with the trained brain choosing. Without a net it plays the baseline."""
 
-    def __init__(self, net: TrainedNet | None = None, style: Style | None = None, epsilon: float = 0.0,
-                 rng: random.Random | None = None, script: list[str] | None = None, horizon: int = 0):
+    def __init__(self, net: TrainedNet | Ensemble | None = None, style: Style | None = None, epsilon: float = 0.0,
+                 rng: random.Random | None = None, script: list[str] | None = None, horizon: int = 0,
+                 commit: bool = False):
         super().__init__()
         # A fork (forks.py): replay `script`'s choices, whose last one is the alternative being tried,
-        # then play on as usual for `horizon` game turns (0 = to the end).
-        self.script, self.horizon = script or [], horizon
+        # then play on as usual for `horizon` game turns (0 = to the end). With `commit`, a fork to
+        # `descend` (or `explore`) keeps taking it on that level wherever the rules would take the other.
+        self.script, self.horizon, self.commit = script or [], horizon, commit
         self.choices = 0
         self.fork_turn: int | None = None
+        self.committed: tuple[str, str, int] | None = None     # (action, the one it replaces, level_seq)
         self.net, self.style, self.epsilon = net, style or Style(), epsilon
         self.rng = rng or random.Random()
         self.blocked: dict[str, int] = {}      # action -> the turn it may be tried again
@@ -281,6 +285,12 @@ class BrainTiers(StubTiers):
                 raise Escalation(f"{REPLAY_DIVERGED} at choice {self.choices + 1}: {choice} not in {avail}")
             if source == "fork":
                 self.fork_turn = state.turn
+                if self.commit and choice in COMMITS:
+                    self.committed = (choice, COMMITS[choice], state.level_seq)
+        elif self.committed and self.committed[2] == state.level_seq and base == self.committed[1] \
+                and self.committed[0] in avail:
+            # a descend fork is one step toward the stairs; the rules would turn back to exploring
+            choice, source = self.committed[0], "commit"
         elif len(avail) > 1 and self.rng.random() < self.epsilon:
             choice, source = self.rng.choice(avail), "random"
         elif self.net and len(avail) > 1:

@@ -76,9 +76,10 @@ def add_game_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--out", default="runs")
     p.add_argument("--record", action="store_true", help="also save raw protocol messages per game")
     p.add_argument("--brain", nargs="?", const="champion", metavar="MODEL",
-                   help="let the trained brain choose Reflex's actions: a model file, 'baseline' for its rules "
-                        "of thumb, or nothing for models/brain.json (the rules of thumb until a model has been "
-                        "promoted). Its steps are logged for training.")
+                   help="let the trained brain choose Reflex's actions: a model file (or an ensemble: a manifest, "
+                        "or files joined by commas), 'baseline' for its rules of thumb, or nothing for "
+                        "models/brain.json (the rules of thumb until a model has been promoted). Its steps are "
+                        "logged for training.")
 
 
 def main() -> None:

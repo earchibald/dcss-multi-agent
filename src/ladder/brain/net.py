@@ -88,6 +88,49 @@ class TrainedNet:
         return q, float(danger), self._lin("prior", c)
 
 
+ENSEMBLE_FORMAT = "dcss-trained-brain-ensemble"
+
+
+class Ensemble:
+    """Several models whose outputs are averaged, used wherever one TrainedNet is.
+
+    Each training seed of one recipe has its own bias (docs/trained-brain.md); averaging their
+    predictions keeps what they agree on. Members may mix version 4 and version 5 inputs, since each
+    reads its own front of the vectors. An action counts as seen as often as the member that saw it least.
+    """
+
+    def __init__(self, members: list[TrainedNet], name: str = "ensemble"):
+        if not members:
+            raise ValueError("an ensemble needs at least one model")
+        self.members, self.name = list(members), name
+        self.counts = {a: min(m.counts.get(a, 0) for m in self.members) for a in ACTIONS}
+        self.info = {"members": [m.name for m in self.members]}
+
+    def forward(self, s: np.ndarray, mons: np.ndarray, mask: np.ndarray) -> tuple[np.ndarray, float, np.ndarray]:
+        outs = [m.forward(s, mons, mask) for m in self.members]
+        return (np.mean([o[0] for o in outs], axis=0), float(np.mean([o[1] for o in outs])),
+                np.mean([o[2] for o in outs], axis=0))
+
+
+def load_model(spec: str | Path) -> TrainedNet | Ensemble:
+    """A model file, an ensemble manifest, or several model files separated by commas.
+
+    A manifest is {"format": ENSEMBLE_FORMAT, "members": [paths]}, the paths relative to the manifest.
+    A manifest in a list counts as its members.
+    """
+    spec = str(spec)
+    if "," in spec:
+        paths = [p.strip() for p in spec.split(",") if p.strip()]
+        parts = [load_model(p) for p in paths]
+        members = [m for part in parts for m in (part.members if isinstance(part, Ensemble) else [part])]
+        return Ensemble(members, "+".join(Path(p).stem for p in paths))
+    path = Path(spec)
+    model = json.loads(path.read_text())
+    if model.get("format") == ENSEMBLE_FORMAT:
+        return Ensemble([TrainedNet.load(path.parent / m) for m in model["members"]], path.stem)
+    return TrainedNet(model, path.stem)
+
+
 def check_parity(model_path: str | Path, tol: float = 2e-3) -> float:
     """Largest difference between this forward pass and the vectors train.py saved beside the model."""
     model_path = Path(model_path)

@@ -7,6 +7,15 @@ runs in numpy in well under a millisecond. It is the same idea as the trained br
 
 ## Where it stands
 
+**2026-11-14, later:** still no model beats the rules of thumb. Averaging 5 training seeds (H1) steadies the
+estimate but keeps the bias all seeds share, and plays like an average seed (−0.32 on block A). 2,069
+forks that compare exploring on with going down from the same state (H2) show the two are worth the same
+on average and that no model can tell the moments apart; retraining on them made the estimate *more*
+pro-descend. The retrained ensemble `v5-forks3` was level on block A and was pre-registered: on two fresh
+blocks it is +0.05 [−0.28, +0.38] against the rules of thumb. Two measurement bugs were found and fixed on
+the way: 1–7% of every evaluation's games resumed an older game's save, and fork regret's "moments" mixed in
+other states (section "Ensembles, explore-or-descend forks", below).
+
 **2026-11-14:** `iter2` is still the champion. On 200 evaluation dungeons it averages 5.51 (500000–500199)
 and 5.48 (530000–530199). The version 5 inputs (below) did not beat it. On 400 dungeons it is level with the
 rules of thumb (−0.14 [−0.44, +0.16]). All six retrained models (3 training seeds each of the version 5 and
@@ -275,6 +284,164 @@ Throughput: about 28 s per game, 6 at once (240 games in 11 minutes); a fork cos
 worker, since it replays the game to the fork and then plays on. Training takes under a minute. A model
 is 108 KB (39k weights, float16) and matches torch to 5 decimal places.
 
+#### Ensembles, explore-or-descend forks, and two bugs in the measurements (2026-11-14)
+
+Two hypotheses about the dive, cheapest first. H1: averaging training seeds removes the per-seed bias. H2:
+`depth_end` is biased because the rows seldom compare explore and descend from the same state, so forks
+that do will fix it. Scripts in the job's `brain-v5c/` scratch directory; runs under `runs/brain/v5/`.
+
+**Two bugs, both now fixed, that touched every number above.**
+
+- *Stale saves.* A game that ends without a death (mostly the 1,500-choice limit at "You can't go down
+  here!") was not always quit: Ctrl-Q's prompt was hidden by a late "ready" signal, so `quit_game` returned
+  early. The account's next seeded start then **resumed the old game**, recorded under the new seed. 1–7% of
+  the games of every run in `runs/brain/v5/games/` started mid-game (the rules of thumb 11–13 of 200).
+  `quit_game` now catches up first, and `selfplay` checks the turn at the start, quits a resumed game and
+  starts again (`StaleSave`). From here on paired numbers leave such dungeons out on both sides ("clean");
+  it moves earlier pairs by up to 0.2 depths.
+- *Fork regret's moments were not one moment.* A fork's rows after its forked step kept the group of the
+  recorded game's step with the same number, a different state. They are now in no group
+  (`corpus.build`). Clean, random choice loses 1.10 at the 238 old held-out moments, not 1.46, and **no
+  model is clearly better than random there** (below). The fork-regret columns earlier in this file are
+  the contaminated ones.
+
+| block | pair (clean) | before | clean |
+| --- | --- | --- | --- |
+| A | champion − rules of thumb | −0.03 [−0.43, +0.38] | +0.15 [−0.26, +0.57] |
+| C | champion − rules of thumb | −0.26 [−0.70, +0.17] | −0.40 [−0.87, +0.06] |
+| A | `v5-seen` `margin=1.0` − rules | +0.12 [−0.14, +0.37] | +0.15 [−0.07, +0.37] |
+| C | `v5-seen` `margin=1.0` − rules | +0.19 [−0.04, +0.41] | **+0.27 [+0.08, +0.47]** |
+
+**H1: an ensemble.** `net.Ensemble` averages several models' outputs behind the same `forward()` and
+`counts` (an action counts as seen as often as the least-trained member saw it); `net.load_model` takes a
+model, a manifest (`models/v5-ens5.json`: the `s12` recipe at seeds 0–4) or files joined by commas, so
+`--model` and `--brain` take any of them. Seeds 3 and 4 were already trained by the gate
+(`models/v5-s12-s3.json`, `-s4`); seeds 5–9 were trained for a second, disjoint ensemble.
+
+Offline, on the champion's 8,995 block-A moments where the rules said explore and the stairs were known:
+
+| model | value gap (descend − explore) | above 0.25 | above 0.4 |
+| --- | --- | --- | --- |
+| champion `iter2` | +0.07 | 8% | 1% |
+| `s12` seeds 0–9, one at a time | +0.16 mean, sd 0.10 (+0.03 to +0.30) | 3–75% | 0–13% |
+| ensemble of seeds 0–4 (`v5-ens5`) | +0.17 | 18% | 2% |
+| ensemble of seeds 5–9 | +0.15 | 11% | 0% |
+
+- Averaging does what it can: two disjoint 5-seed ensembles differ by 0.02 where single seeds spread by
+  0.10, and fewer moments cross the margin. It **can't remove the part all seeds share**: the ensemble's
+  gap is the seeds' mean, +0.16, twice the champion's.
+- Fork regret (clean groups, 679 held-out moments): `v5-ens5` 1.28, its members 1.20–1.32, seeds 5–9
+  averaged 1.25, all ten 1.23, champion 1.29, random 1.34. Ensemble − mean member: inside ±0.1.
+
+| block A (clean) | finished (hung) | mean depth | died | died on D:1–3 | XL | turns | leaves the rules | `descend` share | vs rules of thumb | vs champion |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| rules of thumb | 197 (3) | 5.45 | 180 | 35 | 5.72 | 2178 | 0 | 30.8% | | −0.15 [−0.57, +0.26] |
+| champion `iter2` | 199 (1) | 5.52 | 192 | 31 | 5.64 | 1843 | 15.6% | 29.9% | +0.15 [−0.26, +0.57] | |
+| `s12` seed 0 / 1 / 2 | | 4.82 / 4.67 / 5.14 | | 62 / 62 / 41 | | 1294 / 926 / 1640 | 34% / 26% / 37% | | −0.58 / −0.82 / −0.28 | −0.70 / −0.81 / −0.36 |
+| `v5-ens5` | 200 (0) | 5.08 | 196 | 58 | 4.82 | 1249 | 28.4% | 31.8% | −0.32 [−0.80, +0.15] | −0.43 [−0.89, +0.03] |
+
+**H1 fails in games**: the ensemble plays like an average seed (−0.32 against the rules of thumb, −0.43
+against the champion), dies on D:1–3 as often as the worst seeds, and its commonest changes are still
+skipping a potion or a scroll for the stairs (`quaff_unknown` → `descend` 6,857 times, `read_unknown` → 3,784).
+
+**H2: forks that compare explore with descend.** `ladder brain forks --kind stairs` picks moments with
+nothing in view where both are possible and the rules chose one (at most one per visit to a level), and
+forks each **both ways**, played on by the rules of thumb. A `descend` is one step toward the stairs, after
+which the rules would explore again, so these forks commit (`BrainTiers(commit=True)`): on that level the
+forked action replaces the other wherever the rules would choose it. Only rules-said-explore moments
+exist: once a level is explored, `explore` is not possible. Moments come from rounds 1–4's self-play
+(training seeds only); round 0's games diverge on replay with today's code (24 of 32 in a pilot).
+
+| forks | |
+| --- | --- |
+| planned (2,400 moments + a 60-moment pilot) | 4,920 |
+| played / lost (hung, errors, stale) / left the recorded game | 4,768 / 152 / 486 |
+| moments with both branches in the corpus | **2,069** (403 held out by dungeon) |
+| wall time, 7 workers | 4 h 4 min (3.0 s per fork; about 21 s of one worker) |
+| corpus | 2,233,423 rows (was 810,581): 6,547 forked rows, 79,263 committed steps, the rest the forks' play to the end |
+
+What happened each way (the corpus's own labels, default style, 95% bootstrap):
+
+| moments | true value gap, descend − explore | `depth_end` gap | `died_soon` gap | descend better / same / worse |
+| --- | --- | --- | --- | --- |
+| training (1,666) | +0.00 [−0.13, +0.14] | +0.01 | +0.01 | 550 / 537 / 579 |
+| held out (403) | +0.02 [−0.27, +0.30] | +0.03 | +0.02 | 145 / 113 / 145 |
+
+**Going down now is worth the same as exploring on, on average**, and the outcome of one pair is mostly
+noise (a standard deviation of about 2.6 depths). Retrained with them, the `s12` recipe at 3 seeds:
+`v5-forks` (the default rebuild) and `v5-pairs` (the version 5 corpus plus only the 4,376 forked rows,
+without the forks' play to the end). Offline:
+
+| model | gap on block-A moments | above 0.25 | held-out pairs: predicted gap | corr(pred, true) | picks the better branch | fork regret (all 679 / old 238 / stairs 441) |
+| --- | --- | --- | --- | --- | --- | --- |
+| random choice | | | | | | 1.34 / 1.10 / 1.47 |
+| champion `iter2` | +0.07 | 8% | +0.04 | −0.03 | 47% | 1.29 / 1.24 / 1.32 |
+| `v5-ens5` | +0.17 | 18% | +0.14 | −0.05 | 49% | 1.28 / 1.23 / 1.30 |
+| `v5-forks` seeds 0 / 1 / 2 | +0.11 / +0.39 / +0.38 | 5 / 93 / 91% | +0.08 / +0.38 / +0.39 | ±0.01 | 49–50% | 1.28 / 1.23 / 1.27 (all) |
+| `v5-forks3` (ensemble) | **+0.29** | 74% | +0.28 | −0.01 | 50% | 1.27 / 1.27 / 1.27 |
+| `v5-pairs` seeds 0 / 1 / 2 | +0.22 / +0.39 / +0.41 | 33 / 91 / 98% | +0.20 (seed 0) | | | 1.25 / 1.14 / 1.18 (all) |
+| `v5-pairs3` (ensemble) | +0.34 | 91% | +0.33 | −0.03 | 50% | 1.18 / 1.04 / 1.26 |
+| pairs only, fork rows weighted 200 (×3 seeds) | −0.26 / +0.15 / +0.37 | | −0.30 / +0.11 / +0.39 | | 49–50% | |
+
+- **The forks did not fix the estimate; they moved it the wrong way.** At the very states of the training
+  pairs (true gap −0.05) `v5-pairs3` predicts +0.33. All models under-predict `depth_end` there (true 3.33
+  either way, predicted 2.5–2.9), and the new rows lift the descend output more than explore's, which its
+  128k ordinary rows hold down. Weighting the pairs 10× more scatters the seeds (−0.26 to +0.37) instead.
+- **No model can tell which moments favour the stairs**: correlation with the true gap is −0.06 to +0.05
+  and every model picks the better branch half the time. On the old held-out moments only `v5-pairs3`
+  (1.04) is a little better than random (1.10); `v5-pairs3` − `v5-ens5` over all 679 is −0.10
+  [−0.17, −0.03], mostly from two seeds.
+
+| block A (clean) | finished (hung) | mean depth | died | died on D:1–3 | XL | turns | leaves the rules | `descend` share | explore → descend | vs rules of thumb | vs champion |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `v5-forks3` | 199 (1) | 5.59 | 193 | 41 | 5.06 | 919 | 22.6% | 24.9% | 4,987 | +0.17 [−0.31, +0.66] | +0.04 [−0.39, +0.45] |
+
+In games `v5-forks3` dives harder than anything so far (the same depth in 42% of the rules' turns, a level
+lower) and still comes out level with the rules of thumb and the champion on block A. With the offline
+table saying its estimate is the most biased of all, read that as a block-A draw (the interval is ±0.5),
+not as the forks working. It is the only H1/H2 configuration at least level on block A, so it is the one
+confirmed below.
+
+**Pre-registered (written before any game on block D):** configuration `models/v5-forks3.json` at the
+default style (`margin=0.25`), no random choices, against the rules of thumb (`baseline`), paired by dungeon
+over games both finished and neither resumed a stale save, 95% bootstrap. Block D = 550000–550199. Block E
+= 560000–560199 is played only if D's difference is above zero, and the claim "beats the rules of thumb"
+needs the pooled D+E interval above zero.
+
+| fresh blocks (clean) | finished (hung) | mean depth | died | died on D:1–3 | XL | turns | leaves the rules | `descend` share |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| D rules of thumb | 197 (3) | 5.27 | 184 | 52 | 5.51 | 1992 | 0 | 30.3% |
+| D `v5-forks3` | 198 (2) | 5.32 | 192 | 41 | 4.77 | 865 | 28.5% | 29.3% |
+| E rules of thumb | 197 (3) | 5.46 | 186 | 39 | 5.76 | 2068 | 0 | 24.6% |
+| E `v5-forks3` | 200 (0) | 5.52 | 197 | 44 | 4.84 | 903 | 25.6% | 25.8% |
+
+| `v5-forks3` − rules of thumb | dungeons | difference | 95% interval | deeper / same / shallower |
+| --- | --- | --- | --- | --- |
+| D | 195 | +0.05 | [−0.43, +0.51] | 78 / 49 / 68 |
+| E | 197 | +0.05 | [−0.43, +0.53] | 75 / 53 / 69 |
+| **D + E (the pre-registered test)** | 392 | **+0.05** | **[−0.28, +0.38]** | 153 / 102 / 137 |
+| A + D + E | 577 | +0.09 | [−0.19, +0.37] | 228 / 142 / 207 |
+
+**Not confirmed: `v5-forks3` is level with the rules of thumb, not better.** It reaches the same depth in
+less than half the turns at a level lower, so it plays a different game to the same place. No game on D or
+E resumed a stale save (the fix holds live; before it, 1–7% of games did).
+
+**The one lead with an interval above zero is not the model's estimate but one rule it found.** `v5-seen`
+at `margin=1.0`, pooled over A and C (clean): +0.21 [+0.06, +0.35] (356 dungeons, 40 / 301 / 15; A is the
+block its margin was tuned on). Its gain is almost all one override, `fight` → `read_teleport` (126 times on
+A and C), in the games where it happens: +0.55 per game on A (20 games), +1.09 on C (22); `wield` →
+`descend` is neutral (−0.36, +0.36). At those moments the character is at full HP (median), 3 hostiles in
+view, D:7 (median), and in 64 of 126 just out of a rage (`-Berserk` with `Slow`). That is a rule of thumb
+the rules lack: *exhausted after a rage, with monsters in view, read teleportation*.
+
+- **Verified**: every number in these tables; that the fork pairs share their state (identical inputs at
+  99.8% of pairs); the stale saves (protocol logs show the next game resuming the old one's turn) and that
+  none happen with the fix; that the ensemble's outputs are the mean of its members' (tests).
+- **Inferred**: why the forks raise the descend estimate (explore's output held down by its many ordinary
+  rows, all models under-predicting `depth_end` at those states); that `v5-forks3`'s level result is luck
+  of the blocks rather than the forks (offline it is the most biased model); that the teleport rule is the
+  cause of `v5-seen`'s lead (an attribution by game, not a test).
+
 ## What carried over from s1-battle, and what couldn't
 
 | s1-battle | here |
@@ -463,10 +630,12 @@ The parts on their own:
 ```bash
 uv run ladder brain selfplay --games 40 --seed 100 --epsilon 0.2 [--model models/brain.json]
 uv run ladder brain forks runs/brain/iter0 --points 300   # replay games to a choice, try the other actions
+uv run ladder brain forks runs/brain/iter4 --kind stairs --points 500   # explore vs descend, both ways, committed
 uv run ladder brain human                     # convert new recordings of your own games
 uv run ladder brain corpus                    # runs/**/steps.jsonl -> runs/brain/corpus.npz
 uv run ladder brain train --model-out models/candidate.json
 uv run ladder brain eval baseline models/brain.json models/candidate.json --games 60
+uv run ladder brain selfplay --model models/v5-ens5.json ...   # an ensemble: a manifest, or a.json,b.json,c.json
 uv run ladder spike --brain --games 3         # watch it play as ladderbot (also: ladder cockpit --brain)
 ```
 
@@ -507,19 +676,20 @@ have sight fields and 24,346 (3.0%) are marked missing. Evaluation dungeons and 
 | `src/ladder/brain/features.py` | actions, components, `observe` (state to dict) and `encode` (dict to numbers) |
 | `src/ladder/brain/monsters.py`, `monsters-0.34.json` | the shipped monster table and the name lookup |
 | `src/ladder/brain/reobserve.py` | rebuilds `sight` fields for old step logs from their protocol logs |
-| `src/ladder/brain/net.py` | model file format, numpy forward pass, parity check |
+| `src/ladder/brain/net.py` | model file format, numpy forward pass, parity check, `Ensemble` and `load_model` |
 | `src/ladder/brain/gear.py` | ranks weapons and armour, and says which piece in the pack is better than the one in use |
 | `src/ladder/brain/policy.py` | `available`, `baseline`, `baseline_wiki`, `Style`, and `BrainTiers`, which sits in Reflex where `StubTiers` did |
 | `docs/wiki-strategy.md` | the DCSS wiki's strategy guides, sorted by what the brain would need to use each piece of advice |
 | `src/ladder/brain/steplog.py` | `steps.jsonl` writer shared by self-play, `spike` and the cockpit |
 | `src/ladder/brain/selfplay.py` | parallel games, one process each, with a watchdog for hung reads |
-| `src/ladder/brain/forks.py` | picks the moments to fork and writes the replay scripts |
+| `src/ladder/brain/forks.py` | picks the moments to fork and writes the replay scripts (`kind="stairs"`: explore vs descend) |
 | `src/ladder/brain/humanplay.py` | a person's recorded game to a step log |
 | `src/ladder/brain/corpus.py` | step logs to labelled training rows |
 | `src/ladder/brain/train.py` | PyTorch training and export |
 | `src/ladder/brain/cli.py` | `ladder brain ...`, including the iterate loop |
 | `models/brain.json`, `models/brain.ledger.json` | the champion (none yet) and the record of every `iterate` round |
 | `models/iter<n>.json` | each round's candidate, with its parity vectors |
+| `models/v5-*.json` | version 5 experiments, each with its parity file; `v5-ens5`, `v5-forks3`, `v5-pairs3` are ensemble manifests |
 | `models/v2/` | the first three candidates, from before the equipment actions; today's code refuses to load them |
 
 ## What it found on the way
@@ -602,6 +772,13 @@ In the order I would take them:
    *Follow-up: the training seed moves a model by up to 0.8 depths in games, more than the inputs do.
    Before comparing inputs again, train an ensemble (average 3–5 seeds' predictions) or promote on the mean
    of several seeds, and gate on forks that compare descend with explore from the same state.*
+   *Done (2026-11-14, later): neither helped (the "Ensembles, explore-or-descend forks" section). The
+   estimate of one action against another is the weak part, and more rows of either kind haven't fixed it.
+   Next, cheapest first: (a) put the rule `v5-seen` found into the rules of thumb (read teleportation
+   when exhausted after a rage with monsters in view) and test that rule alone against today's rules on a
+   fresh block; (b) use the network only where it is confident and the pairs agree (as `margin=1.0` did),
+   and mine its confident overrides for rules; (c) if the network is to choose more often, predict the
+   difference between two actions directly from paired forks instead of each action's outcome on its own.*
 4. **Promote on more than 60 dungeons.** Differences under 0.3 depths can't be seen with 60; the same
    baseline replayed varies by 0.1. 200 evaluation dungeons would take about 15 minutes per model.
 5. **The remaining dead ends**: games that hang (1 in 20 with random choices in round 4, 1 in 40

@@ -394,3 +394,66 @@ def test_the_champion_on_disk_still_loads_and_matches_its_parity_file():
     iter2 = ROOT / "models" / "iter2.json"                     # the champion's own training output
     if iter2.exists() and iter2.with_suffix(".parity.json").exists():
         assert check_parity(iter2) < 2e-3
+
+
+# --- ensembles ------------------------------------------------------------------------------------------
+
+def random_model(seed: int, self_dim: int = SELF_DIM, mon_dim: int = MON_DIM, counts: dict | None = None) -> dict:
+    import base64
+    rng = np.random.default_rng(seed)
+    H, A, K = 8, len(contract()["actions"]), len(contract()["components"])
+    shapes = {"self1": (H, self_dim), "mon1": (H, mon_dim + H), "mon2": (H, H), "trunk": (H, 3 * H),
+              "head1": (H, H), "head2": (A * K, H), "danger": (1, H), "prior": (A, H)}
+    b64 = lambda a: base64.b64encode(a.astype(np.float32).tobytes()).decode()  # noqa: E731
+    return {"format": "dcss-trained-brain", **contract(), "self_dim": self_dim, "mon_dim": mon_dim,
+            "feature_version": FEATURE_VERSION if self_dim == SELF_DIM else 4, "dtype": "f32",
+            "action_counts": counts or {a: 100 for a in contract()["actions"]},
+            "layers": {k: {"shape": list(sh), "w": b64(rng.normal(size=sh)), "b": b64(rng.normal(size=sh[0]))}
+                       for k, sh in shapes.items()},
+            "norm": {"self_mean": [0.0] * self_dim, "self_std": [1.0] * self_dim,
+                     "mon_mean": [0.0] * mon_dim, "mon_std": [1.0] * mon_dim}}
+
+
+def test_an_ensemble_averages_its_members_and_loads_from_a_manifest_or_a_list(tmp_path):
+    from ladder.brain.net import ENSEMBLE_FORMAT, Ensemble, load_model
+    few = {a: 100 for a in contract()["actions"]} | {"wear": 10}
+    (tmp_path / "models").mkdir()
+    paths = []
+    for i, model in enumerate([random_model(1), random_model(2, counts=few), random_model(3, V4_SELF, V4_MON)]):
+        paths.append(tmp_path / "models" / f"m{i}.json")
+        paths[-1].write_text(json.dumps(model))
+    nets = [TrainedNet.load(p) for p in paths]
+    rng = np.random.default_rng(0)
+    s, m = rng.normal(size=SELF_DIM).astype(np.float32), rng.normal(size=(MAX_MONS, MON_DIM)).astype(np.float32)
+    mask = np.array([1] + [0] * (MAX_MONS - 1), dtype=np.float32)
+    outs = [n.forward(s, m, mask) for n in nets]
+
+    manifest = tmp_path / "ens.json"                          # member paths are relative to the manifest
+    manifest.write_text(json.dumps({"format": ENSEMBLE_FORMAT, "members": [f"models/m{i}.json" for i in range(3)]}))
+    for ens in (load_model(manifest), load_model(",".join(map(str, paths)))):
+        assert isinstance(ens, Ensemble) and len(ens.members) == 3
+        q, danger, prior = ens.forward(s, m, mask)
+        assert q.shape == outs[0][0].shape and np.allclose(q, np.mean([o[0] for o in outs], 0))
+        assert danger == pytest.approx(np.mean([o[1] for o in outs]))
+        assert np.allclose(prior, np.mean([o[2] for o in outs], 0))
+        assert ens.counts["wear"] == 10 and ens.counts["fight"] == 100      # the least any member saw
+    assert load_model(manifest).name == "ens"
+    assert isinstance(load_model(paths[0]), TrainedNet)
+    assert len(load_model(f"{manifest},{paths[0]}").members) == 4          # a manifest in a list: its members
+    with pytest.raises(ValueError):
+        Ensemble([])
+
+
+def test_brain_tiers_plays_with_an_ensemble(tmp_path):
+    import random
+
+    from test_brain import stairs_state
+
+    from ladder.brain.net import load_model
+    from ladder.brain.policy import BrainTiers
+    for i in range(2):
+        (tmp_path / f"m{i}.json").write_text(json.dumps(random_model(i)))
+    tiers = BrainTiers(load_model(f"{tmp_path / 'm0.json'},{tmp_path / 'm1.json'}"), rng=random.Random(0))
+    assert tiers.next_action(stairs_state()) in ("explore", "travel")
+    assert tiers.last["source"] == "net" and set(tiers.last["values"]) == set(tiers.last["avail"])
+    assert tiers.describe()["model"] == "m0+m1"

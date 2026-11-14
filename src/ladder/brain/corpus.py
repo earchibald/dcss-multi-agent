@@ -190,9 +190,11 @@ def build(roots: list[str | Path], out: str | Path, sidecars: str | Path | None 
         if g.get("dir") not in side_cache:
             side_cache = {g.get("dir"): load_sidecar(sidecars, g.get("dir", ""))}   # one file's worth at a time
         side = side_cache[g.get("dir")]
-        for step, row in list(zip(g["steps"], q))[g.get("skip", 0):]:
+        for k, (step, row) in enumerate(list(zip(g["steps"], q))[g.get("skip", 0):]):
             if step["action"] not in ACTIONS:
                 continue
+            # After its forked step a fork is a different game: its step n is not the recorded game's step n
+            later = bool(g.get("skip")) and k > 0
             o = step["obs"]
             if "obsx" in o:
                 seen["live"] += 1
@@ -212,7 +214,7 @@ def build(roots: list[str | Path], out: str | Path, sidecars: str | Path | None 
             cols["human"].append(float(step.get("source") == "human"))
             cols["fork"].append(float(step.get("source") == "fork"))
             # rows with the same group are the same moment: a recorded choice and the forks tried from it
-            cols["group"].append(zlib.crc32(f"{seed}:{step.get('step')}".encode()) if seed >= 0 else -1)
+            cols["group"].append(zlib.crc32(f"{seed}:{step.get('step')}".encode()) if seed >= 0 and not later else -1)
             cols["val"].append(val)
             sources[step.get("source", "?")] = sources.get(step.get("source", "?"), 0) + 1
     n = len(cols["action"])

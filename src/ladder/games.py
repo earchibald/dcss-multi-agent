@@ -25,12 +25,12 @@ def brain_tiers(args: argparse.Namespace, steps, game: str):
     """`--brain [MODEL]`: the trained brain chooses Reflex's actions ("baseline" = its rules of thumb, no model)."""
     if steps is None:
         return None
-    from .brain.net import TrainedNet
+    from .brain.net import load_model
     from .brain.policy import BrainTiers
     path = args.brain
     if path == "champion":                 # --brain with no model named: the promoted one, if any has been
         path = CHAMPION if Path(CHAMPION).exists() else "baseline"
-    net = None if path == "baseline" else TrainedNet.load(path)
+    net = None if path == "baseline" else load_model(path)
     return steps.attach(BrainTiers(net), game)
 
 
