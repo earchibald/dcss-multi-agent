@@ -17,7 +17,8 @@ from ladder.brain.features import (ACTIONS, COMPONENTS, FEATURE_VERSION, MAX_MON
                                    N_COMPONENTS, SELF_DIM, V4_SELF, encode, inventory, observe, path,
                                    progress_depth)
 from ladder.brain.net import ModelMismatch, TrainedNet, contract
-from ladder.brain.policy import (BLOCK_TURNS, FORK_DONE, IDLE_LIMIT, ITEM_PROMPTS, REPLAY_DIVERGED, UNTIL_LEVEL,
+from ladder.brain.policy import (BLOCK_TURNS, CALM_DOWN, FORK_DONE, IDLE_LIMIT, ITEM_PROMPTS, REPLAY_DIVERGED,
+                                 UNTIL_LEVEL,
                                  BrainTiers, Style, available, baseline, heal_potion, poison_lethal_after_rage,
                                  poison_share, teleport_rule)
 from ladder.brain.selfplay import summarize
@@ -526,10 +527,23 @@ def test_perform_cancels_a_scroll_that_asks_for_a_target():
     with_inv(state, s0=item("scroll labelled FOO", SCROLLS, 1, 97))
     first = ActResult(blocking="blink", messages=[{"text": "first"}])
     conn = ScriptedConn([ActResult(blocking="menu", messages=[{"text": "menu"}]), first,
+                         ActResult(blocking="menu", messages=[{"text": "really abort?"}]),
                          ActResult(messages=[{"text": "second"}])])
     result = BrainTiers().perform(SimpleNamespace(state=state, conn=conn), "read_unknown")
-    assert [k for k, _ in conn.sent] == [("r",), ("a",), ("key_esc", "Y")]
-    assert [m["text"] for m in result.messages] == ["menu", "first", "second"]
+    # one key at a time: Esc, and Y only once "really abort (and waste the scroll)?" is up
+    assert [k for k, _ in conn.sent] == [("r",), ("a",), ("key_esc",), ("Y",)]
+    assert [m["text"] for m in result.messages] == ["menu", "first", "really abort?", "second"]
+
+
+def test_perform_types_no_y_when_cancelling_asks_nothing():
+    # acquirement's menu just closes on Esc; a Y sent with it was run later as a command, and every
+    # reply after that was the previous key's (the staircase loop)
+    state = make_state(["@..."])
+    with_inv(state, s0=item("scroll labelled FOO", SCROLLS, 1, 97))
+    conn = ScriptedConn([ActResult(blocking="menu"), ActResult(blocking="acquirement"), ActResult()])
+    result = BrainTiers().perform(SimpleNamespace(state=state, conn=conn), "read_unknown")
+    assert [k for k, _ in conn.sent] == [("r",), ("a",), ("key_esc",)]
+    assert result.blocking is None
 
 
 def test_perform_wait_and_flee_and_unknown_action():
@@ -1107,9 +1121,9 @@ def test_berserk_is_sent_as_an_ability_only_once_the_menu_is_up():
 def test_item_prompts_are_cancelled(reason):
     state = make_state(["@..."])
     with_inv(state, s0=item("scroll labelled FOO", SCROLLS, 1, 97))
-    conn = ScriptedConn([ActResult(blocking="menu"), ActResult(blocking=reason)])
+    conn = ScriptedConn([ActResult(blocking="menu"), ActResult(blocking=reason), ActResult(blocking="yesno")])
     BrainTiers().perform(SimpleNamespace(state=state, conn=conn), "read_unknown")
-    assert [k for k, _ in conn.sent][-1] == ("key_esc", "Y")
+    assert [k for k, _ in conn.sent][-2:] == [("key_esc",), ("Y",)]
 
 
 def test_other_prompts_after_an_item_are_left_for_reflex():
@@ -1691,6 +1705,76 @@ def test_recover_reaches_the_rules_inside_brain_tiers():
         tiers.level_explored = True
         seen[level] = tiers.next_action(state)
     assert seen[0] == "travel" and seen[1] == "rest"
+
+
+# --- the opt-in switch to wait out a rage instead of trying to explore (Style.calm) -------------------
+
+def test_calm_is_off_by_default_and_explore_is_tried_in_a_rage_as_before():
+    assert Style().calm == 0
+    o = obs(status=["Berserk"], **STAIRS_KNOWN)
+    assert "explore" in available(o, False, set(), False)
+    assert baseline(o, available(o, False, set(), False), False) == "explore"
+
+
+def test_calm_waits_out_the_rage_then_explores():
+    raging = obs(status=["Berserk"], **STAIRS_KNOWN)
+    avail = available(raging, False, set(), True, calm=True)       # even after a rest that healed nothing
+    assert "explore" not in avail and "rest" in avail
+    assert baseline(raging, avail, False, calm=True) == "rest"
+    # the exhaustion after it doesn't stop autoexplore: explore on (resting it out is `recover`'s)
+    spent = obs(status=["-Berserk", "Slow"], **STAIRS_KNOWN)
+    avail = available(spent, False, set(), False, calm=True)
+    assert "explore" in avail and baseline(spent, avail, False, calm=True) == "explore"
+    assert calm_rules(spent, 2) == "rest"
+    # a level explored to the end: on to the stairs as before (recover=1 rests there)
+    assert baseline(raging, available(raging, True, set(), False, calm=True), True, calm=True) == "descend"
+
+
+def test_calm_never_rests_with_something_in_view():
+    o = obs(status=["Berserk"], n_hostiles=1, mons=[mon(dx=5)], **STAIRS_KNOWN)
+    assert "rest" not in available(o, False, set(), False, calm=True)
+
+
+def _refuse_explore(tiers, state, text):
+    before = Before.capture(state)
+    state.messages.append({"turn": state.turn, "channel": 0, "text": text})
+    tiers.observe("explore", before, state, [])
+
+
+def test_calm_does_not_count_a_refusal_for_the_rage_as_the_level_being_done():
+    for calm, blocked in ((0, True), (1, False)):
+        state = stairs_state()
+        tiers = BrainTiers(style=Style(calm=calm), rng=random.Random(0))
+        tiers.choice = "explore"
+        _refuse_explore(tiers, state, CALM_DOWN)
+        _refuse_explore(tiers, state, CALM_DOWN)
+        assert ("explore" in tiers.blocked) == blocked, calm
+    # any other refusal still counts
+    state = stairs_state()
+    tiers = BrainTiers(style=Style(calm=1), rng=random.Random(0))
+    tiers.choice = "explore"
+    _refuse_explore(tiers, state, "Done exploring.")
+    _refuse_explore(tiers, state, "Done exploring.")
+    assert tiers.blocked["explore"] == state.turn + BLOCK_TURNS
+
+
+def test_calm_reaches_the_rules_inside_brain_tiers():
+    seen = {}
+    for calm in (0, 1):
+        tiers = BrainTiers(style=Style(calm=calm), rng=random.Random(0))
+        state = stairs_state()
+        state.player["status"] = [{"light": "Berserk"}]
+        seen[calm] = tiers.next_action(state)
+    assert seen[0] == "explore" and seen[1] == "rest"
+
+
+def test_calm_switch_is_a_style_and_old_runs_still_match():
+    import argparse
+    from ladder.brain.cli import _style
+    assert _style(argparse.Namespace(style=["calm=1"])).calm == 1.0
+    old = {k: v for k, v in Style().to_dict().items() if k != "calm"}          # a run saved before the switch
+    assert {**Style().to_dict(), **old} == Style().to_dict()
+    assert {**Style().to_dict(), **old} != Style(calm=1).to_dict()
 
 
 def test_inventory_largest_stack_first():

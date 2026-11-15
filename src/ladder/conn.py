@@ -18,6 +18,7 @@ from . import keychain
 
 DEFAULT_URL = "ws://localhost:8080/socket"
 GAME_ID = "dcss-0.34"
+MODE_COMMAND, MODE_YESNO = 1, 8         # DCSS's mouse_mode: waiting for a command, for a yes or no
 
 # (substring of dcss-api's error text, reason)
 _ERROR_REASONS = [
@@ -80,6 +81,25 @@ def classify_error(exc: Exception) -> str:
         if needle.lower() in text.lower():
             return reason
     return "error:" + text
+
+
+def cancel_prompt(conn: Connection) -> ActResult:
+    """Cancel a scroll's target or item prompt and, if the game then asks "really abort (and waste
+    the scroll)?", say yes. One key at a time, each once the game wants it.
+
+    The two used to go together (Esc and Y). Where the question comes up, the Y typed ahead is not
+    taken by it; where none comes (acquirement just closes its menu), there is nothing to take it.
+    Either way the game keeps the Y and runs it later as a command of its own ("Unknown command."),
+    which sends one reply more than act() reads. Every act() after that returned the reply to the key
+    before it, until something caught up: the bot played a step behind the game, and on a staircase
+    it pressed `>` one square off the stairs and stepped back on, for ever ("You can't go down here!").
+    """
+    result = conn.act("key_esc", through_menu=True)
+    if result.blocking in ("menu", "yesno"):
+        answer = conn.act("Y", through_menu=True)
+        answer.messages = result.messages + answer.messages
+        result = answer
+    return result
 
 
 class LoginError(RuntimeError):
@@ -256,13 +276,17 @@ class Connection:
                 break
             modes = (reply_modes(batch) if keys
                      else [m.get("mode") for m in batch if m.get("msg") == "input_mode"])
-            if modes and modes[-1] == 1:
+            if modes and modes[-1] == MODE_COMMAND:
                 break
             # `through_menu`: the keys open a menu and answer it (q or r, then the item's letter),
             # so a menu passing by is not something left waiting. One still open at the end is:
             # the answer brought up another ("Keep equipping yourself?" comes as a yes/no menu).
             if menu_left_open(batch) if through_menu else any(m.get("msg") in ("menu", "ui-push") for m in batch):
                 result.blocking = "menu"
+                break
+            if modes and modes[-1] == MODE_YESNO:
+                # A yes/no question with no menu of its own: nothing more comes until it is answered.
+                result.blocking = "yesno"
                 break
         return result
 

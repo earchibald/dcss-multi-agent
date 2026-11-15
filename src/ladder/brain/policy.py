@@ -15,7 +15,7 @@ from dataclasses import asdict, dataclass
 
 import numpy as np
 
-from ..conn import ActResult
+from ..conn import ActResult, cancel_prompt
 from ..interrupts import Before, Interrupt
 from ..reflex import Escalation, StubTiers
 from ..state import MF_STAIR_UP, GameState, strip_tags
@@ -59,6 +59,9 @@ class Style:
                               # 2 = also when outnumbered by something dangerous. Off by default.
     recover: float = 0.0      # 1 = with nothing in view, rest out a rage and its exhaustion (`recovering`) before
                               # taking the stairs, 2 = before exploring on as well. Off by default.
+    calm: float = 0.0         # 1 = with nothing in view, wait out a rage instead of trying to explore (DCSS
+                              # refuses: "Calm down first, please."), and don't count that refusal as the
+                              # level being done (`raging`). Off by default.
 
     def weights(self) -> np.ndarray:
         return np.asarray([getattr(self, c) for c in COMPONENTS], dtype=np.float32)
@@ -135,23 +138,35 @@ def recovering(obs: dict) -> bool:
     return any(x in RECOVERING for x in obs.get("status") or [])
 
 
-def available(obs: dict, level_explored: bool, blocked: set[str], rest_stalled: bool, recover: bool = False) -> list[str]:
+CALM_DOWN = "Calm down first, please."     # DCSS's answer to autoexplore (and travel) during a rage
+
+
+def raging(obs: dict) -> bool:
+    """In a rage now (`Berserk`, not the `-Berserk` exhaustion after it): autoexplore is refused."""
+    return "Berserk" in (obs.get("status") or [])
+
+
+def available(obs: dict, level_explored: bool, blocked: set[str], rest_stalled: bool, recover: bool = False,
+              calm: bool = False) -> list[str]:
     """The actions that can be carried out right now, in ACTIONS order.
 
     `recover` (`Style.recover`): `rest` is also possible at full HP while `recovering`, and a rest that left HP
     where it was doesn't rule it out then (HP is full; the rest was for the time).
+    `calm` (`Style.calm`): while `raging`, `explore` is not possible (DCSS would refuse it) and `rest` is, in
+    the same way as for `recover`, so the rage can be waited out.
     """
     inv, hostiles = obs["inv"], obs["n_hostiles"] > 0
     adjacent = any(max(abs(m["dx"]), abs(m["dy"])) <= 1 for m in obs["mons"])
     hurt = obs["hp"] < obs["hp_max"]
     status = obs.get("status") or []
-    waiting_out = recover and recovering(obs)
+    waiting_calm = calm and raging(obs)
+    waiting_out = (recover and recovering(obs)) or waiting_calm
     calm = not any(x.startswith("Berserk") for x in status)             # no potions or scrolls in a rage
     can_read = calm and not any(x.startswith(("silenced", "Conf")) for x in status)
     # curing can be drunk at full HP while poisoned or confused; heal wounds can't
     ailing = inv.get("curing", 0) > 0 and _has(obs, "Pois", "Conf")
     can = {
-        "explore": not hostiles and not level_explored,
+        "explore": not hostiles and not level_explored and not waiting_calm,
         "fight": hostiles,
         "rest": not hostiles and (hurt or obs["mp"] < obs["mp_max"] or waiting_out) and (not rest_stalled or waiting_out),
         "descend": obs["on_down"] or obs["dist_down"] >= 0,
@@ -196,7 +211,7 @@ def teleport_rule(obs: dict, level: int) -> tuple[bool, bool]:
 
 
 def baseline(obs: dict, avail: list[str], level_explored: bool, wiki: bool = False, teleport: int = 0,
-             recover: int = 0) -> str:
+             recover: int = 0, calm: bool = False) -> str:
     """Rules of thumb: the stub's behaviour, plus drinking a healing potion instead of giving up.
 
     `wiki` plays the variant that follows the DCSS wiki's strategy guides instead (`Style.wiki`).
@@ -204,6 +219,8 @@ def baseline(obs: dict, avail: list[str], level_explored: bool, wiki: bool = Fal
     `recover` 1 rests out a rage and its exhaustion (`recovering`) with nothing in view before taking the
     stairs, 2 before exploring on as well (`Style.recover`); 0 leaves it out. `avail` must then come from
     `available(..., recover=True)`, or `rest` is seldom there at full HP.
+    `calm` waits out a rage (`raging`) with nothing in view before exploring on (`Style.calm`); `avail` must
+    then come from `available(..., calm=True)`.
     """
     if wiki:
         return baseline_wiki(obs, avail, level_explored)
@@ -220,6 +237,8 @@ def baseline(obs: dict, avail: list[str], level_explored: bool, wiki: bool = Fal
         onward = ["descend"] if level_explored else ["explore"]
         if recover and recovering(obs) and (level_explored or recover >= 2):
             onward = ["rest"] + onward              # arrive, or explore on, able to rage and at full speed
+        elif calm and raging(obs) and not level_explored:
+            onward = ["rest"] + onward              # explore is refused until the rage is over
         order = cure + ["wield", "wear"] + (["rest"] if frac < 0.8 else ["read_unknown", "quaff_unknown"]) + \
                 onward + ["rest", "descend", "explore"]
     return next((a for a in order if a in avail), avail[0])
@@ -315,7 +334,7 @@ class BrainTiers(StubTiers):
         self.prev_frac = frac
         blocked = {a for a, until in self.blocked.items() if state.turn < until}
         avail = available(obs, self.level_explored, blocked, self.rest_stalled_at == (state.turn, state.hp),
-                          recover=bool(self.style.recover))
+                          recover=bool(self.style.recover), calm=bool(self.style.calm))
         if not avail and "wait" not in blocked and self.idle < IDLE_LIMIT:
             # Everything else went nowhere: let a turn pass. Now and then look again, since "partly
             # explored, can't reach some places" stops being true once a cloud of gas has cleared.
@@ -329,7 +348,7 @@ class BrainTiers(StubTiers):
         if not avail:
             raise Escalation("nothing the brain can do here" + (f" (tried: {', '.join(sorted(blocked))})" if blocked else ""))
         base = baseline(obs, avail, self.level_explored, wiki=bool(self.style.wiki), teleport=int(self.style.teleport),
-                        recover=int(self.style.recover))
+                        recover=int(self.style.recover), calm=bool(self.style.calm))
         choice, source, extra = base, "baseline", {}
         if self.fork_turn is not None and self.horizon and state.turn > self.fork_turn + self.horizon:
             raise Escalation(FORK_DONE)
@@ -398,9 +417,9 @@ class BrainTiers(StubTiers):
             result = self.through_menu(conn, verb, letters[kind])
             if result.blocking in ITEM_PROMPTS:
                 # The scroll wants a target or an item (blinking, identify, enchant...). There is no
-                # action for that yet: cancel, and say yes to "really abort and waste the scroll?".
-                # Sent together, because act() would wait forever between the two.
-                after = conn.act("key_esc", "Y", through_menu=True)
+                # action for that yet: cancel, and say yes to "really abort and waste the scroll?",
+                # one key at a time (a Y typed ahead put every later reply a key behind).
+                after = cancel_prompt(conn)
                 after.messages = result.messages + after.messages
                 return after
             return result
@@ -474,6 +493,9 @@ class BrainTiers(StubTiers):
             if self.choice != "wait":
                 self.idle = 0
             return
+        if self.style.calm and self.choice == "explore" and \
+                any(m["text"] == CALM_DOWN for m in state.messages[before.msg_index:]):
+            return                              # refused for the rage, not for want of anywhere to go
         self.stalls[self.choice] = self.stalls.get(self.choice, 0) + 1
         if self.stalls[self.choice] < 2:
             return

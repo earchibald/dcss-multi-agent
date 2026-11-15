@@ -298,6 +298,13 @@ class Reflex:
             original = result.blocking
             result = nxt
             if result.blocking is None:
+                # A key sent for a prompt that had already gone (a --more-- folded into a popup) is run
+                # later as a command of its own, and its reply would be taken for the next key's: read it now.
+                behind = self.conn.catch_up()
+                result.messages += behind.messages
+                if behind.blocking not in (None, "more"):
+                    result.blocking = behind.blocking       # another prompt came up: answer that too
+                    continue
                 result.blocking = original     # keep the prompt visible to the detector
                 return result
         return result

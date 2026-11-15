@@ -169,6 +169,48 @@ def test_reflex_sends_the_pace_key_only_when_the_pace_changes(tmp_path):
     assert conn.sent == [(pace_key(150),), (pace_key(-1),)]
 
 
+class PromptConn(FakeConn):
+    """act() returns the scripted results in turn; catch_up() returns what was left unread."""
+
+    def __init__(self, state, results, behind=()):
+        super().__init__(state)
+        self.results, self.behind, self.caught_up = list(results), list(behind), 0
+
+    def act(self, *keys):
+        self.sent.append(keys)
+        return self.results.pop(0) if self.results else ActResult()
+
+    def catch_up(self):
+        self.caught_up += 1
+        return self.behind.pop(0) if self.behind else ActResult()
+
+
+def test_after_answering_a_prompt_reflex_reads_what_was_left_behind(tmp_path):
+    # a --more-- folded into a popup: the Enter sent for it ran later as a command, and its reply
+    # would have been read as the next key's
+    state = make_state(["@..."])
+    late = {"msg": "msgs", "messages": [{"text": "Unknown command."}]}
+    conn = PromptConn(state, [ActResult()], [ActResult(messages=[late])])
+    result = Reflex(conn, state, RunLog(tmp_path))._answer_prompts(ActResult(blocking="menu"))
+    assert conn.sent == [("key_esc",)] and conn.caught_up == 1
+    assert late in result.messages and result.blocking == "menu"
+
+
+def test_a_prompt_found_while_catching_up_is_answered_too(tmp_path):
+    state = make_state(["@..."])
+    conn = PromptConn(state, [ActResult(), ActResult()], [ActResult(blocking="menu"), ActResult()])
+    result = Reflex(conn, state, RunLog(tmp_path))._answer_prompts(ActResult(blocking="menu"))
+    assert conn.sent == [("key_esc",), ("key_esc",)] and conn.caught_up == 2
+    assert result.blocking == "menu"
+
+
+def test_no_catch_up_without_a_prompt(tmp_path):
+    state = make_state(["@..."])
+    conn = PromptConn(state, [])
+    assert Reflex(conn, state, RunLog(tmp_path))._answer_prompts(ActResult()).blocking is None
+    assert conn.caught_up == 0
+
+
 def test_pace_curve_has_a_floor_and_full_speed_draws_nothing():
     assert pace_ms(0) == -1
     assert [pace_ms(d) for d in (0.25, 1, 5, 60)] == [100, 150, 250, 700]

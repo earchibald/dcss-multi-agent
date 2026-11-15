@@ -96,7 +96,7 @@ def _clear_save(cfg: dict) -> None:
     """
     import dcss_api
 
-    from ..conn import GAME_ID, Connection, classify_error
+    from ..conn import GAME_ID, Connection, cancel_prompt, classify_error
     from ..games import crawlrc
     conn = Connection(cfg["server"])
     try:
@@ -116,7 +116,7 @@ def _clear_save(cfg: dict) -> None:
                 if blocking == "text_input":                   # the level-up stat prompt takes no Esc
                     blocking = conn.act("S").blocking
                 else:                                          # a scroll's target: cancel, and yes, waste it
-                    blocking = conn.act("key_esc", "Y", through_menu=True).blocking
+                    blocking = cancel_prompt(conn).blocking
         conn.quit_game()
     finally:
         conn.close()

@@ -7,6 +7,14 @@ runs in numpy in well under a millisecond. It is the same idea as the trained br
 
 ## Where it stands
 
+**2026-11-15: a bug fix and `recover=1` together pass a pre-registered fresh-block test, +0.43 [+0.12, +0.75]**
+against today's rules on blocks H and I (section "The reply a key behind, and the rage that ends exploring",
+below). The staircase loop came from cancelling a scroll's prompt with Esc and Y typed together: the Y ran
+later as a command, and from then on the bot read every reply a key late (12–19% of all keys, in two games
+of three). Fixed and on by default (+0.36 [+0.16, +0.57] alone on the tuning blocks; no loop left, hangs 9 →
+1). Waiting out a rage instead of trying to explore (`--style calm=1`, off by default) works as meant and is
+level on depth. `recover=1` stays off by default until the orchestrator decides; it is what passed, with the fix.
+
 **2026-11-14, night: a diagnosis of where the rules of thumb lose games** (section "Where the rules of thumb
 lose games", below). A rage stops autoexplore, so the rules leave most levels from D:4 on mid-way, raging or
 exhausted (64% of all level exits), arrive under qw's level and unable to rage, and a quarter of all games
@@ -730,6 +738,192 @@ did that and came out behind).
   (`gather.py`, `flags.py`, `causes.py`, `pace.py`, `pace_xl.py`, `departures.py`, `rage_end.py`, `arms.py`)
   and the copied morgues in the job's `brain-v5e/` scratch directory.
 
+#### The reply a key behind, and the rage that ends exploring (2026-11-15)
+
+**Summary.**
+
+- **The staircase loop was a symptom of a bigger bug: after cancelling a scroll's prompt, the bot played one
+  reply behind the game, in two games out of three.** To cancel a scroll that asks for a target or an item
+  (blinking, identify, enchant, brand, acquirement) the brain sent Esc and Y together. The Y was typed ahead:
+  the "really abort?" question that Esc brings up doesn't take it (and acquirement asks nothing), so DCSS kept
+  it and ran it later as a command ("Unknown command."). That is one reply more than the bot read, and from
+  then on every key's answer was the previous key's, until the next menu key happened to catch up. On A and C
+  that was 17–19% of all keys sent, in 261 of 400 games. On a staircase it never ends: the bot sees itself
+  on the stairs only once it has stepped off them, presses `>` one square away ("You can't go down here!"),
+  steps back, and so on until the 1,500-choice limit. All 24 staircase loops on A and C began that way.
+- **Fixed, on by default**: `conn.cancel_prompt` sends Esc, then Y only once the question is up; `act()`
+  stops at a bare yes/no question instead of waiting for ever; and `Reflex._answer_prompts` catches up after
+  answering any prompt (a rarer source: an Enter sent for a `--more--` that a popup had swallowed, after a
+  shaft). On A and C the loop is gone (24 → 0), no key is sent a reply behind, hung games fall from 9 to 1,
+  and the 130 games that never cancelled a prompt replay the same (129; the other differs by one turn of
+  explore, replay noise). **The fix alone is +0.36 [+0.16, +0.57]** against the rules as they were.
+- **The explore block is fixed at its source by a switch, `--style calm=1` (off by default)**: wait out a
+  rage instead of trying to explore, and don't count "Calm down first, please." as the level being done.
+  It works as meant (levels left after exploring to the end: 31% → 86%) and is level on depth (+0.16
+  [−0.17, +0.49] against the fix alone), as resting before exploring (`recover=2`) was before.
+- **The best tuning arm is the fix with `recover=1`** (rest out a rage before the stairs): +0.24 [−0.06,
+  +0.54] over the fix alone, +0.61 [+0.28, +0.95] over the rules as they were. Pre-registered below for
+  fresh blocks H and I.
+
+**What happened, in the protocol** (run `A-rules-h`, seed 500033, D:1; the bot's keys and what it read):
+Esc and Y go out together; the question comes up and stays open; Reflex answers it with Esc ("Okay, then.");
+the next key, `o`, reads "Unknown command." (the Y); the next `o` reads the first one's explore, and so on.
+By turn 629 the bot reads "There is a stone staircase leading down here" for the step it took a key earlier
+and presses `>` while the game has already moved it one square west; it reads that move as the answer to `>`,
+walks back east, and the 940 turns to the limit are that cycle. In every one of the 24 loops on A and C the
+last thing before it is a typed-ahead cancel followed by "Unknown command.".
+
+| plain rules, before the fix | games | cancelled a scroll prompt | "Unknown command." | keys sent a reply behind | stuck on a staircase | hung |
+| --- | --- | --- | --- | --- | --- | --- |
+| A (`A-rules-h`) | 200 | 138 | 135 | 17% (spells: median 7 keys, mean 66, longest 1,467) | 11 | 3 |
+| C (`C-rules-h`) | 200 | 123 | 119 | 19% (median 4, mean 62, longest 1,466) | 13 | 6 |
+| A with the fix (`A-fix`) | 200 | 141 | 8 (after a shaft; caught up at once) | 0 | 0 | 0 |
+| C with the fix (`C-fix`) | 200 | 128 | 6 (the same) | 0 | 0 | 1 |
+
+**The fix, as coded** (`src/ladder/conn.py`, `src/ladder/brain/policy.py`, `src/ladder/brain/selfplay.py`,
+`src/ladder/reflex.py`; tests in `test_conn.py`, `test_brain.py`, `test_reflex.py`):
+
+- `conn.cancel_prompt(conn)`: `act("key_esc", through_menu=True)`; if that left a menu or a yes/no open,
+  `act("Y", through_menu=True)`. Used by `BrainTiers.perform` for `ITEM_PROMPTS` and by `selfplay._clear_save`.
+  A test plays a fake game that keeps typed-ahead keys from the question: with the old pair of keys the next
+  move's reply is "Unknown command." and the move's own comes a key late; with `cancel_prompt` each reply is
+  its own key's.
+- `Connection.act`: a reply whose last input mode is 8 (yes/no) with no menu open returns `blocking="yesno"`
+  (before, it read on, waiting for a reply that only comes after an answer). Replies with a menu are as before.
+- `Reflex._answer_prompts`: after a prompt is answered, `catch_up()` (read everything already sent, as
+  before menu keys); a prompt found there is answered too. No key is sent, so a game with nothing left
+  unread plays the same.
+
+**Where the fix's gain comes from** (A + C, paired by dungeon against `{A,C}-rules-h`, both finished): the 24
+dungeons that were stuck on a staircase, +3.75 each (63% of the gain); the 237 others that cancelled a prompt,
++0.19 each (32%: a bot that sees the game as it is); the 130 that never did, one game of replay noise (+6).
+
+**The switch, `--style calm=1` (off by default)** (`policy.raging`, `available(..., calm=True)`, `baseline(...,
+calm=True)`, `BrainTiers.observe`). While `Berserk` shows and nothing is in view: `explore` is not offered (DCSS
+would refuse it) and `rest` is, even at full HP, so the rules rest the rage off and then explore on. A refusal
+with "Calm down first, please." no longer counts toward setting `explore` aside for `BLOCK_TURNS`. The
+exhaustion after a rage doesn't stop autoexplore, so `calm` explores on through it; with `recover=1` too, the
+exhaustion is also rested off before the stairs. It changes most games (it touches every rage with nothing left
+in view), so it is a switch, not a default.
+
+**Tuning on blocks A and C** (whole games; paired by dungeon over games both finished, none stale on any
+side; 95% bootstrap over dungeons, 10,000 resamples). "Before the fix" is `{A,C}-rules-h`, played earlier
+with code whose default play is commit 9aab0f0's; every other row is this working tree's.
+
+| arm | block | finished (hung) | mean depth | XL | turns | died | died on D:1–3 / 4–6 / 7+ | stuck at the limit | arrivals raging or spent |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| rules, before the fix | A | 197 (3) | 5.46 | 5.62 | 2046 | 179 | 35 / 83 / 61 | 13 | 55% |
+| `recover=1`, before the fix | A | 195 (5) | 5.85 | 6.56 | 3227 | 171 | 23 / 79 / 69 | 16 | 8% |
+| the fix | A | 200 (0) | 5.88 | 5.96 | 2173 | 193 | 33 / 89 / 71 | 3 | 54% |
+| the fix + `calm=1` | A | 200 (0) | 5.97 | 7.01 | 3920 | 190 | 28 / 94 / 68 | 3 | 9% |
+| the fix + `recover=1` | A | 200 (0) | 6.21 | 6.80 | 3226 | 190 | 26 / 84 / 80 | 3 | 9% |
+| the fix + `calm=1 recover=1` | A | 200 (0) | 5.92 | 6.93 | 3812 | 189 | 27 / 98 / 64 | 3 | 7% |
+| the fix + `recover=2` | A | 200 (0) | 5.91 | 6.91 | 3718 | 190 | 26 / 97 / 67 | 3 | 10% |
+| rules, before the fix | C | 194 (6) | 5.36 | 5.66 | 2023 | 173 | 44 / 63 / 66 | 16 | 59% |
+| `recover=1`, before the fix | C | 194 (6) | 5.54 | 6.13 | 3023 | 174 | 44 / 57 / 73 | 16 | 9% |
+| the fix | C | 199 (1) | 5.73 | 5.91 | 2072 | 193 | 40 / 79 / 74 | 1 | 60% |
+| the fix + `calm=1` | C | 200 (0) | 5.93 | 6.89 | 3870 | 193 | 45 / 67 / 81 | 1 | 8% |
+| the fix + `recover=1` | C | 199 (1) | 5.86 | 6.38 | 3042 | 191 | 44 / 60 / 87 | 2 | 8% |
+| the fix + `calm=1 recover=1` | C | 200 (0) | 5.93 | 6.84 | 3857 | 193 | 45 / 64 / 84 | 1 | 7% |
+| the fix + `recover=2` | C | 200 (0) | 5.87 | 6.78 | 3686 | 193 | 43 / 71 / 79 | 1 | 10% |
+
+| A + C, paired | dungeons | difference | 95% interval | deeper / same / shallower |
+| --- | --- | --- | --- | --- |
+| **the fix − rules before it** | 391 | **+0.36** | **[+0.16, +0.57]** | 76 / 269 / 46 |
+| ... A alone, C alone | 197, 194 | +0.41, +0.32 | [+0.11, +0.72], [+0.06, +0.59] | |
+| the fix + `calm=1` − the fix | 399 | +0.16 | [−0.17, +0.49] | 148 / 111 / 140 |
+| **the fix + `recover=1` − the fix** | 398 | **+0.24** | [−0.06, +0.54] | 165 / 113 / 120 |
+| the fix + `calm=1 recover=1` − the fix | 399 | +0.13 | [−0.20, +0.47] | 147 / 113 / 139 |
+| the fix + `recover=2` − the fix | 399 | +0.09 | [−0.24, +0.42] | 146 / 113 / 140 |
+| the fix + `calm=1` − rules before it | 391 | +0.53 | [+0.18, +0.89] | 169 / 94 / 128 |
+| **the fix + `recover=1` − rules before it** | 390 | **+0.61** | **[+0.28, +0.95]** | 182 / 90 / 118 |
+| the fix + `calm=1 recover=1` − rules before it | 391 | +0.50 | [+0.15, +0.85] | 168 / 97 / 126 |
+| the fix + `recover=2` − rules before it | 391 | +0.47 | [+0.12, +0.82] | 168 / 92 / 131 |
+
+How levels are left on A (all exits; departures.py): the fix alone, 31% after exploring to the end and 62%
+with explore set aside while raging or spent; `calm=1`, 86% explored to the end and 5% set aside while raging
+or spent; `recover=1`, 53% explored to the end, 38% set aside but rested before the stairs. So `calm` does what
+it is for and, like `recover=2` before it, exploring whole levels does not deepen the game: more XL (+1.0) and
+nearly twice the turns, the same depth. What pays is arriving rested (`recover=1`), not exploring more.
+
+**Death and ending causes, A + C** (the cause table's rules, above; finished games, none stale, deaths with a
+matched morgue: 3 of the fix's and 1 of the chosen arm's morgues were not found and those games are left out).
+
+| cause | rules before the fix | the fix | the fix + `recover=1` |
+| --- | --- | --- | --- |
+| games (mean depth) | 391 (5.41) | 396 (5.81) | 398 (6.04) |
+| took the stairs raging or spent, died within 50 turns | 94 (24%) | 100 (25%) | 27 (7%) |
+| walked into the last fight already spent | 59 (15%) | 61 (15%) | 76 (19%) |
+| raged in the last fight, the rage ran out first | 110 (28%) | 124 (31%) | 151 (38%) |
+| died still raging | 42 (11%) | 51 (13%) | 58 (15%) |
+| killed in melee, never raged | 20 (5%) | 18 (5%) | 37 (9%) |
+| poisoned; from range or a spell; autofight refused | 14; 9; 4 | 13; 10; 6 | 13; 13; 5 |
+| *not a death*: 1,500 choices on one level | 29 (25 on D:1–3; staircases) | 4 (other dead ends) | 5 (other dead ends) |
+| *not a death*: nothing the brain can do | 10 | 9 | 13 |
+
+The fix turns the 25 stuck games into games that go on and mostly die later, of the same causes. `recover=1`
+removes three deaths in four of the first kind (100 → 27) and, as before, most of them come back a level or
+so deeper as a rage that runs out mid-fight (124 → 151): the fights are still what the rules lose.
+
+**Pre-registered (written before any game on block H or I).** Configuration: this working tree's code (the
+cancel fix, the yes/no stop and the catch-up after prompts, all on by default) with `--style recover=1`, no
+model, no random choices. Baseline: the plain rules of thumb (no model, default style) played with commit
+9aab0f0's code, exported with `git archive` to the job's `brain-v5f/old/src` and put first on `PYTHONPATH`, that
+is today's bot without any of the new fixes, so the test measures the whole package against what we have. 200
+games per block from seeds 590000 (block H, 590000–590199) and 620000 (block I, 620000–620199), 9 workers asked
+(7 accounts log in), one run after another. Both blocks are played whatever H shows. Paired by dungeon over
+games both finished and neither resumed a stale save; 95% bootstrap over dungeons (10,000 resamples,
+`brain-v5f/arms.py`). **Pass: the pooled H + I interval's lower end is above zero.** Analysed once.
+
+**Result: passes.** The package (the fix, with `recover=1`) is **+0.43 [+0.12, +0.75]** against today's rules on
+the fresh blocks H and I (396 dungeons), the first pre-registered test since the champion to clear zero.
+
+| fresh blocks | finished (hung) | mean depth | XL | turns | died | died on D:1–3 / 4–6 / 7+ | stuck at the limit (on a staircase) | arrivals raging or spent | keys sent a reply behind |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| H, rules at 9aab0f0 | 198 (2) | 5.60 | 5.83 | 2152 | 182 | 41 / 65 / 76 | 12 (8) | 54% | 15% |
+| H, the fix + `recover=1` | 200 (0) | 5.92 | 6.56 | 3226 | 194 | 40 / 70 / 84 | 2 (0) | 8% | 0 |
+| I, rules at 9aab0f0 | 198 (2) | 5.28 | 5.64 | 2017 | 186 | 47 / 74 / 65 | 10 (5) | 59% | 12% |
+| I, the fix + `recover=1` | 200 (0) | 5.81 | 6.42 | 3221 | 189 | 45 / 65 / 79 | 3 (0) | 7% | 0 |
+
+| the fix + `recover=1` − rules at 9aab0f0 | dungeons | difference | 95% interval | deeper / same / shallower |
+| --- | --- | --- | --- | --- |
+| H | 198 | +0.32 | [−0.13, +0.79] | 82 / 58 / 58 |
+| I | 198 | +0.55 | [+0.11, +0.99] | 83 / 60 / 55 |
+| **H + I (the pre-registered test)** | 396 | **+0.43** | **[+0.12, +0.75]** | 165 / 118 / 113 |
+
+| cause, H + I (as above) | rules at 9aab0f0 | the fix + `recover=1` |
+| --- | --- | --- |
+| games (mean depth) | 395 (5.44) | 400 (5.86) |
+| took the stairs raging or spent, died within 50 turns | 101 (26%) | 27 (7%) |
+| walked into the last fight already spent | 57 (14%) | 82 (21%) |
+| raged in the last fight, the rage ran out first | 116 (29%) | 171 (43%) |
+| died still raging | 46 (12%) | 46 (12%) |
+| killed in melee, never raged | 27 (7%) | 34 (9%) |
+| poisoned; from range or a spell; autofight refused | 11; 3; 6 | 13; 7; 3 |
+| *not a death*: 1,500 choices on one level | 22 (21 on D:1–3) | 5 (other dead ends) |
+| *not a death*: nothing the brain can do | 6 | 12 |
+
+- No stale save on any side of any run in this section. The baseline arm was checked to be the old code: its
+  protocol logs show the typed-ahead Esc + Y and the lag (15% and 12% of keys), and a 14-game replay of block A
+  with it gave the same game as `A-rules-h` in 13.
+- The tuning blocks put the fix at +0.36 and `recover=1` on top at +0.24; the fresh test measures only the
+  sum, so how H + I's +0.43 splits between the two is not known. The 13 dungeons stuck on a staircase under
+  the old rules gain +4.85 each, +0.16 over all 396; the 128 that never cancelled a prompt (where only
+  `recover=1` can act) gain +0.94 each; the 255 others are level (−0.04).
+- What the rules lose is unchanged: a rage that runs out with the fight still on is now 43% of all endings.
+- **Verified**: every count and table here; that each staircase loop on A and C follows a typed-ahead cancel
+  and "Unknown command." (protocol logs); that the fix sends Esc and Y apart and leaves no reply unread (the
+  14 + 29 "Unknown command." left on A, C, H, I all come after a shaft's popup and are read by the new catch-up
+  in the same step); that unaffected games replay the same (129 of 130); the tests.
+- **Inferred**: that the Y is not taken because it arrives before the question is up (the protocol shows the
+  question open after it and the Y run later as a command, but DCSS's input handling was not read); that the
+  32% of the fix's gain outside stuck games comes from seeing the game as it is (it is where the lag was).
+- Blocks H (590000–) and I (620000–) are now spent. Runs: `runs/brain/v5/games/{A,C}-fix`, `-fix-calm`,
+  `-fix-rec1`, `-fix-calm-rec1`, `-fix-rec2`, `{H,I}-fix-rec1`, `{H,I}-rules-old`; smoke games in
+  `runs/brain/v5f/smoke/`. Scripts (`chain.sh`, `arms.py`, `cancels.py`, `lag.py`, `vscan.py`, `verify_main.py`,
+  `split.py`, `unknown.py`, `proto.py`, `diverge.py`, and copies of `gather.py`, `flags.py`, `causes.py`), the
+  old code and the copied morgues are in the job's `brain-v5f/` scratch directory.
+
 ## What carried over from s1-battle, and what couldn't
 
 | s1-battle | here |
@@ -1084,11 +1278,16 @@ In the order I would take them:
    and sends the rules down the stairs spent; resting it out first (`recover=1`) is +0.29 [−0.01, +0.59] on
    the tuning blocks and is the next fresh-block candidate. Then: fix the staircase dead end (5, below), and
    retreat up the stairs when a rage runs out mid-fight.*
+   *(2026-11-15) The staircase fix and `recover=1` together pass on fresh blocks H and I (+0.43 [+0.12,
+   +0.75]). A rage running out mid-fight is now 43% of all endings: retreating then is next.*
 4. **Promote on more than 60 dungeons.** Differences under 0.3 depths can't be seen with 60; the same
    baseline replayed varies by 0.1. 200 evaluation dungeons would take about 15 minutes per model.
 5. **The remaining dead ends**: games that hang (1 in 20 with random choices in round 4, 1 in 40
    without), unreachable stairs,
    "You can't go down here!".
+   *(2026-11-15) "You can't go down here!" is fixed (the reply a key behind, after a typed-ahead cancel), and
+   with it most hangs (9 → 1 on A and C). Left: about 1 game in 100 at the choice limit, pacing between
+   `explore` and `fight` with a monster that steps in and out of view, or nothing possible.*
 6. **Answer the prompts.** Identify and acquirement scrolls are cancelled and wasted today.
    Designed, with using known scrolls and potions, in `docs/brain-consumables.md`.
 7. **Answer the decision cards.** Stairs, uniques and altars are the same kind of choice; the brain could

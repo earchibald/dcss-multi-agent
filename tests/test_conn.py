@@ -119,3 +119,83 @@ def test_act_through_a_menu_stops_at_a_second_menu():
     frames = [[{"msg": "close_menu"}, {"msg": "input_mode", "mode": 8}, {"msg": "menu", "items": []}]]
     result = _conn(FakeWeb(*frames)).act("d", through_menu=True)
     assert result.blocking == "menu"
+
+
+def test_act_stops_at_a_yes_no_question_without_a_menu():
+    # nothing more comes until it is answered: reading on would wait for ever
+    result = _conn(FakeWeb([{"msg": "input_mode", "mode": 0}], [{"msg": "input_mode", "mode": 8}])).act("key_esc")
+    assert result.blocking == "yesno"
+
+
+def _ready(turn, pos=None):
+    player = {"msg": "player", "turn": turn, **({"pos": pos} if pos else {})}
+    return [{"msg": "input_mode", "mode": 0}, {"msg": "input_mode", "mode": 1}, player]
+
+
+class ScrollGame(FakeWeb):
+    """A game cancelling a scroll's item menu, as seen on 0.34 (run A-rules-h, seed 500033).
+
+    Esc closes the menu and asks "really abort?" as a Y/N menu. A key that arrives before that menu
+    is up is not taken by it: the game keeps it and runs it as a command after the question is
+    answered ("Unknown command."), a reply of its own. Moves reply with the new position.
+    """
+
+    def __init__(self, asks=True):
+        super().__init__()
+        self.asks, self.state, self.pending, self.turn, self.x = asks, "item_menu", [], 413, 0
+
+    def write_key(self, key):
+        super().write_key(key)
+        if self.state == "item_menu":           # Esc
+            if self.asks:
+                self.state = "closing"
+                self.frames.append([{"msg": "close_menu"}, {"msg": "input_mode", "mode": 8},
+                                    {"msg": "menu", "items": [{"text": " Y - Yes"}]}])
+            else:
+                self.state = "command"
+                self.frames.append([{"msg": "close_menu"}, {"msg": "input_mode", "mode": 1}])
+        elif self.state == "closing":           # typed ahead: misses the question
+            self.pending.append(key)
+        elif self.state == "question":          # answered
+            self.state = "command"
+            self.turn += 1
+            self.frames.append([{"msg": "close_menu"}] + _ready(self.turn))
+            for _ in self.pending:              # the stray key, run as a command
+                self.frames.append(_ready(self.turn) + [{"msg": "msgs", "messages": [{"text": "Unknown command."}]}])
+            self.pending = []
+        else:                                   # a move
+            self.turn += 1
+            self.x -= 1
+            self.frames.append(_ready(self.turn, {"x": self.x, "y": 0}))
+
+    def read_until(self, msg):
+        super().read_until(msg)
+        if self.state == "closing":             # the question's menu has been read: it is up now
+            self.state = "question"
+
+
+@pytest.mark.parametrize("asks", [True, False])
+def test_cancelling_a_scroll_prompt_leaves_no_reply_behind(asks):
+    from ladder.conn import cancel_prompt
+    game = ScrollGame(asks)
+    conn = _conn(game)
+    cancel_prompt(conn)
+    assert game.sent == (["key_esc", "Y"] if asks else ["key_esc"])
+    for step in range(1, 4):                    # each move's reply is that move's, not the one before
+        result = conn.act("key_dir_w")
+        positions = [m["pos"]["x"] for m in result.messages if m["msg"] == "player" and "pos" in m]
+        assert positions == [-step]
+    assert game.frames == [] and game.pending == []
+
+
+def test_the_old_typed_ahead_cancel_put_every_reply_a_key_behind():
+    # what the bot did before: Esc and Y together. The stray Y's reply is read as the next key's.
+    game = ScrollGame(True)
+    conn = _conn(game)
+    conn.act("key_esc", "Y", through_menu=True)
+    assert game.pending == ["Y"]
+    conn.act("key_esc")                         # Reflex answers the question that was left open
+    first = conn.act("key_dir_w")
+    assert [m["messages"][0]["text"] for m in first.messages if m["msg"] == "msgs"] == ["Unknown command."]
+    assert not any(m["msg"] == "player" and "pos" in m for m in first.messages)     # the move's reply is late
+    assert len(game.frames) == 1
