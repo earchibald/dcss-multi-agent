@@ -7,6 +7,14 @@ runs in numpy in well under a millisecond. It is the same idea as the trained br
 
 ## Where it stands
 
+**2026-11-15, later: going up the stairs when a rage runs out mid-fight, with the stairs close (`--style
+retreat=2`), together with `recover=1`, does not pass a pre-registered fresh-block test: +0.30 [−0.03, +0.64]**
+against HEAD defaults on blocks J and K (section "Fights around a rage", below). On the tuning blocks it was
++0.33 [+0.02, +0.66], and `retreat=2` alone added +0.08 on top of `recover=1`. Deadly rages are the ones begun
+against more HP than the character has; going up helps only within about 8 steps of the stairs. All new switches
+stay off; `recover=1` as a default is still unsettled. About 1 game in 100 was found played on a random dungeon
+(a resumed throwaway save) and is now left out of every pairing.
+
 **2026-11-15: a bug fix and `recover=1` together pass a pre-registered fresh-block test, +0.43 [+0.12, +0.75]**
 against today's rules on blocks H and I (section "The reply a key behind, and the rage that ends exploring",
 below). The staircase loop came from cancelling a scroll's prompt with Esc and Y typed together: the Y ran
@@ -924,6 +932,238 @@ the fresh blocks H and I (396 dungeons), the first pre-registered test since the
   `split.py`, `unknown.py`, `proto.py`, `diverge.py`, and copies of `gather.py`, `flags.py`, `causes.py`), the
   old code and the copied morgues are in the job's `brain-v5f/` scratch directory.
 
+#### Fights around a rage: going up when a rage runs out (2026-11-15)
+
+**Summary.**
+
+- **The pre-registered test does not pass: `recover=1 retreat=2` is +0.30 [−0.03, +0.64]** against HEAD defaults
+  on the fresh blocks J and K (393 dungeons). It is ahead on both blocks (+0.39, +0.21) and on the tuning blocks
+  (+0.33 [+0.02, +0.66]), but the fresh interval reaches below zero. All new switches stay off.
+- **What marks a deadly rage is the size of the fight.** When the hostiles in view have more HP left between them
+  than the character's maximum, a rage runs out or ends in death 40% of the time (10% otherwise), and 22% are
+  followed by death within 50 turns (4%). After a rage runs out with two or more left, 42% die.
+- **Going up the stairs when a rage runs out mid-fight helps only when they are close.** With two or more hostiles
+  left and the stairs within 8 steps, deaths within 50 turns fall from 49% to 31% (A + C); on longer walks, slowed
+  and followed, they rise (35% → 42%). Hence `retreat=2` (stairs within 8 steps): +0.08 [−0.04, +0.21] on top of
+  `recover=1` on A + C, touching about one dungeon in nine. `retreat=1` (any distance) is −0.10; walking to the
+  stairs before a big fight (`stairs=1`) adds nothing.
+- **`recover=1` as a default is still not settled** by the pre-registered standard: every comparison with it is
+  ahead by about +0.25 to +0.33, none has passed on fresh blocks on its own.
+- **A measurement bug: about 1 game in 100 (6 in one run) was played on a random dungeon**, the first game an
+  account plays in a run, resuming a turn-0 throwaway save. Such games are now left out of every pairing (morgue
+  check). The H + I result is unchanged by it.
+
+**What the saved games show** (step logs of `{A,C}-fix-rec1`, the fix with `recover=1`: 395 games that did not
+resume a save; "died" means within 50 turns; scripts `events.py`, `summ.py`, `summ2.py`, `distinguish.py`).
+
+- **The rules rage 5,331 times; 7% of rages are followed by death.** 86% of rages end with nothing left in view,
+  13% run out with the fight still on, 1% end in death. 346 of the 378 deaths came within 50 turns of starting a
+  rage.
+- **What marks a deadly rage is the size of the fight, not where it is fought.** The best single sign is the
+  estimated HP the hostiles in view have left between them (`policy.foe_hp`: each one's average HP times what its
+  damage level leaves) against the character's maximum HP. Rages begun against more than that (14% of rages) run
+  out or end in death 40% of the time, against 10%, and are followed by death 22% of the time, against 4%.
+
+| at the rage's start | share of deadly rages | of the others | died when true (rages) | when false |
+| --- | --- | --- | --- | --- |
+| hostiles' HP left ≥ the character's max HP | 45% | 12% | 22% (735) | 4% (4,596) |
+| 4+ hostiles in view | 44% | 21% | 13% (1,184) | 5% (4,147) |
+| a threat-3 (red) hostile | 26% | 9% | 16% (548) | 5% (4,783) |
+| XL below the depth | 19% | 6% | 18% (377) | 6% (4,954) |
+| a unique | 22% | 10% | 13% (581) | 6% (4,750) |
+| HP under 80% | 15% | 8% | 12% (458) | 6% (4,873) |
+| no stairs up known | 12% | 5% | 14% (315) | 6% (5,016) |
+| in a corridor (walls on two opposite sides) | 26% | 34% | 5% (1,779) | 7% (3,552) |
+| 2+ adjacent | 15% | 15% | 6% (820) | 7% (4,511) |
+| a known teleport scroll held | 38% | 36% | 7% (1,923) | 6% (3,408) |
+
+- **When a rage runs out with hostiles in view (701 times), 29% die**: 19% with one left, 32% with two or three,
+  62% with four or more; 54% under half HP, 19% at 80% or more. Stairs up were known in 654 of the 701. The rules
+  went on fighting at once in 82% (first action `fight` 573, `quaff_heal` 44, `descend` 36, `flee_up` 21). In a
+  corridor or the open made little difference (27% and 30%).
+- **Fights met while spent** (nothing in view, then hostiles, with `-Berserk`): 936, 13% died; almost all (882)
+  with one hostile. A rage spent on an easy fight (every hostile threat 0–1, HP over half: 811 rages, 15%) came
+  before 160 of them, and 9 of those died, so saving the rage for real threats has little to gain.
+- **qw, for reference** (its decision logs, `runs/qw/held6-a-base`, 200 games, same character, other dungeons;
+  `qw_rage.py`): 3,434 rages, 5% followed by death. Its rages run out with enemies in view more often than ours
+  (31% of rages against 13%) but it dies after only 8% of those (one left 4%, two or three 10%, four or more 22%).
+  It fled up the stairs within 15 actions in 28% of them (3% died) and took a tactical step in 43%.
+- **qw's rules, as read in its source** (`qw.lua`; a reference, not data): it goes berserk when HP is under half
+  with an enemy within two squares it can reach, when a "scary" enemy is best fought berserk, or when the total
+  threat passes a level that is lower at low XL. It flees to stairs up (`want_to_flee`) when it has a reason to rest
+  (HP under 90%, exhausted, slowed, on berserk cooldown) but only if no melee enemy within two squares can follow
+  and no enemy would gain on it on the way; it keeps walking there for 10 turns, then rests to full. In melee it
+  steps to a square where two fewer enemies can reach it ("outnumbered"), not while berserk.
+
+**The candidate rules** (opt-in `Style` switches, off by default; `src/ladder/brain/policy.py`: `Style.retreat`,
+`Style.stairs`, `foe_hp`, `big_fight`, `BrainTiers.fight_moves`, and the `retreat` / `rest_out` / `to_stairs`
+arguments of `baseline`; tests in `tests/test_brain.py`, the block "the opt-in fight rules"). Not tried, for want of
+evidence: fighting from a corridor (5% against 7% of rages followed by death, 27% against 30% after a rage ran out)
+and saving the rage for real threats (above). Resting before exploring on while spent is `recover=2`, already level.
+
+1. **`retreat=1`: when a rage runs out with two or more hostiles still in view and stairs up known, go up them,
+   then rest the exhaustion off.** "Runs out" is `Berserk` at one choice and not at the next. The level is marked
+   to be left: while the character is still `recovering`, every choice there with something in view heads for the
+   stairs (`flee_up`; a healing potion first when at half HP or under), so one step back to fight doesn't undo it.
+   With nothing in view, on any level, it rests until `Berserk`, `-Berserk` and `Slow` are gone, as `recover=2`
+   would. Upstairs it fights whatever followed (only adjacent monsters do).
+2. **`retreat=2`: the same, only when the stairs up are within 8 steps** (`STAIRS_NEAR`). Added after block A's
+   `retreat=1` games showed the walk paying only when short (table below).
+3. **`stairs=1`: before a fight bigger than one rage, walk to stairs up within 8 steps first.** "Bigger" is
+   `big_fight`: the hostiles in view have more HP left between them than the character's maximum. Only while no
+   rage or exhaustion is on and nothing is adjacent, and once per fight (until on the stairs or something is
+   adjacent; it may walk again once nothing is in view), so a monster that doesn't come can't hold it there. It
+   acts in about a game in four and is meant to put `retreat` a step from the stairs.
+
+**A measurement bug found on the way: some games are played on a random dungeon.** The first game an account plays
+in a run follows `selfplay._clear_save`, which, with nothing saved, starts a throwaway game and quits it. Sometimes
+the quit doesn't take, the next seeded start resumes the throwaway save at turn 0 ("Welcome back, ladderbrain1"
+in the protocol log; a new game says "Welcome, …" and "Game seed: 500010 (custom seed)"), and the `turn > 1`
+stale check lets it through. Its morgue carries a random seed. It hit 1–3 games in most runs and 6 of 7 accounts
+in `A-fix-rec1-ret2`. From here on a game also counts as stale unless a morgue on its own custom seed with its turn
+count exists (`brain-v5g/seeds.py`). That check and the "Welcome back" text agree on every run of this section
+(the morgue check also drops hung games, which leave none). Re-scored this way, H + I's test is unchanged: +0.43
+[+0.11, +0.75] on 395 dungeons. Not fixed in the code. The likely cause (inferred, not traced) is that `act()` now
+stops at a bare yes/no question and `Connection.quit_game` answers only the typed "quit" prompt, so a brand-new
+character's yes/no "really quit?" goes unanswered. The fix would be to answer `blocking == "yesno"` in
+`quit_game`, or to raise `StaleSave` on "Welcome back".
+
+**Tuning on blocks A and C** (whole games; paired by dungeon over games both finished and neither stale in the new
+sense; 95% bootstrap over dungeons, 10,000 resamples). Baselines: HEAD defaults (`{A,C}-fix`) and the fix with
+`recover=1` (`{A,C}-fix-rec1`), both played earlier with code whose default play is this tree's: a 14-game replay
+of block A with the switches off gave the same game in all 11 dungeons where both sides were on their seed.
+Run-level means are over all finished games.
+
+| arm | block | finished (hung) | mean depth | XL | turns | died | died on D:1–3 / 4–6 / 7+ | stuck at the limit | not on their seed or resumed |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| HEAD defaults (`A-fix`) | A | 200 (0) | 5.88 | 5.96 | 2173 | 193 | 33 / 89 / 71 | 3 | 2 |
+| `recover=1` | A | 200 (0) | 6.21 | 6.80 | 3226 | 190 | 26 / 84 / 80 | 3 | 0 |
+| `recover=1 retreat=1` | A | 200 (0) | 6.04 | 6.75 | 3269 | 190 | 30 / 81 / 79 | 3 | 1 |
+| `recover=1 retreat=2` | A | 200 (0) | 6.34 | 6.91 | 3370 | 190 | 25 / 80 / 85 | 3 | 6 |
+| `recover=1 retreat=2 stairs=1` | A | 200 (0) | 6.25 | 6.87 | 3300 | 189 | 26 / 81 / 82 | 3 | 2 |
+| HEAD defaults (`C-fix`) | C | 199 (1) | 5.73 | 5.91 | 2072 | 193 | 40 / 79 / 74 | 1 | 1 |
+| `recover=1` | C | 199 (1) | 5.86 | 6.38 | 3042 | 191 | 44 / 60 / 87 | 2 | 1 |
+| `recover=1 retreat=1` | C | 198 (1; 1 error) | 5.82 | 6.43 | 3071 | 191 | 44 / 61 / 86 | 2 | 0 |
+| `recover=1 retreat=2` | C | 199 (1) | 5.95 | 6.44 | 3109 | 191 | 44 / 60 / 87 | 2 | 1 |
+| `recover=1 retreat=2 stairs=1` | C | 199 (1) | 5.99 | 6.49 | 3181 | 190 | 44 / 59 / 87 | 2 | 1 |
+
+| A + C, paired | dungeons | difference | 95% interval | deeper / same / shallower |
+| --- | --- | --- | --- | --- |
+| `recover=1` − HEAD defaults | 394 | +0.26 | [−0.05, +0.56] | 165 / 112 / 117 |
+| `recover=1 retreat=1` − HEAD defaults | 393 | +0.13 | [−0.18, +0.46] | 161 / 98 / 134 |
+| **`recover=1 retreat=2` − HEAD defaults** | 389 | **+0.33** | **[+0.02, +0.66]** | 164 / 103 / 122 |
+| ... A alone, C alone | 193, 196 | +0.43, +0.24 | [−0.03, +0.87], [−0.23, +0.70] | |
+| `recover=1 retreat=2 stairs=1` − HEAD defaults | 392 | +0.32 | [−0.01, +0.65] | 166 / 106 / 120 |
+| `recover=1 retreat=1` − `recover=1` | 396 | −0.10 | [−0.28, +0.07] | 48 / 288 / 60 |
+| ... A alone, C alone | 199, 197 | −0.16, −0.05 | [−0.41, +0.09], [−0.29, +0.20] | |
+| **`recover=1 retreat=2` − `recover=1`** | 391 | **+0.08** | [−0.04, +0.21] | 27 / 347 / 17 |
+| ... A alone, C alone | 194, 197 | +0.09, +0.08 | [−0.08, +0.25], [−0.10, +0.26] | |
+| `recover=1 retreat=2 stairs=1` − `recover=1 retreat=2` | 392 | −0.01 | [−0.14, +0.12] | 32 / 329 / 31 |
+
+- **Going up from a rage that ran out pays only when the stairs are close.** The rules otherwise go on fighting;
+  `retreat` walks there slowed, with whatever is adjacent hitting it on the way. Rage endings with two or more
+  hostiles left, A + C, died within 50 turns (and went up within 50 turns):
+
+| stairs up when the rage ran out | `recover=1` | `recover=1 retreat=1` | `recover=1 retreat=2` |
+| --- | --- | --- | --- |
+| within 8 steps | 95: 49% died (5% went up) | 106: 33% (79%) | 109: 31% (80%) |
+| further | 195: 35% (2%) | 201: 42% (42%) | 200: 36% (2%) |
+| none known | 23: 65% | 28: 57% | 24: 62% |
+
+  `retreat=1` saves deaths near the stairs and loses more on long walks; `retreat=2` keeps only the first part.
+  The 8-step limit was chosen from block A's `retreat=1` games. C alone shows the same (within 8 steps: 45% died
+  with `recover=1`, 49 endings; 35% with `retreat=1`, 60; 36% with `retreat=2`, 53), but the limit is tuned, not
+  confirmed.
+- **The rule touches few games**: 347 of 391 dungeons play the same with and without it. The gain on the others
+  (27 deeper, 17 shallower) is real in direction but small: +0.08 overall.
+- **Walking to the stairs before a big fight (`stairs=1`) adds nothing** (−0.01; it walked in 100 of the 400
+  games, 304 steps in all) and stays off.
+- Deaths move rather than vanish, as with `recover` before. A + C, cause table's rules (deaths without a matching
+  morgue, and stale games, left out):
+
+| cause | HEAD defaults | `recover=1` | `recover=1 retreat=1` | `recover=1 retreat=2` |
+| --- | --- | --- | --- | --- |
+| games (mean depth) | 396 (5.81) | 398 (6.04) | 397 (5.93) | 392 (6.14) |
+| took the stairs raging or spent, died within 50 turns | 100 (25%) | 27 (7%) | 42 (11%) | 36 (9%) |
+| walked into the last fight already spent | 61 (15%) | 76 (19%) | 76 (19%) | 75 (19%) |
+| raged in the last fight, the rage ran out first | 124 (31%) | 151 (38%) | 140 (35%) | 131 (33%) |
+| died still raging | 51 (13%) | 58 (15%) | 54 (14%) | 61 (16%) |
+| killed in melee, never raged | 18 (5%) | 37 (9%) | 38 (10%) | 36 (9%) |
+| poisoned; from range or a spell; autofight refused | 13; 10; 6 | 13; 13; 5 | 13; 11; 6 | 14; 14; 7 |
+| *not a death*: 1,500 choices on one level; nothing the brain can do | 4; 9 | 5; 13 | 5; 12 | 5; 13 |
+
+  Going up after a rage counts as "took the stairs spent" when the character dies within 50 turns of arriving
+  upstairs, which is why that row rises with `retreat` (27 → 36) while "the rage ran out first" falls (151 → 131).
+- **Chosen for the fresh blocks: `recover=1 retreat=2`**, the arm furthest ahead of HEAD defaults among those not
+  behind `recover=1` (`stairs=1` on top was level, so the simpler arm).
+
+**Pre-registered (written before any game on block J or K).** Configuration: this working tree's code with
+`--style recover=1 retreat=2`, no model, no random choices. Baseline: HEAD defaults, the same code with no
+switches (the reply fix on, as it is by default; `recover`, `retreat`, `stairs`, `calm`, `teleport` all 0). The
+test measures `recover=1` and `retreat=2` together against the defaults, so a pass confirms the pair, not
+`retreat=2` alone. 200 games per block from seeds 630000 (block J, 630000–630199) and 640000 (block K,
+640000–640199), 9 workers asked (7 accounts log in), one run after another in the order J configuration, J
+baseline, K configuration, K baseline. Both blocks are played whatever J shows. Analysis: paired by dungeon over
+games both finished (not hung or crashed) and neither stale, where a game is stale if it resumed a save (first step
+after turn 1) or was not played on its own seed (no morgue on that custom seed with the game's turn count: the
+"Welcome back" games, below); 95% bootstrap over dungeons, 10,000 resamples (`brain-v5g/arms.py`). **Pass: the
+pooled J + K interval's lower end is above zero.** Analysed once. Reported alongside, outside the pass rule: each
+block, mean depth, XL, deaths by band and the death-cause table.
+
+**Result: does not pass.** `recover=1 retreat=2` is **+0.30 [−0.03, +0.64]** against HEAD defaults on the fresh
+blocks J and K (393 dungeons). The lower end is below zero.
+
+| fresh blocks | finished (hung) | mean depth | XL | turns | died | died on D:1–3 / 4–6 / 7+ | stuck at the limit | not on their seed | arrivals raging or spent |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| J, HEAD defaults | 200 (0) | 5.42 | 5.55 | 1905 | 192 | 46 / 79 / 67 | 1 | 2 | 56% |
+| J, `recover=1 retreat=2` | 200 (0) | 5.85 | 6.49 | 3187 | 191 | 37 / 77 / 77 | 0 | 0 | 5% |
+| K, HEAD defaults | 199 (1) | 5.85 | 6.08 | 2122 | 194 | 44 / 74 / 76 | 0 | 2 | 47% |
+| K, `recover=1 retreat=2` | 198 (2) | 6.05 | 6.62 | 3191 | 191 | 38 / 76 / 77 | 1 | 1 | 7% |
+
+| `recover=1 retreat=2` − HEAD defaults | dungeons | difference | 95% interval | deeper / same / shallower |
+| --- | --- | --- | --- | --- |
+| J | 198 | +0.39 | [−0.08, +0.87] | 77 / 62 / 59 |
+| K | 195 | +0.21 | [−0.27, +0.68] | 68 / 60 / 67 |
+| **J + K (the pre-registered test)** | 393 | **+0.30** | **[−0.03, +0.64]** | 145 / 122 / 126 |
+
+| cause, J + K (the cause table's rules) | HEAD defaults | `recover=1 retreat=2` |
+| --- | --- | --- |
+| games (mean depth) | 395 (5.64) | 397 (5.95) |
+| took the stairs raging or spent, died within 50 turns | 97 (25%) | 40 (10%) |
+| walked into the last fight already spent | 63 (16%) | 85 (21%) |
+| raged in the last fight, the rage ran out first | 121 (31%) | 149 (38%) |
+| died still raging | 53 (13%) | 59 (15%) |
+| killed in melee, never raged | 19 (5%) | 21 (5%) |
+| poisoned; from range or a spell; autofight refused | 21; 4; 5 | 11; 8; 8 |
+| *not a death*: 1,500 choices on one level; nothing the brain can do | 1; 11 | 1; 15 |
+
+- Outside the test, as described: on J + K, rage endings with two or more left and stairs up within 8 steps died
+  within 50 turns 37% of the time with the chosen arm (120 endings, 76% went up) against 55% under the defaults
+  (82); further from the stairs, 38% against 43%. The arms differ by `recover=1` too, so this is not `retreat`'s
+  alone.
+- **What it says about `recover=1` as a default.** By the pre-registered standard, not settled. Every comparison of
+  arms with `recover=1` against the same code without it has come out ahead (+0.26 on A + C, +0.24 before the seed
+  check; +0.33 on A + C and +0.30 here with `retreat=2`), none has cleared zero on fresh blocks on its own, and the
+  one fresh test that cleared zero
+  (H + I) measured it together with the reply fix. At this spread (half-width about 0.33 on 393 dungeons) a true
+  gain of +0.3 would need about 1,000 paired dungeons to pass four times in five (inferred from the interval's
+  width, not simulated).
+- No stale save, and 5 games not on their seed in all, on J and K. `retreat=1`, `retreat=2` and `stairs=1` stay
+  off by default.
+- **Verified**: every count and table in this section; that the switches off replay HEAD defaults (11 of 11 games
+  on their seed in both runs; unit tests); that each wrong-dungeon game is one whose protocol says "Welcome back"
+  and whose morgue has a random seed (all runs here); that `retreat` goes up, fights what followed and rests (smoke
+  games, step logs); the tests (`uv run pytest`, `uv run ruff check`).
+- **Inferred**: that qw's lower death rate after a rage comes from where and when it flees (it plays other dungeons
+  and has more tools: throwing, wands, tactical steps); that the throwaway save survives because `quit_game` doesn't
+  answer a yes/no; that the 8-step limit generalises (chosen on block A); the dungeon count above.
+- Blocks J (630000–630199) and K (640000–640199) are now spent. Runs: `runs/brain/v5/games/{A,C}-fix-rec1-ret`,
+  `-fix-rec1-ret2`, `-fix-rec1-ret2-st`, `{J,K}-rec1-ret2`, `{J,K}-defaults`; smoke games in `runs/brain/v5g/smoke/`.
+  Scripts in the job's `brain-v5g/` scratch directory: `events.py`, `summ.py`, `summ2.py`, `distinguish.py`,
+  `qw_rage.py` (step 1); `arms.py`, `seeds.py`, `welcome.py`, `mindex.py`, `refresh.sh` (pairing and the seed
+  check); `triggers.py`, `retreat_split.py`, `retreat_pool.py`, `stairs_check.py`, `show.py` (what the rules did);
+  copies of `gather.py`, `flags.py`, `causes.py`; `chain.sh`, `after.sh` and the job files; the copied morgues.
+
 ## What carried over from s1-battle, and what couldn't
 
 | s1-battle | here |
@@ -1170,7 +1410,7 @@ have sight fields and 24,346 (3.0%) are marked missing. Evaluation dungeons and 
 | `src/ladder/brain/reobserve.py` | rebuilds `sight` fields for old step logs from their protocol logs |
 | `src/ladder/brain/net.py` | model file format, numpy forward pass, parity check, `Ensemble` and `load_model` |
 | `src/ladder/brain/gear.py` | ranks weapons and armour, and says which piece in the pack is better than the one in use |
-| `src/ladder/brain/policy.py` | `available`, `baseline`, `baseline_wiki`, `teleport_rule`, `recovering`, `Style`, and `BrainTiers`, which sits in Reflex where `StubTiers` did |
+| `src/ladder/brain/policy.py` | `available`, `baseline`, `baseline_wiki`, `teleport_rule`, `recovering`, `foe_hp`, `big_fight`, `Style`, and `BrainTiers` (with `fight_moves` for the opt-in fight rules), which sits in Reflex where `StubTiers` did |
 | `docs/wiki-strategy.md` | the DCSS wiki's strategy guides, sorted by what the brain would need to use each piece of advice |
 | `src/ladder/brain/steplog.py` | `steps.jsonl` writer shared by self-play, `spike` and the cockpit |
 | `src/ladder/brain/selfplay.py` | parallel games, one process each, with a watchdog for hung reads |
@@ -1280,6 +1520,12 @@ In the order I would take them:
    retreat up the stairs when a rage runs out mid-fight.*
    *(2026-11-15) The staircase fix and `recover=1` together pass on fresh blocks H and I (+0.43 [+0.12,
    +0.75]). A rage running out mid-fight is now 43% of all endings: retreating then is next.*
+   *(2026-11-15, later) Retreating up close stairs (`retreat=2`) with `recover=1` is +0.30 [−0.03, +0.64] on fresh
+   blocks J and K: not a pass. Going up pays only within about 8 steps, and few rage endings are that close. Next,
+   cheapest first: (a) fix the throwaway save that the first game of a run resumes (`quit_game` and a yes/no; or
+   `StaleSave` on "Welcome back"); (b) a larger fresh test for `recover=1` alone against HEAD defaults (about 1,000
+   dungeons for a +0.3 gain); (c) more to do in the fight itself, since the deadly rages are the ones begun against
+   more HP than the character has, and neither rage timing nor stairs fixes those.*
 4. **Promote on more than 60 dungeons.** Differences under 0.3 depths can't be seen with 60; the same
    baseline replayed varies by 0.1. 200 evaluation dungeons would take about 15 minutes per model.
 5. **The remaining dead ends**: games that hang (1 in 20 with random choices in round 4, 1 in 40

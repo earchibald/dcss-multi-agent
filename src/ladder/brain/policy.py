@@ -20,8 +20,8 @@ from ..interrupts import Before, Interrupt
 from ..reflex import Escalation, StubTiers
 from ..state import MF_STAIR_UP, GameState, strip_tags
 
-from . import gear
-from .features import ACTIONS, COMPONENTS, encode, inventory, observe, path
+from . import gear, monsters
+from .features import ACTIONS, COMPONENTS, MDAM_LEFT, encode, inventory, observe, path
 from .net import Ensemble, TrainedNet
 
 # What a scroll can stop on (conn.classify_error's names). Anything else that comes up after using an
@@ -62,6 +62,12 @@ class Style:
     calm: float = 0.0         # 1 = with nothing in view, wait out a rage instead of trying to explore (DCSS
                               # refuses: "Calm down first, please."), and don't count that refusal as the
                               # level being done (`raging`). Off by default.
+    retreat: float = 0.0      # 1 = when a rage runs out with RETREAT_LEFT or more hostiles in view and stairs up
+                              # known, go up them (kept to on that level while `recovering`), then rest the
+                              # exhaustion out before anything else; 2 = the same, only with the stairs up within
+                              # STAIRS_NEAR steps. Off by default.
+    stairs: float = 0.0       # 1 = before a fight bigger than one rage (`big_fight`), nothing adjacent and no rage
+                              # on, walk to stairs up within STAIRS_NEAR steps first, once per fight. Off by default.
 
     def weights(self) -> np.ndarray:
         return np.asarray([getattr(self, c) for c in COMPONENTS], dtype=np.float32)
@@ -146,6 +152,31 @@ def raging(obs: dict) -> bool:
     return "Berserk" in (obs.get("status") or [])
 
 
+RETREAT_LEFT = 2          # hostiles still in view when a rage runs out that `Style.retreat` goes upstairs from
+STAIRS_NEAR = 8           # steps to the stairs up that `Style.stairs` walks before a big fight, and `Style.retreat`
+                          # 2 walks after a rage
+
+
+def foe_hp(obs: dict) -> float:
+    """The HP the hostiles in view have left between them, estimated: each one's average HP (the game's
+    `avghp`, else the monster table's) times the share its damage level leaves (`features.MDAM_LEFT`)."""
+    total = 0.0
+    for m in obs["mons"]:
+        avg = m.get("avghp")
+        if not avg:
+            k = monsters.lookup(m["name"])
+            avg = k["hp"] if k else 0
+        total += avg * MDAM_LEFT.get(m.get("mdam", 0), 1.0)
+    return total
+
+
+def big_fight(obs: dict) -> bool:
+    """More than one rage is likely to finish: the hostiles in view have more HP left between them (`foe_hp`)
+    than the character has at most. In the saved games (`{A,C}-fix-rec1`), 40% of the rages begun in one ran
+    out with the fight still on or ended in death, against 10% of the others."""
+    return obs["n_hostiles"] > 0 and foe_hp(obs) >= max(obs["hp_max"], 1)
+
+
 def available(obs: dict, level_explored: bool, blocked: set[str], rest_stalled: bool, recover: bool = False,
               calm: bool = False) -> list[str]:
     """The actions that can be carried out right now, in ACTIONS order.
@@ -211,7 +242,8 @@ def teleport_rule(obs: dict, level: int) -> tuple[bool, bool]:
 
 
 def baseline(obs: dict, avail: list[str], level_explored: bool, wiki: bool = False, teleport: int = 0,
-             recover: int = 0, calm: bool = False) -> str:
+             recover: int = 0, calm: bool = False, retreat: bool = False, rest_out: bool = False,
+             to_stairs: bool = False) -> str:
     """Rules of thumb: the stub's behaviour, plus drinking a healing potion instead of giving up.
 
     `wiki` plays the variant that follows the DCSS wiki's strategy guides instead (`Style.wiki`).
@@ -221,6 +253,10 @@ def baseline(obs: dict, avail: list[str], level_explored: bool, wiki: bool = Fal
     `available(..., recover=True)`, or `rest` is seldom there at full HP.
     `calm` waits out a rage (`raging`) with nothing in view before exploring on (`Style.calm`); `avail` must
     then come from `available(..., calm=True)`.
+    The next three are `BrainTiers`' to set, since they depend on what came before (`Style.retreat`, `Style.stairs`):
+    `retreat` heads up the stairs with hostiles in view (after a healing potion at half HP); `rest_out` rests
+    with nothing in view before going on, as `recover` 2 does (`avail` then from `available(..., recover=True)`);
+    `to_stairs` walks toward the stairs up before a fight.
     """
     if wiki:
         return baseline_wiki(obs, avail, level_explored)
@@ -230,12 +266,18 @@ def baseline(obs: dict, avail: list[str], level_explored: bool, wiki: bool = Fal
         near = [m for m in obs["mons"] if max(abs(m["dx"]), abs(m["dy"])) <= 2]
         rage = frac <= 0.5 or any(m["threat"] >= 2 for m in near) or len(near) >= 3
         spent, crowded = teleport_rule(obs, teleport)
-        order = cure + (["read_teleport"] if spent else []) + (["berserk"] if rage and near else []) + \
+        if retreat:
+            away = (["quaff_heal"] if frac <= 0.5 else []) + ["flee_up"]
+        else:
+            away = ["flee_up"] if to_stairs else []
+        order = cure + away + (["read_teleport"] if spent else []) + (["berserk"] if rage and near else []) + \
                 (["quaff_heal"] if frac <= 0.5 else []) + (["read_teleport"] if crowded else []) + \
                 ["fight", "descend", "flee_up", "wait"]
     else:
         onward = ["descend"] if level_explored else ["explore"]
-        if recover and recovering(obs) and (level_explored or recover >= 2):
+        if rest_out and recovering(obs):
+            onward = ["rest"] + onward              # gone up from a fight: rest it off before going on
+        elif recover and recovering(obs) and (level_explored or recover >= 2):
             onward = ["rest"] + onward              # arrive, or explore on, able to rage and at full speed
         elif calm and raging(obs) and not level_explored:
             onward = ["rest"] + onward              # explore is refused until the rage is over
@@ -308,6 +350,9 @@ class BrainTiers(StubTiers):
         self.last_action: str | None = None
         self.fenced: set = set()               # (level, shop square) already excluded from explore
         self.worn: dict[str, str] | None = None   # armour kind -> inventory slot (gear.py)
+        self.was_raging = False                # `raging` at the choice before (Style.retreat)
+        self.retreat_from: int | None = None   # level_seq of the level being left after a rage ran out
+        self.stairs_done = False               # this fight has had its walk to the stairs (Style.stairs)
 
     # --- choosing ------------------------------------------------------
 
@@ -333,8 +378,9 @@ class BrainTiers(StubTiers):
             "hp_delta": 0.0 if self.prev_frac is None else frac - self.prev_frac, "last_action": self.last_action})
         self.prev_frac = frac
         blocked = {a for a, until in self.blocked.items() if state.turn < until}
+        retreat, rest_out, to_stairs = self.fight_moves(state.level_seq, obs)
         avail = available(obs, self.level_explored, blocked, self.rest_stalled_at == (state.turn, state.hp),
-                          recover=bool(self.style.recover), calm=bool(self.style.calm))
+                          recover=bool(self.style.recover) or rest_out, calm=bool(self.style.calm))
         if not avail and "wait" not in blocked and self.idle < IDLE_LIMIT:
             # Everything else went nowhere: let a turn pass. Now and then look again, since "partly
             # explored, can't reach some places" stops being true once a cloud of gas has cleared.
@@ -348,7 +394,8 @@ class BrainTiers(StubTiers):
         if not avail:
             raise Escalation("nothing the brain can do here" + (f" (tried: {', '.join(sorted(blocked))})" if blocked else ""))
         base = baseline(obs, avail, self.level_explored, wiki=bool(self.style.wiki), teleport=int(self.style.teleport),
-                        recover=int(self.style.recover), calm=bool(self.style.calm))
+                        recover=int(self.style.recover), calm=bool(self.style.calm), retreat=retreat,
+                        rest_out=rest_out, to_stairs=to_stairs)
         choice, source, extra = base, "baseline", {}
         if self.fork_turn is not None and self.horizon and state.turn > self.fork_turn + self.horizon:
             raise Escalation(FORK_DONE)
@@ -381,6 +428,36 @@ class BrainTiers(StubTiers):
         if choice == "descend":
             return "descend" if obs["on_down"] else "travel"
         return choice
+
+    def fight_moves(self, level_seq: int, obs: dict) -> tuple[bool, bool, bool]:
+        """What the opt-in fight rules want now, for `baseline`: (retreat, rest_out, to_stairs).
+
+        `Style.retreat`: a rage that has just run out (raging at the last choice, not now) with RETREAT_LEFT or
+        more hostiles in view and stairs up known (at level 2, within STAIRS_NEAR steps: a slowed walk further
+        than that lost more than it saved on block A) marks this level as one to leave. While still `recovering`,
+        head up the stairs there whenever something is in view (`retreat`), and with nothing in view, on any
+        level, rest before going on (`rest_out`).
+        `Style.stairs`: with a `big_fight` in view, no rage or exhaustion on and nothing adjacent, walk toward
+        stairs up within STAIRS_NEAR steps (`to_stairs`), until on them or something is adjacent; once per fight.
+        """
+        was, self.was_raging = self.was_raging, raging(obs)
+        retreat = to_stairs = False
+        if self.style.retreat:
+            reach = STAIRS_NEAR if self.style.retreat >= 2 else 10 ** 9
+            if was and not self.was_raging and obs["n_hostiles"] >= RETREAT_LEFT and \
+                    (obs["on_up"] or 0 <= obs["dist_up"] <= reach):
+                self.retreat_from = level_seq
+            if self.retreat_from is not None and not recovering(obs):
+                self.retreat_from = None
+            retreat = self.retreat_from == level_seq and obs["n_hostiles"] > 0
+        if self.style.stairs:
+            adjacent = any(max(abs(m["dx"]), abs(m["dy"])) <= 1 for m in obs["mons"])
+            if not obs["n_hostiles"]:
+                self.stairs_done = False
+            elif obs["on_up"] or adjacent or recovering(obs):
+                self.stairs_done = True
+            to_stairs = not self.stairs_done and big_fight(obs) and 0 < obs["dist_up"] <= STAIRS_NEAR
+        return retreat, self.retreat_from is not None, to_stairs
 
     def prefer(self, obs: dict, avail: list[str], base: str) -> tuple[str, dict]:
         """The network's pick among `avail`, kept to the baseline unless it is `margin` better."""

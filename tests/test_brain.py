@@ -1777,6 +1777,137 @@ def test_calm_switch_is_a_style_and_old_runs_still_match():
     assert {**Style().to_dict(), **old} != Style(calm=1).to_dict()
 
 
+# --- the opt-in fight rules: go up when a rage runs out mid-fight, walk to the stairs first (Style.retreat, .stairs)
+
+UP_KNOWN = dict(god="Trog", dist_up=6)
+PAIR = dict(n_hostiles=2, mons=[mon(dx=1), mon(dx=2)])
+BIG = [{**mon(dx=4), "avghp": 15, "mdam": 0}, {**mon(dx=5), "avghp": 15, "mdam": 2}]    # 15 + 10.5 HP left
+
+
+def test_retreat_and_stairs_are_off_by_default_and_play_as_before():
+    assert Style().retreat == 0 and Style().stairs == 0
+    o = obs(status=["-Berserk", "Slow"], **PAIR, **UP_KNOWN)
+    assert rules(o) == "fight"
+    tiers = BrainTiers(rng=random.Random(0))
+    tiers.fight_moves(1, obs(status=["Berserk"], **PAIR, **UP_KNOWN))
+    assert tiers.fight_moves(1, o) == (False, False, False)
+    assert tiers.fight_moves(1, obs(mons=BIG, n_hostiles=2, **UP_KNOWN)) == (False, False, False)
+
+
+def test_foe_hp_and_big_fight():
+    assert policy.foe_hp(obs(mons=BIG, n_hostiles=2)) == pytest.approx(25.5)
+    # no game HP to go on: the monster table's
+    orc = policy.monsters.lookup("orc")["hp"]
+    assert policy.foe_hp(obs(mons=[mon("orc")], n_hostiles=1)) == pytest.approx(orc)
+    assert policy.big_fight(obs(mons=BIG, n_hostiles=2, hp=5, hp_max=25))         # against max HP, not HP now
+    assert not policy.big_fight(obs(mons=BIG, n_hostiles=2, hp_max=26))
+    assert not policy.big_fight(obs())
+
+
+def test_baseline_retreat_goes_up_first_and_drinks_first_at_half_hp():
+    o = obs(status=["-Berserk", "Slow"], **PAIR, **UP_KNOWN)
+    avail = available(o, False, set(), False)
+    assert "flee_up" in avail and baseline(o, avail, False, retreat=True) == "flee_up"
+    hurt = obs(status=["-Berserk", "Slow"], hp=9, inv={"heal": 1, "unknown_potions": 0, "unknown_scrolls": 0,
+                                                       "teleport": 0}, **PAIR, **UP_KNOWN)
+    assert baseline(hurt, available(hurt, False, set(), False), False, retreat=True) == "quaff_heal"
+    # stairs not reachable (unknown, or leaving the dungeon from D:1), or the step went nowhere: fight as before
+    for x in (obs(status=["-Berserk"], **PAIR, god="Trog"), obs(status=["-Berserk"], depth=1, **PAIR, **UP_KNOWN)):
+        assert baseline(x, available(x, False, set(), False), False, retreat=True) == "fight"
+    assert baseline(o, available(o, False, {"flee_up"}, False), False, retreat=True) == "fight"
+
+
+def test_baseline_rest_out_rests_with_nothing_in_view_until_recovered():
+    spent = obs(status=["-Berserk", "Slow"], **UP_KNOWN)
+    assert baseline(spent, available(spent, False, set(), False, recover=True), False, rest_out=True) == "rest"
+    assert baseline(spent, available(spent, True, set(), False, recover=True), True, rest_out=True) == "rest"
+    fresh = obs(**UP_KNOWN)
+    assert baseline(fresh, available(fresh, False, set(), False, recover=True), False, rest_out=True) == "explore"
+
+
+def test_retreat_starts_only_when_a_rage_runs_out_with_two_left_and_keeps_to_that_level():
+    tiers = BrainTiers(style=Style(retreat=1), rng=random.Random(0))
+    raging, spent = ["Berserk"], ["-Berserk", "Slow"]
+    assert tiers.fight_moves(1, obs(status=raging, **PAIR, **UP_KNOWN)) == (False, False, False)
+    assert tiers.fight_moves(1, obs(status=spent, **PAIR, **UP_KNOWN)) == (True, True, False)
+    # one left in view on the same level: still heading up
+    assert tiers.fight_moves(1, obs(status=spent, n_hostiles=1, mons=[mon()], **UP_KNOWN))[0]
+    # upstairs (another level): fight what followed, rest once nothing is in view
+    assert tiers.fight_moves(2, obs(status=spent, n_hostiles=1, mons=[mon()], **UP_KNOWN)) == (False, True, False)
+    assert tiers.fight_moves(2, obs(status=spent, **UP_KNOWN)) == (False, True, False)
+    # the exhaustion is over: all as usual
+    assert tiers.fight_moves(2, obs(**UP_KNOWN)) == (False, False, False)
+    assert tiers.retreat_from is None
+
+
+def test_retreat_needs_two_left_and_known_stairs_up():
+    for after in (obs(status=["-Berserk"], n_hostiles=1, mons=[mon()], **UP_KNOWN),
+                  obs(status=["-Berserk"], god="Trog", **PAIR)):
+        tiers = BrainTiers(style=Style(retreat=1), rng=random.Random(0))
+        tiers.fight_moves(1, obs(status=["Berserk"], **PAIR, **UP_KNOWN))
+        assert tiers.fight_moves(1, after) == (False, False, False)
+    # spent already, not a rage that ran out just now: no retreat
+    tiers = BrainTiers(style=Style(retreat=1), rng=random.Random(0))
+    assert tiers.fight_moves(1, obs(status=["-Berserk"], **PAIR, **UP_KNOWN)) == (False, False, False)
+
+
+def test_retreat_level_2_only_with_the_stairs_up_close():
+    for dist, level, leaves in ((8, 2, True), (9, 2, False), (0, 2, True), (40, 1, True), (40, 2, False)):
+        tiers = BrainTiers(style=Style(retreat=level), rng=random.Random(0))
+        tiers.fight_moves(1, obs(status=["Berserk"], **PAIR, god="Trog", dist_up=dist))
+        assert tiers.fight_moves(1, obs(status=["-Berserk"], **PAIR, god="Trog", dist_up=dist,
+                                        on_up=dist == 0))[0] == leaves, (dist, level)
+
+
+def test_retreat_reaches_the_rules_inside_brain_tiers():
+    seen = {}
+    for level in (0, 1):
+        state = make_state(["#########", "#<..@...#", "#.......#", "#########"], depth=3, god="Trog")
+        add_monster(state, (5, 1), 1, "orc")
+        add_monster(state, (5, 2), 2, "orc")
+        tiers = BrainTiers(style=Style(retreat=level), rng=random.Random(0))
+        state.player["status"] = [{"light": "Berserk"}]
+        assert tiers.next_action(state) == "fight"
+        state.player["status"] = [{"light": "-Berserk"}, {"light": "Slow"}]
+        seen[level] = tiers.next_action(state)
+    assert seen == {0: "fight", 1: "flee_up"}
+
+
+def test_stairs_walks_up_before_a_big_fight_once_per_fight():
+    tiers = BrainTiers(style=Style(stairs=1), rng=random.Random(0))
+    big = obs(mons=BIG, n_hostiles=2, **UP_KNOWN)
+    assert tiers.fight_moves(1, big) == (False, False, True)
+    o = baseline(big, available(big, False, set(), False), False, to_stairs=True)
+    assert o == "flee_up"
+    # on the stairs: done for this fight, even a step off them
+    assert tiers.fight_moves(1, obs(mons=BIG, n_hostiles=2, on_up=True, god="Trog", dist_up=0)) == (False, False, False)
+    assert tiers.fight_moves(1, obs(mons=BIG, n_hostiles=2, god="Trog", dist_up=1)) == (False, False, False)
+    # nothing in view: the next fight may walk again
+    tiers.fight_moves(1, obs(**UP_KNOWN))
+    assert tiers.fight_moves(1, big)[2]
+
+
+def test_stairs_leaves_small_far_adjacent_and_raging_fights_alone():
+    for o in (obs(mons=BIG, n_hostiles=2, god="Trog", dist_up=9),                          # too far
+              obs(mons=BIG[:1], n_hostiles=1, **UP_KNOWN),                                 # small
+              obs(mons=BIG, n_hostiles=2, god="Trog"),                                     # no stairs known
+              obs(mons=BIG, n_hostiles=2, status=["Berserk"], **UP_KNOWN)):                # raging
+        assert not BrainTiers(style=Style(stairs=1), rng=random.Random(0)).fight_moves(1, o)[2], o
+    tiers = BrainTiers(style=Style(stairs=1), rng=random.Random(0))
+    near = [{**BIG[0], "dx": 1}, BIG[1]]
+    assert not tiers.fight_moves(1, obs(mons=near, n_hostiles=2, **UP_KNOWN))[2]               # adjacent: done
+    assert not tiers.fight_moves(1, obs(mons=BIG, n_hostiles=2, **UP_KNOWN))[2]
+
+
+def test_retreat_and_stairs_switches_are_styles_and_old_runs_still_match():
+    import argparse
+    from ladder.brain.cli import _style
+    assert _style(argparse.Namespace(style=["retreat=1", "stairs=1"])) == Style(retreat=1, stairs=1)
+    old = {k: v for k, v in Style().to_dict().items() if k not in ("retreat", "stairs")}
+    assert {**Style().to_dict(), **old} == Style().to_dict()
+    assert {**Style().to_dict(), **old} != Style(retreat=1).to_dict()
+
+
 def test_inventory_largest_stack_first():
     state = with_inv(make_state(["@."]), s0=item("fizzy potion", POTIONS, 1, letter=ord("c")),
                      s1=item("murky potion", POTIONS, 3, letter=ord("d")))
