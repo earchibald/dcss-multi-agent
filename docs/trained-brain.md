@@ -7,6 +7,14 @@ runs in numpy in well under a millisecond. It is the same idea as the trained br
 
 ## Where it stands
 
+**2026-11-15, night: `recover=1 retreat=2` passes a pre-registered replication on 1,000 fresh dungeons, +0.45
+[+0.24, +0.65]** against HEAD defaults (seeds 650000–650999; section "The wrong dungeon fixed, and a larger
+replication", below). Mean depth 5.97 against 5.53; dying just after taking the stairs spent falls from 24% of games
+to 10%. The defaults are not changed yet (the orchestrator decides; what would change is listed there). The
+wrong-dungeon bug is fixed at its root: `quit_game` returned before the game had taken the word "quit", so the
+throwaway game was saved instead of ended. It now waits for the game to end, and a guard (`not_on_seed`) refuses to
+play any game whose opening isn't a new game on its seed. 0 of 2,042 games since were off their seed.
+
 **2026-11-15, later: going up the stairs when a rage runs out mid-fight, with the stairs close (`--style
 retreat=2`), together with `recover=1`, does not pass a pre-registered fresh-block test: +0.30 [−0.03, +0.64]**
 against HEAD defaults on blocks J and K (section "Fights around a rage", below). On the tuning blocks it was
@@ -1023,7 +1031,8 @@ stale check lets it through. Its morgue carries a random seed. It hit 1–3 game
 in `A-fix-rec1-ret2`. From here on a game also counts as stale unless a morgue on its own custom seed with its turn
 count exists (`brain-v5g/seeds.py`). That check and the "Welcome back" text agree on every run of this section
 (the morgue check also drops hung games, which leave none). Re-scored this way, H + I's test is unchanged: +0.43
-[+0.11, +0.75] on 395 dungeons. Not fixed in the code. The likely cause (inferred, not traced) is that `act()` now
+[+0.11, +0.75] on 395 dungeons. Not fixed in the code (fixed later, with a different cause: section "The wrong
+dungeon fixed", below). The likely cause (inferred, not traced) is that `act()` now
 stops at a bare yes/no question and `Connection.quit_game` answers only the typed "quit" prompt, so a brand-new
 character's yes/no "really quit?" goes unanswered. The fix would be to answer `blocking == "yesno"` in
 `quit_game`, or to raise `StaleSave` on "Welcome back".
@@ -1163,6 +1172,136 @@ blocks J and K (393 dungeons). The lower end is below zero.
   `qw_rage.py` (step 1); `arms.py`, `seeds.py`, `welcome.py`, `mindex.py`, `refresh.sh` (pairing and the seed
   check); `triggers.py`, `retreat_split.py`, `retreat_pool.py`, `stairs_check.py`, `show.py` (what the rules did);
   copies of `gather.py`, `flags.py`, `causes.py`; `chain.sh`, `after.sh` and the job files; the copied morgues.
+
+#### The wrong dungeon fixed, and a larger replication of `recover=1 retreat=2` (2026-11-15)
+
+**Summary.**
+
+- **The replication passes: `recover=1 retreat=2` is +0.45 [+0.24, +0.65] deeper than HEAD defaults** on 996 fresh
+  dungeons (seeds 650000–650999, pre-registered below). All five blocks of 200 are ahead (+0.18 to +0.58); three
+  clear zero on their own. Mean depth 5.97 against 5.53, XL 6.53 against 5.83. The defaults are not changed here:
+  that is the orchestrator's call (what would change is listed at the end).
+- **The wrong dungeon is fixed at the root.** The quit of the throwaway game returned before the game had taken
+  the word "quit" (a dcss-api read that returns at once), the socket closed, and the server saved the game instead;
+  the next seeded start resumed it. `quit_game` now waits for the game to end, and a guard refuses to record any game
+  whose opening doesn't say it is a new game on its seed. In 2,042 games since, none was off its seed or stale, and
+  the guard never had to act.
+
+**The wrong dungeon, traced.** The suspicion above was wrong: a brand-new character's Ctrl-Q asks for the typed
+word "quit" too, and `quit_game` typed it. What went wrong came after. `quit_game` then waited for the lobby with
+`read_until("go_lobby")`, and that read returned at once: dcss-api 0.4.1 (`read_until` in its `lib.rs`) marks the
+awaited message found when it sees it in a frame, raises if the same frame also holds a prompt, and leaves the mark
+set, so the next `read_until`, whatever it waits for, returns at once. The Ctrl-Q read stopped at the text prompt in
+a frame that also held an `input_mode`, so the quit returned about a millisecond after the last key was sent, and
+`_clear_save` closed the socket. Webtiles hangs up on a game whose socket closes; if DCSS has not yet taken the
+typed word, it saves the game instead of ending it. The next seeded start resumed that turn-0 save ("Welcome back"),
+on its random dungeon. A race, so it depends on load: one account in seven lost it when seven throwaways were quit
+at once (live, recorded), 6 of 7 in `A-fix-rec1-ret2`, none when one account was quit alone. Shown live: the
+throwaways that kept a save left no morgue (the ones that quit leave a turn-0 morgue), a `.cs` file was left in the
+server's `saves/`, and a `read_until` for a message that never comes returned at once in that state.
+
+- **The fix** (`Connection.quit_game` and the new `Connection.wait_game_end`, `src/ladder/conn.py`): after the
+  word, answer the screens a quit shows, one prompt at a time (a --more--, the inventory menu, a --more-- over the
+  "game-over" summary), and return only once the server sends `game_ended` or `go_lobby`; after the summary, wait
+  for the lobby rather than another prompt, since a game that exits asks for nothing more. It returns whether the
+  game ended. This also covers every quit at the choice or turn limit (`selfplay._play`, `games.run`), which had
+  the same race.
+- **The guard** (`selfplay.not_on_seed`, called in `selfplay._play`): a game counts as started on its seed only if
+  its opening messages say "Game seed: <seed> (custom seed)" and not "Welcome back". Otherwise `StaleSave` is
+  raised, the save is quit and the game started again once; if that fails too the game is recorded as an error,
+  never as that seed. A restart is kept in `results.json` as `restarted`.
+- **Tests**: `tests/test_conn.py` (a fake of dcss-api 0.4.1's `read_until`, mark included, playing the recorded
+  quit screens; the old `quit_game` fails it), `tests/test_brain.py` (`not_on_seed`; a turn-0 "Welcome back" start
+  raises `StaleSave` in `_play`).
+- **Live**: 70 throwaway quits on 7 accounts at once (10 rounds), then a seeded start on each: 70 new games on
+  their seed, no save left on the server (a first version that waited for a prompt after the summary hung once in
+35 quits; hence the wait for the lobby). Three self-play runs of 14 games on training seeds (470000–470013,
+470100–470113, 470200–470213, the last with `recover=1 retreat=2`; 21 first
+  games of an account in a run, one game quit at the limit): 42 of 42 on their seed by the protocol, the step log
+  and the morgue; the guard never had to restart a game; no save left.
+
+**Pre-registered (written before any game on seeds 650000–650999).** This is a replication of the J + K test
+above, unchanged, on a larger fresh sample. Configuration: this working tree's code after the wrong-dungeon fix
+(below), `--style recover=1 retreat=2`, no model, no random choices. Baseline: the same code with the default
+style (no switches: `recover`, `retreat`, `stairs`, `calm`, `teleport` all 0; the reply fix on). Dungeons: seeds
+650000–650999 (1,000 dungeons, never used before), played as five blocks of 200 (650000, 650200, 650400, 650600,
+650800), each block by both arms one run after the other, the arm that goes first alternating from block to block
+so that machine conditions balance; 9 workers asked, the accounts that log in play (the ones that fail are not
+repaired). Analysis: paired by dungeon over games both finished (not hung, crashed or an error) and neither stale
+nor off its seed (a game is stale if its first step is after turn 1; off its seed if no morgue on that custom seed
+with the game's turn count exists); 95% bootstrap over dungeons, 10,000 resamples; analysed once, after all games
+are played, with no early stopping. **Pass: the interval's lower end is above zero** (all five blocks pooled). J
+and K are not pooled into the pass decision; a pooled J + K + new figure may be reported, as description only.
+Reported alongside, outside the pass rule: mean depth, XL, deaths by depth band, the death-cause table, the counts
+of wrong-seed and stale games (expected zero), and each block's difference.
+
+**Result: passes.** `recover=1 retreat=2` is **+0.45 [+0.24, +0.65]** against HEAD defaults on 996 dungeons (the
+four left out are the 5 hung games' dungeons; one dungeon hung in both arms). Analysed once, after all 2,000 games.
+
+| arm, blocks R1–R5 (650000–650999) | finished (hung) | mean depth | XL | turns | died | died on D:1–3 / 4–6 / 7+ | stuck at the limit | not on their seed | stale |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| HEAD defaults | 997 (3) | 5.53 | 5.83 | 2069 | 965 | 224 / 408 / 333 | 5 | 0 | 0 |
+| `recover=1 retreat=2` | 998 (2) | 5.97 | 6.53 | 3218 | 960 | 204 / 338 / 418 | 9 | 0 | 0 |
+
+| `recover=1 retreat=2` − HEAD defaults | first arm played | dungeons | difference | 95% interval | deeper / same / shallower |
+| --- | --- | --- | --- | --- | --- |
+| R1 (650000–650199) | `recover=1 retreat=2` | 199 | +0.40 | [−0.05, +0.85] | 72 / 64 / 63 |
+| R2 (650200–650399) | defaults | 200 | +0.18 | [−0.27, +0.64] | 76 / 58 / 66 |
+| R3 (650400–650599) | `recover=1 retreat=2` | 199 | +0.55 | [+0.10, +1.02] | 81 / 55 / 63 |
+| R4 (650600–650799) | defaults | 199 | +0.58 | [+0.14, +1.03] | 78 / 60 / 61 |
+| R5 (650800–650999) | `recover=1 retreat=2` | 199 | +0.54 | [+0.06, +1.00] | 80 / 59 / 60 |
+| **R1–R5 (the pre-registered test)** | | 996 | **+0.45** | **[+0.24, +0.65]** | 387 / 296 / 313 |
+| *J + K + R1–R5, description only* | | 1,389 | +0.41 | [+0.23, +0.59] | 532 / 418 / 439 |
+
+Per block, mean depth (defaults → chosen arm): R1 5.44 → 5.83, R2 5.53 → 5.71, R3 5.65 → 6.18, R4 5.55 → 6.12, R5
+5.48 → 6.03. The arm that played first made no visible difference (+0.50 when the chosen arm went first, +0.38 when
+the defaults did, each well inside the other's noise).
+
+| cause, R1–R5 (the cause table's rules) | HEAD defaults | `recover=1 retreat=2` |
+| --- | --- | --- |
+| games (mean depth) | 997 (5.53) | 998 (5.97) |
+| took the stairs raging or spent, died within 50 turns | 239 (24%) | 95 (10%) |
+| walked into the last fight already spent | 172 (17%) | 183 (18%) |
+| raged in the last fight, the rage ran out first | 291 (29%) | 374 (37%) |
+| died still raging | 139 (14%) | 146 (15%) |
+| killed in melee, never raged | 56 (6%) | 88 (9%) |
+| poisoned; from range or a spell; autofight refused | 36; 17; 15 | 36; 20; 18 |
+| *not a death*: 1,500 choices on one level; nothing the brain can do | 5; 27 | 9; 29 |
+
+- **The gain is the same one as before, now clearly above zero.** Going down the stairs raging or exhausted and
+  dying there falls from 24% of games to 10%; the deaths move a level or two deeper, mostly to fights where the rage
+  runs out first (29% → 37%) and to melee without a rage (6% → 9%), as on A + C and J + K. Deaths on D:7 and below
+  rise from 333 to 418 because more characters get there.
+- **Settled**: J + K (+0.30 [−0.03, +0.64]) was not a miss of a null effect but a sample too small for it; this
+  sample, two and a half times larger, gives a narrower interval (half-width 0.21) and a similar mean.
+- No game on the wrong dungeon, no stale save, and no restart by the guard in the 2,000; 5 games hung mid-game
+  (exploring), all on their seed, and are left out as the rule says.
+- **Verified**: every number in the tables (`brain-v5h/arms.py`, `pooled.py`, `gather.py`, `causes.py`); each game's
+  seed three ways (`verify.py`: the protocol's greeting, the first step's turn, the morgue); J and K re-scored with
+  the same scripts give their earlier figures exactly; the traced cause and the fix (live recordings, dcss-api's
+  source, the server's save files and morgues); the tests (`uv run pytest`, `uv run ruff check`).
+- **Inferred**: that DCSS saves rather than ends a game hung up on before it has taken the typed word (seen as a
+  save left behind and no morgue; not read in DCSS's source); that the first-played arm doesn't matter (5 blocks).
+- Seeds 650000–650999 are now spent. Runs: `runs/brain/v5h/R{1..5}-{defaults,rec1-ret2}` and
+  `runs/brain/v5h/verify{1,2,3}`. Scripts in the job's `brain-v5h/` scratch directory: `trace_quit.py`,
+  `par_clear.py`, `par_quit.py`, `par_rounds.sh`, `golobby*.py`, `head.py` (the trace); `verify.py`, `seeds.py`,
+  `refresh.sh`, `mindex.py` (seed checks); `arms.py`, `pooled.py`, `gather.py`, `flags.py`, `causes.py` (analysis);
+  `chain.sh` and the job files.
+
+**What turning them on would change** (not done; for the orchestrator to decide):
+
+- `src/ladder/brain/policy.py`, `Style`: `recover: float = 0.0` → `1.0` and `retreat: float = 0.0` → `2.0`, and
+  their comments' "Off by default". That changes every game played without `--style`: self-play, `evaluate`, the
+  cockpit's `--brain`, and the rules of thumb a model falls back on (so also the "what the rules would do" field
+  in new step logs).
+- Tests that pin the defaults and fail with the flip (tried, then put back): `test_recover_is_off_by_default`,
+  `test_recover_switch_is_a_style_and_old_runs_still_match`, `test_retreat_and_stairs_are_off_by_default_and_play_as_before`
+  (`tests/test_brain.py`); the other 456 pass.
+- Saved runs: `cli.evaluate` reuses a saved run when `{**Style().to_dict(), **saved_style}` equals the style asked
+  for, so a key missing from a saved run is read as today's default. Runs saved before `recover` or `retreat`
+  existed (played with 0) would then be read as played with 1 and 2, and reused wrongly. Runs saved since carry
+  `recover: 0.0` and `retreat: 0.0` and would be replayed, which is right. The safe change is to fill missing keys
+  with the value they had when the key was added (0 for both), not with the current default.
 
 ## What carried over from s1-battle, and what couldn't
 
@@ -1526,6 +1665,9 @@ In the order I would take them:
    `StaleSave` on "Welcome back"); (b) a larger fresh test for `recover=1` alone against HEAD defaults (about 1,000
    dungeons for a +0.3 gain); (c) more to do in the fight itself, since the deadly rages are the ones begun against
    more HP than the character has, and neither rage timing nor stairs fixes those.*
+   *(2026-11-15, night) (a) done: the quit now waits for the game to end, and a guard checks every start's seed.
+   Instead of (b), `recover=1 retreat=2` was replicated unchanged on 1,000 fresh dungeons and passes (+0.45 [+0.24,
+   +0.65]). Next: decide on the defaults (fill missing style keys in saved runs with 0 first), then (c).*
 4. **Promote on more than 60 dungeons.** Differences under 0.3 depths can't be seen with 60; the same
    baseline replayed varies by 0.1. 200 evaluation dungeons would take about 15 minutes per model.
 5. **The remaining dead ends**: games that hang (1 in 20 with random choices in round 4, 1 in 40

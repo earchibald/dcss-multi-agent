@@ -36,6 +36,21 @@ class StaleSave(RuntimeError):
     """The game that started is an old one the account had saved, not a new one on the seed asked for."""
 
 
+def not_on_seed(opening: list[dict], seed: int) -> str | None:
+    """Why the game whose first messages are `opening` is not a new game on `seed`; None if it is.
+
+    A new game on a seed greets with "Welcome, <name>" and "Game seed: <seed> (custom seed)". A resumed
+    save greets with "Welcome back", whatever seed it was on: a throwaway left at turn 0 passes the turn
+    check, and its dungeon is a random one.
+    """
+    text = " ".join(x.get("text", "") for m in opening if m.get("msg") == "msgs" for x in m.get("messages", []))
+    if "Welcome back" in text:
+        return "resumed a saved game"
+    if f"Game seed: {seed} (custom seed)" not in text:
+        return f"no word of custom seed {seed} at the start"
+    return None
+
+
 def _play(job: dict, cfg: dict, log, beat) -> dict:
     from ..conn import Connection
     from ..games import crawlrc
@@ -58,20 +73,18 @@ def _play(job: dict, cfg: dict, log, beat) -> dict:
         def on_step(self, reflex, action):
             beat()
 
-    def start():
-        state = GameState()
-        conn = Connection(cfg["server"], on_message=state.apply, record=record)
+    state = GameState()
+    conn = Connection(cfg["server"], on_message=state.apply, record=record)
+    try:
         conn.login(user)
         conn.set_rc(crawlrc())
-        conn.start_game(cfg["species"], cfg["background"], cfg["weapon"], seed=seed)
-        return state, conn
-
-    state, conn = start()
-    try:
+        opening = conn.start_game(cfg["species"], cfg["background"], cfg["weapon"], seed=seed)
         if state.turn > 1:
             # The account still held a game (one that ended without a death and wasn't quit), and a
             # seeded start resumed it: that is not this seed's dungeon.
             raise StaleSave(f"{user} resumed a saved game at turn {state.turn}")
+        if (why := not_on_seed(opening, seed)):
+            raise StaleSave(f"{user}: {why}")
         beat()
         game = Reflex(conn, state, log, seed, Recorder(), tiers).run(max_steps=cfg["max_steps"], max_turns=cfg["max_turns"])
         end = steps.end(game_id, state, game, tiers)
@@ -88,11 +101,13 @@ def _play(job: dict, cfg: dict, log, beat) -> dict:
         raw.unlink()
 
 
-def _clear_save(cfg: dict) -> None:
-    """Abandon whatever game the account has saved (one that hung, or was killed).
+def _clear_save(cfg: dict) -> bool:
+    """Abandon whatever game the account has saved (one that hung, or was killed). True once quit.
 
     A seeded start waits for the seed menu, which never comes while a save exists. A plain start
-    resumes the save (or begins a throwaway game), and either can be quit.
+    resumes the save (or begins a throwaway game), and either can be quit. The quit must be seen
+    through to the end (`Connection.quit_game`): a throwaway hung up on mid-quit is saved, and the
+    next seeded start resumed it at turn 0 on a random dungeon (about 1 game in 100, 2026-11-15).
     """
     import dcss_api
 
@@ -117,7 +132,7 @@ def _clear_save(cfg: dict) -> None:
                     blocking = conn.act("S").blocking
                 else:                                          # a scroll's target: cancel, and yes, waste it
                     blocking = cancel_prompt(conn).blocking
-        conn.quit_game()
+        return conn.quit_game()
     finally:
         conn.close()
 
@@ -155,10 +170,11 @@ def _worker(k: int, job: dict, clear: bool, pipe, cfg: dict) -> None:
     try:
         try:
             end = _play(job, cfg, log, lambda: pipe.send(("beat", None)))
-        except StaleSave:
+        except StaleSave as stale:
             _clear_save(cfg)                                   # quit the old game, then start this one again
             pipe.send(("beat", None))
             end = _play(job, cfg, log, lambda: pipe.send(("beat", None)))
+            end["restarted"] = str(stale)                      # kept in results.json, to count how often
     except Exception as e:  # noqa: BLE001  (a lost game shouldn't lose the run)
         end = {"type": "end", "game": game_id, "ended_by": "error", "error": f"{type(e).__name__}: {e}"}
     finally:

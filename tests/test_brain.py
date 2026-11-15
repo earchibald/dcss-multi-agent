@@ -852,10 +852,63 @@ def test_a_resumed_save_is_quit_and_the_game_started_again(tmp_path, monkeypatch
     monkeypatch.setattr(selfplay, "_play", play)
     monkeypatch.setattr(selfplay, "_clear_save", lambda cfg: calls.append("clear"))
     selfplay._worker(1, {"seed": 1}, False, pipe, {"dir": str(tmp_path)})
-    assert calls == ["play", "clear", "play"] and sent[-1] == ("end", {"type": "end", "game": 1, "ended_by": "died"})
+    assert calls == ["play", "clear", "play"]
+    assert sent[-1] == ("end", {"type": "end", "game": 1, "ended_by": "died", "restarted": "resumed"})
     calls.clear()
     selfplay._worker(1, {"seed": 2}, False, pipe, {"dir": str(tmp_path)})   # still stale: lost, and the slot dirty
     assert calls == ["play", "clear", "play"] and sent[-1][1]["ended_by"] == "error"
+
+
+NEW_GAME = [{"msg": "msgs", "messages": [
+    {"text": "<yellow>Welcome, ladderbrain1 the Minotaur Berserker.<lightgrey>"},
+    {"text": "<white>Game seed: 650000 (custom seed)<lightgrey><lightgrey>; </lightgrey>"}]},
+    {"msg": "input_mode", "mode": 1}]
+RESUMED = [{"msg": "msgs", "messages": [{"text": "<yellow>Welcome back, ladderbrain1 the Minotaur Berserker.<lightgrey>"},
+                                        {"text": "<lightred>Trog says: Kill them all!<lightgrey>"}]},
+           {"msg": "input_mode", "mode": 1}]
+
+
+def test_a_game_counts_as_on_its_seed_only_when_the_game_says_so():
+    """A throwaway save resumed at turn 0 passes the turn check; its greeting and missing seed give it away."""
+    from ladder.brain.selfplay import not_on_seed
+    assert not_on_seed(NEW_GAME, 650000) is None
+    assert not_on_seed(RESUMED, 650000) == "resumed a saved game"
+    assert not_on_seed(NEW_GAME, 650001) is not None
+    assert not_on_seed(NEW_GAME, 65000) is not None                 # a prefix of the seed is not the seed
+    assert not_on_seed([], 650000) is not None
+
+
+def test_a_game_resumed_at_turn_0_is_never_played_as_its_seed(tmp_path, monkeypatch):
+    """The wrong-dungeon bug: the resumed throwaway is at turn 0, so only its opening shows it."""
+    import ladder.conn
+    from ladder.brain import selfplay
+
+    class Resumes:
+        def __init__(self, url, on_message=None, record=None):
+            self.on_message = on_message
+
+        def login(self, user):
+            pass
+
+        def set_rc(self, rc):
+            pass
+
+        def start_game(self, *a, seed=None):
+            for m in RESUMED:
+                self.on_message(m)
+            return RESUMED
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(ladder.conn, "Connection", Resumes)
+    cfg = {"user": "ladderbrain1", "model": None, "style": {}, "epsilon": 0.0, "server": "x", "species": "b",
+           "background": "f", "weapon": "b", "max_steps": 10, "max_turns": 10}
+    log = RunLog(tmp_path / "g650000")
+    with pytest.raises(selfplay.StaleSave, match="resumed"):
+        selfplay._play({"seed": 650000}, cfg, log, lambda: None)
+    assert (log.dir / "game650000.protocol.jsonl.gz").exists()          # the start is kept to look at
+    log.close()
 
 
 def test_compare_seed_by_seed():

@@ -204,8 +204,9 @@ class Connection:
             return messages
         return messages + self.sync().messages
 
-    def quit_game(self) -> None:
-        """Abandon the character: Ctrl-Q, then the word the game asks for.
+    def quit_game(self) -> bool:
+        """Abandon the character: Ctrl-Q, then the word the game asks for, then the screens on the way out.
+        True once the server says the game is over.
 
         dcss-api's own quit always answers "yes", but DCSS asks an established character to type
         "quit" instead, and then dcss-api waits forever for a lobby that isn't coming.
@@ -215,19 +216,50 @@ class Connection:
         self.catch_up()
         asked = self.act("key_ctrl_q")
         if asked.blocking != "text_input":
-            return
+            return False
         prompt = " ".join(m.get("text", "") for batch in asked.messages if batch.get("msg") == "msgs"
                           for m in batch.get("messages", []))
         for key in ("quit" if '"quit"' in prompt else "yes"):
             self.web.write_key(key)
         self.web.write_key("key_enter")
-        for _ in range(8):                      # the death screens on the way out
+        return self.wait_game_end()
+
+    def wait_game_end(self, max_reads: int = 40) -> bool:
+        """Answer the screens a game shows on its way out until the server says it is over.
+
+        The socket must stay open until then. Closing it earlier hangs up on a game that is still
+        running: if DCSS hasn't yet taken the typed "quit", it saves the game instead (seen live, more
+        often with several games starting at once), and the account's next seeded start resumes that
+        save, on a random dungeon, at turn 0. This used to wait on `read_until("go_lobby")` alone, which
+        returned at once: dcss-api (0.4.1) marks the awaited message found before it raises for a prompt
+        in the same frame, and doesn't clear the mark, so the read after one that stopped at a prompt
+        returns at once, whatever it waits for. The quit returned before the game had seen the word.
+
+        After a quit DCSS shows a --more--, the inventory (a menu, which no read stops at), and a
+        --more-- over the "game-over" summary, then exits; the server sends `game_ended` and
+        `go_lobby`. Until the summary, each read waits for the next prompt; after it, for the lobby,
+        since a game that exits may not ask for input again.
+        """
+        target = "input_mode"
+        for _ in range(max_reads):
             try:
-                self.web.read_until("go_lobby")
-                break
+                self.web.read_until(target)
+                reason = None
             except (dcss_api.APIErr, dcss_api.BlockingErr) as e:
-                self.web.write_key("key_enter" if classify_error(e) == "more" else "key_esc")
-        self._drain()
+                reason = classify_error(e)
+            batch = self._drain()
+            if any(m.get("msg") in ("game_ended", "go_lobby") for m in batch):
+                return True
+            if reason == "more":
+                key = "key_enter"
+            elif reason or menu_left_open(batch):
+                key = "key_esc"
+            else:
+                continue                        # nothing to answer yet (or the read that returns at once)
+            self.web.write_key(key)
+            if any(m.get("msg") == "ui-push" and m.get("type") == "game-over" for m in batch):
+                target = "go_lobby"
+        return False
 
     def close(self) -> None:
         try:

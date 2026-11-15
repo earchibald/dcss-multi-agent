@@ -3,7 +3,7 @@ import json
 import dcss_api
 import pytest
 
-from ladder.conn import Connection, classify_error, reply_modes
+from ladder.conn import ActResult, Connection, classify_error, reply_modes
 
 
 @pytest.mark.parametrize("text, reason", [
@@ -105,6 +105,59 @@ def test_quit_game_catches_up_before_asking_to_quit():
     conn.act = lambda *keys, **kw: calls.append(keys) or ActResult()
     conn.quit_game()
     assert calls == ["catch_up", ("key_ctrl_q",)]
+
+
+class Dcss041Web(FakeWeb):
+    """dcss-api 0.4.1's read_until (lib.rs): frames are read until one holds the awaited message; a frame
+    with a prompt in it raises after the whole frame is queued, and if that frame also held the awaited
+    message the "found" mark stays set, so the next read_until returns at once whatever it waits for.
+    A frame is (messages, error text or None). `found` starts set, as act() leaves it after a text prompt."""
+
+    def __init__(self, *frames, found=True):
+        super().__init__(*frames)
+        self.found = found
+
+    def read_until(self, msg):
+        while not self.found:
+            if not self.frames:
+                raise AssertionError(f"read_until({msg!r}) would block forever")
+            frame, error = self.frames.pop(0)
+            self.queue += frame
+            self.found = any(m["msg"] == msg for m in frame)
+            if error:
+                raise dcss_api.APIErr(error)
+        self.found = False
+
+
+MORE = "Blocking due to 'more' message."
+# After "quit" + Enter on a new character, as recorded live (0.34, 2026-11-15); the summary's frame and the
+# exit's are apart, and the game asks for nothing after the summary.
+QUIT_SCREENS = [
+    ([{"msg": "close_input"}, {"msg": "input_mode", "mode": 0}, {"msg": "msgs", "more": True},
+      {"msg": "input_mode", "mode": 5}], MORE),
+    ([{"msg": "input_mode", "mode": 0}, {"msg": "menu", "tag": "inventory"}, {"msg": "msgs"}], None),
+    ([{"msg": "close_menu"}, {"msg": "input_mode", "mode": 5}, {"msg": "ui-push", "type": "game-over"}], MORE),
+    ([{"msg": "ui-pop"}], None),
+    ([{"msg": "game_ended", "reason": "quit"}], None),
+    ([{"msg": "go_lobby"}], None),
+]
+
+
+def test_quit_waits_for_the_game_to_end_before_letting_go():
+    """The wrong-dungeon bug: the quit returned at once (the read after a prompt), the socket closed before
+    the game took the word, and the game was saved; the next seeded start resumed it at turn 0."""
+    conn = _conn(Dcss041Web(*QUIT_SCREENS))
+    prompt = [{"msg": "msgs", "messages": [{"text": 'Are you sure? (Confirm with "quit".) '}]}]
+    conn.catch_up = lambda: ActResult()
+    conn.act = lambda *keys, **kw: ActResult(blocking="text_input", messages=prompt)
+    assert conn.quit_game() is True
+    assert conn.web.sent == ["q", "u", "i", "t", "key_enter", "key_enter", "key_esc", "key_enter"]
+    assert len(conn.web.frames) <= 1                              # read through to game_ended at least
+
+
+def test_wait_game_end_gives_up_rather_than_reading_for_ever():
+    conn = _conn(Dcss041Web(*[([{"msg": "input_mode", "mode": 0}], None)] * 3, found=False))
+    assert conn.wait_game_end(max_reads=3) is False
 
 
 def test_menu_left_open():
