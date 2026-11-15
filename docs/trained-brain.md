@@ -7,6 +7,11 @@ runs in numpy in well under a millisecond. It is the same idea as the trained br
 
 ## Where it stands
 
+**2026-11-14, evening:** the rule `v5-seen` seemed to have found (read teleportation when spent after a rage,
+monsters in view) is in the rules of thumb as an opt-in switch, `--style teleport=1`, and does not beat them:
++0.10 on the tuning blocks, −0.01 [−0.16, +0.13] on two fresh ones (pre-registered). It stays off. Still
+nothing beats the rules of thumb (section "The teleport rule on its own", below).
+
 **2026-11-14, later:** still no model beats the rules of thumb. Averaging 5 training seeds (H1) steadies the
 estimate but keeps the bias all seeds share, and plays like an average seed (−0.32 on block A). 2,069
 forks that compare exploring on with going down from the same state (H2) show the two are worth the same
@@ -442,6 +447,98 @@ the rules lack: *exhausted after a rage, with monsters in view, read teleportati
   of the blocks rather than the forks (offline it is the most biased model); that the teleport rule is the
   cause of `v5-seen`'s lead (an attribution by game, not a test).
 
+#### The teleport rule on its own (2026-11-14, evening)
+
+**Not confirmed: the rule is level with the rules of thumb, not better.** "Spent after a rage, monsters in
+view: read teleportation" (`--style teleport=1`) was +0.10 [−0.05, +0.24] on the tuning blocks A and C and
+**−0.01 [−0.16, +0.13]** on the fresh blocks F and G (395 dungeons), the pre-registered test. A second rule
+(also read it when outnumbered by something dangerous) took the tuning gain away and was not carried forward.
+The switch stays off. The model's teleport lead was either luck of blocks A and C or depends on *which*
+spent moments it picked, which a plain rule doesn't capture.
+
+**What the model did (blocks A and C, `v5-seen` at `margin=1.0`).** 126 overrides to `read_teleport` in 81
+games (108 from `fight`, 12 from `berserk`, the rest from `descend`, `quaff_heal`, `flee_up`). Grouped by the
+statuses at the moment:
+
+| at the override | A | C | HP (median, at full) | hostiles in view (median) | one of threat 2+ in view | games' depth vs rules |
+| --- | --- | --- | --- | --- | --- | --- |
+| spent after a rage (`-Berserk` and `Slow`) | 47 in 30 games | 32 in 28 | 100%, 57% | 3–4 | 90% | +0.76 (A, 25 games), +1.57 (C, 23) |
+| `-Berserk`, no longer slowed | 4 | 4 | 100%, 88% | 3–4 | 100% | |
+| not after a rage | 17 in 16 games | 22 in 17 | 100%, 85% | 3 | 95% | +1.67 (A, 12), +1.76 (C, 17) |
+
+The model is choosy. A scroll could be read while spent at 602 moments on A and 505 on C (in 140 and 114
+separate spells of exhaustion, in only about 45 games each, since few games ever identify the scroll), and it
+read one at 8% of them: where it read, 4.1 hostiles were in view on average against 1.6–1.8 where it didn't,
+and 84–96% had one of threat 2 or more against 55%. The not-after-a-rage overrides are mostly at full HP with
+nothing within two squares and a threat-3 monster in view about half the time. No single clean condition
+separates its picks from the rest; the two below are the plainest ones that cover most of them.
+
+**The rules, as coded** (`policy.teleport_rule`, used by `policy.baseline`; switch `Style.teleport`, off by
+default, `--style teleport=1`):
+
+- `teleport=1`, *spent*: `-Berserk` and `Slow` both showing, a hostile in view, a known scroll of
+  teleportation that can be read: read it. First in the fight order (after curing serious poison), before
+  the healing potion.
+- `teleport=2`, also *crowded*: 3 or more hostiles in view, one of them threat 2 or 3: read it, after the
+  rage and the healing potion (so a rage still comes first wherever the rules would rage).
+- Neither while `Tele` shows: a second scroll would cancel the teleport already coming.
+
+**Tuning on blocks A and C** (rules of thumb replayed with HEAD's code, `A-rules-h` and `C-rules-h`; no stale
+saves on either side; paired by dungeon, 95% bootstrap). Replay is exact here: every game in which the rule
+never fired is the same game, so the whole difference comes from the ~45 games per block that read a scroll.
+
+| arm | block | finished (hung) | mean depth | died | died on D:1–3 | scrolls read | games with a read | vs rules | 95% interval | deeper / same / shallower |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| rules of thumb | A | 197 (3) | 5.46 | 179 | 35 | 9 (fallbacks) | 5 | | | |
+| `teleport=1` | A | 195 (5) | 5.53 | 177 | 34 | 80 | 47 | +0.09 | [−0.13, +0.33] | 19 / 163 / 13 |
+| `teleport=2` | A | 196 (4) | 5.44 | 178 | 34 | 86 (29 crowded) | 48 | +0.03 | [−0.19, +0.24] | 19 / 161 / 15 |
+| rules of thumb | C | 194 (6) | 5.36 | 173 | 44 | 0 | 0 | | | |
+| `teleport=1` | C | 193 (7) | 5.44 | 172 | 41 | 63 | 42 | +0.10 | [−0.05, +0.26] | 14 / 170 / 9 |
+| `teleport=2` | C | 192 (8) | 5.33 | 169 | 40 | 68 (26 crowded) | 46 | +0.00 | [−0.17, +0.17] | 14 / 162 / 16 |
+| **`teleport=1`, A + C** | | | | | | | | **+0.10** | [−0.05, +0.24] | 33 / 333 / 22 |
+| `teleport=2`, A + C | | | | | | | | +0.01 | [−0.13, +0.15] | 33 / 323 / 31 |
+
+For scale, against the same replayed rules `v5-seen` at `margin=1.0` is +0.17 (A) and +0.26 (C), and
+`teleport=1` − `v5-seen` is −0.10 (A) and −0.16 (C): the spent rule recovers about half of the model's lead.
+Adding the crowded rule takes the gain away again.
+
+**Pre-registered (written before any game on block F or G):** configuration: the rules of thumb with
+`--style teleport=1`, no model, no random choices, against the plain rules of thumb (no model, default
+style), both played with this working tree's code, 200 games per block from seeds 570000 (block F,
+570000–570199) and 580000 (block G, 580000–580199), 8 workers. Both blocks are played whatever F shows.
+Paired by dungeon over games both finished and neither resumed a stale save; 95% bootstrap over dungeons
+(10,000 resamples, `arms.py`). **Pass: the pooled F + G interval's lower end is above zero.** Analysed once.
+
+| fresh blocks | finished (hung) | mean depth | died | died on D:1–3 | XL | turns | scrolls read | games with a read |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| F rules of thumb | 197 (3) | 5.62 | 186 | 36 | 5.89 | 2131 | 4 (fallbacks) | 3 |
+| F `teleport=1` | 197 (3) | 5.63 | 187 | 35 | 5.96 | 2147 | 96 | 53 |
+| G rules of thumb | 198 (2) | 5.49 | 181 | 37 | 5.77 | 2121 | 5 (fallbacks) | 1 |
+| G `teleport=1` | 198 (2) | 5.45 | 180 | 40 | 5.72 | 2131 | 87 | 51 |
+
+| `teleport=1` − rules of thumb | dungeons | difference | 95% interval | deeper / same / shallower |
+| --- | --- | --- | --- | --- |
+| F | 197 | +0.02 | [−0.21, +0.23] | 21 / 159 / 17 |
+| G | 198 | −0.04 | [−0.24, +0.14] | 19 / 161 / 18 |
+| **F + G (the pre-registered test)** | 395 | **−0.01** | **[−0.16, +0.13]** | 40 / 320 / 35 |
+| ... F + G, games where it read a scroll | 104 | +0.07 | [−0.43, +0.58] | 40 / 31 / 33 |
+| A + C + F + G (descriptive; A and C were tuning) | 783 | +0.04 | [−0.06, +0.14] | 73 / 653 / 57 |
+
+- **Fails the pass rule**: the pooled interval's lower end is −0.16. Neither fresh block shows the tuning
+  blocks' +0.1. No stale save on any side of any of the eight runs.
+- The rule fires in about a quarter of games (those that have identified the scroll and rage), roughly 1.8
+  scrolls per such game; in the other games play is the same game exactly (2 of 291 on G diverged anyway,
+  replay noise). Within the games it changes, it wins about as often as it loses (40 / 31 / 33), and dying
+  on D:1–3 doesn't move.
+- **Verified**: the counts and tables above; that the switch off leaves play as it was (the replayed rules
+  give the same game as the earlier runs on 367 of 368 clean dungeons of A and C) and that the unit tests
+  hold the old behaviour. **Inferred**: that the model's +0.21 on A and C came from choosing its moments
+  (where it read, 4 hostiles in view, one dangerous) or from block luck; the plain rule reads at the first
+  chance in every spell of exhaustion (80 scrolls on A against the model's 47 while spent), and recovers half
+  the tuning lead and none of it fresh.
+- Blocks F (570000–) and G (580000–) are now spent. Runs: `runs/brain/v5/games/{A,C}-rules-h`,
+  `{A,C}-tele{1,2}`, `{F,G}-rules`, `{F,G}-tele1`; scripts in the job's `brain-v5d/` scratch directory.
+
 ## What carried over from s1-battle, and what couldn't
 
 | s1-battle | here |
@@ -516,6 +613,11 @@ rest to full, drink before the rage, go up nearby stairs when hurt, teleport and
 resorts. On the 60 evaluation dungeons it came out about one standard error *behind* (5.20 against 5.58
 alone, 5.53 against 5.86 under `iter2`), so it is off by default. `docs/wiki-strategy.md` has the rules,
 the measurement and the rest of what the guides say.
+
+`--style teleport=1` adds one rule (`policy.teleport_rule`): read a known scroll of teleportation when spent
+after a rage (`-Berserk` and `Slow`) with monsters in view, not while a teleport is already coming.
+`teleport=2` also reads it with 3 or more hostiles in view, one dangerous, where the rules wouldn't rage.
+Both are off by default: neither beat the plain rules ("The teleport rule on its own", above).
 
 ## What it sees
 
@@ -678,7 +780,7 @@ have sight fields and 24,346 (3.0%) are marked missing. Evaluation dungeons and 
 | `src/ladder/brain/reobserve.py` | rebuilds `sight` fields for old step logs from their protocol logs |
 | `src/ladder/brain/net.py` | model file format, numpy forward pass, parity check, `Ensemble` and `load_model` |
 | `src/ladder/brain/gear.py` | ranks weapons and armour, and says which piece in the pack is better than the one in use |
-| `src/ladder/brain/policy.py` | `available`, `baseline`, `baseline_wiki`, `Style`, and `BrainTiers`, which sits in Reflex where `StubTiers` did |
+| `src/ladder/brain/policy.py` | `available`, `baseline`, `baseline_wiki`, `teleport_rule`, `Style`, and `BrainTiers`, which sits in Reflex where `StubTiers` did |
 | `docs/wiki-strategy.md` | the DCSS wiki's strategy guides, sorted by what the brain would need to use each piece of advice |
 | `src/ladder/brain/steplog.py` | `steps.jsonl` writer shared by self-play, `spike` and the cockpit |
 | `src/ladder/brain/selfplay.py` | parallel games, one process each, with a watchdog for hung reads |
@@ -779,6 +881,8 @@ In the order I would take them:
    fresh block; (b) use the network only where it is confident and the pairs agree (as `margin=1.0` did),
    and mine its confident overrides for rules; (c) if the network is to choose more often, predict the
    difference between two actions directly from paired forks instead of each action's outcome on its own.*
+   *(a) done: level on fresh blocks (−0.01 [−0.16, +0.13]); the switch `teleport=1` stays off. (b) is next;
+   mined rules need a fresh-block test each, and blocks F and G are spent.*
 4. **Promote on more than 60 dungeons.** Differences under 0.3 depths can't be seen with 60; the same
    baseline replayed varies by 0.1. 200 evaluation dungeons would take about 15 minutes per model.
 5. **The remaining dead ends**: games that hang (1 in 20 with random choices in round 4, 1 in 40

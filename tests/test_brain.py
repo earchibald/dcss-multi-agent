@@ -19,7 +19,7 @@ from ladder.brain.features import (ACTIONS, COMPONENTS, FEATURE_VERSION, MAX_MON
 from ladder.brain.net import ModelMismatch, TrainedNet, contract
 from ladder.brain.policy import (BLOCK_TURNS, FORK_DONE, IDLE_LIMIT, ITEM_PROMPTS, REPLAY_DIVERGED, UNTIL_LEVEL,
                                  BrainTiers, Style, available, baseline, heal_potion, poison_lethal_after_rage,
-                                 poison_share)
+                                 poison_share, teleport_rule)
 from ladder.brain.selfplay import summarize
 from ladder.conn import ActResult
 from ladder.interrupts import Before, Interrupt
@@ -1552,6 +1552,66 @@ def test_wiki_last_resorts_when_the_rage_is_spent():
     assert wiki(obs(inv={**inv, "teleport": 0}, **spent)) == "quaff_unknown"
     assert wiki(obs(inv={**inv, "teleport": 0, "unknown_potions": 0}, **spent)) == "read_unknown"
     assert wiki(obs(inv={**inv, "teleport": 0}, **{**spent, "hp": 9})) == "fight"       # 45%: not yet
+
+
+# --- the opt-in teleport rules (Style.teleport, policy.teleport_rule) ----------------------------
+
+def rules(o, teleport=0, blocked=frozenset()):
+    return baseline(o, available(o, False, set(blocked), False), False, teleport=teleport)
+
+
+SCROLL = {"heal": 0, "unknown_potions": 0, "unknown_scrolls": 0, "teleport": 1}
+SPENT = dict(god="Trog", status=["-Berserk", "Slow"], inv=SCROLL, n_hostiles=1, mons=[mon()])
+CROWD3 = dict(god="Trog", inv=SCROLL, n_hostiles=3,
+              mons=[mon(dx=5, threat=2), mon(dx=6), mon(dx=6, dy=1)])
+
+
+def test_teleport_rules_are_off_by_default():
+    for o in (obs(**SPENT), obs(**CROWD3)):
+        assert rules(o) == "fight"
+        assert baseline(o, available(o, False, set(), False), False) == "fight"
+    assert Style().teleport == 0
+
+
+def test_spent_after_a_rage_reads_teleportation():
+    assert rules(obs(**SPENT), 1) == "read_teleport"
+    assert rules(obs(**SPENT), 2) == "read_teleport"
+    assert rules(obs(**{**SPENT, "hp": 8}), 1) == "read_teleport"           # before the healing potion, too
+    assert rules(obs(**{**SPENT, "status": ["-Berserk"]}), 1) == "fight"    # no longer slowed
+    assert rules(obs(**{**SPENT, "status": ["Slow"]}), 1) == "fight"        # slowed by something else
+    assert rules(obs(**{**SPENT, "inv": {**SCROLL, "teleport": 0}}), 1) == "fight"
+    assert rules(obs(**{**SPENT, "n_hostiles": 0, "mons": []}), 1) != "read_teleport"
+
+
+def test_no_second_scroll_while_a_teleport_is_coming():
+    o = obs(**{**SPENT, "status": ["-Berserk", "Slow", "Tele"], "inv": {**SCROLL, "teleport": 2}})
+    assert rules(o, 2) == "fight"
+    assert teleport_rule(o, 2) == (False, False)
+
+
+def test_spent_rule_needs_the_scroll_to_be_readable():
+    assert rules(obs(**{**SPENT, "status": ["-Berserk", "Slow", "Conf"]}), 1) == "fight"
+    assert rules(obs(**SPENT), 1, blocked={"read_teleport"}) == "fight"
+
+
+def test_crowded_reads_teleportation_only_at_level_2_and_after_a_rage():
+    assert rules(obs(**CROWD3), 1) == "fight"
+    assert rules(obs(**CROWD3), 2) == "read_teleport"
+    # the rules would rage here (something tough within 2): the rage comes first
+    close = obs(**{**CROWD3, "mons": [mon(dx=2, threat=2), mon(dx=6), mon(dx=6, dy=1)]})
+    assert rules(close, 2) == "berserk"
+    assert rules(obs(**{**CROWD3, "n_hostiles": 2, "mons": CROWD3["mons"][:2]}), 2) == "fight"     # two
+    weak = [mon(dx=5), mon(dx=6), mon(dx=6, dy=1)]
+    assert rules(obs(**{**CROWD3, "mons": weak}), 2) == "fight"                                    # none dangerous
+
+
+def test_teleport_switch_is_a_style_and_old_runs_still_match():
+    import argparse
+    from ladder.brain.cli import _style
+    assert _style(argparse.Namespace(style=["teleport=2"])).teleport == 2.0
+    old = {k: v for k, v in Style().to_dict().items() if k != "teleport"}      # a run saved before the switch
+    assert {**Style().to_dict(), **old} == Style().to_dict()
+    assert {**Style().to_dict(), **old} != Style(teleport=1).to_dict()
 
 
 def test_inventory_largest_stack_first():

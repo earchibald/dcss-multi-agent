@@ -55,6 +55,8 @@ class Style:
     margin: float = 0.25      # leave the rules of thumb only for an action predicted this much better
     min_count: float = 40     # ...and only for actions the model saw at least this often in training
     wiki: float = 0.0         # 1 = the rules of thumb follow the DCSS wiki's guides (docs/wiki-strategy.md)
+    teleport: float = 0.0     # 1 = the rules of thumb read teleportation when spent after a rage (`teleport_rule`),
+                              # 2 = also when outnumbered by something dangerous. Off by default.
 
     def weights(self) -> np.ndarray:
         return np.asarray([getattr(self, c) for c in COMPONENTS], dtype=np.float32)
@@ -152,10 +154,32 @@ def available(obs: dict, level_explored: bool, blocked: set[str], rest_stalled: 
     return [a for a in ACTIONS if can[a] and a not in blocked]
 
 
-def baseline(obs: dict, avail: list[str], level_explored: bool, wiki: bool = False) -> str:
+CROWD = 3                 # hostiles in view that count as outnumbered for `teleport_rule` 2
+
+
+def teleport_rule(obs: dict, level: int) -> tuple[bool, bool]:
+    """When the opt-in teleport rules (`Style.teleport`) would read teleportation: (spent, crowded).
+
+    - spent (level 1 and up): just out of a rage, exhausted and slowed (`-Berserk` with `Slow`), with
+      monsters in view. Another rage is refused and every action takes twice as long.
+    - crowded (level 2): at least CROWD hostiles in view, one of them dangerous (webtiles threat 2 or 3).
+      `baseline` puts it after a rage, so it covers a fight the rules wouldn't rage at, or can't.
+    Neither while a teleport is already coming (`Tele`): a second scroll would cancel it. That the scroll can
+    be read at all is `available`'s part.
+    """
+    status = obs.get("status") or []
+    if level < 1 or not obs["n_hostiles"] or "Tele" in status:
+        return False, False
+    spent = "-Berserk" in status and "Slow" in status
+    crowded = level >= 2 and obs["n_hostiles"] >= CROWD and any(m["threat"] >= 2 for m in obs["mons"])
+    return spent, crowded
+
+
+def baseline(obs: dict, avail: list[str], level_explored: bool, wiki: bool = False, teleport: int = 0) -> str:
     """Rules of thumb: the stub's behaviour, plus drinking a healing potion instead of giving up.
 
     `wiki` plays the variant that follows the DCSS wiki's strategy guides instead (`Style.wiki`).
+    `teleport` 1 or 2 adds the opt-in teleport rules (`teleport_rule`, `Style.teleport`); 0 leaves them out.
     """
     if wiki:
         return baseline_wiki(obs, avail, level_explored)
@@ -164,7 +188,9 @@ def baseline(obs: dict, avail: list[str], level_explored: bool, wiki: bool = Fal
     if obs["n_hostiles"]:
         near = [m for m in obs["mons"] if max(abs(m["dx"]), abs(m["dy"])) <= 2]
         rage = frac <= 0.5 or any(m["threat"] >= 2 for m in near) or len(near) >= 3
-        order = cure + (["berserk"] if rage and near else []) + (["quaff_heal"] if frac <= 0.5 else []) + \
+        spent, crowded = teleport_rule(obs, teleport)
+        order = cure + (["read_teleport"] if spent else []) + (["berserk"] if rage and near else []) + \
+                (["quaff_heal"] if frac <= 0.5 else []) + (["read_teleport"] if crowded else []) + \
                 ["fight", "descend", "flee_up", "wait"]
     else:
         order = cure + ["wield", "wear"] + (["rest"] if frac < 0.8 else ["read_unknown", "quaff_unknown"]) + \
@@ -274,7 +300,7 @@ class BrainTiers(StubTiers):
             raise Escalation(f"{self.level_steps} choices on this level without leaving it")
         if not avail:
             raise Escalation("nothing the brain can do here" + (f" (tried: {', '.join(sorted(blocked))})" if blocked else ""))
-        base = baseline(obs, avail, self.level_explored, wiki=bool(self.style.wiki))
+        base = baseline(obs, avail, self.level_explored, wiki=bool(self.style.wiki), teleport=int(self.style.teleport))
         choice, source, extra = base, "baseline", {}
         if self.fork_turn is not None and self.horizon and state.turn > self.fork_turn + self.horizon:
             raise Escalation(FORK_DONE)
