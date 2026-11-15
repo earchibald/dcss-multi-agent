@@ -1614,6 +1614,85 @@ def test_teleport_switch_is_a_style_and_old_runs_still_match():
     assert {**Style().to_dict(), **old} != Style(teleport=1).to_dict()
 
 
+# --- the opt-in rule to rest out a rage before going on (Style.recover, policy.recovering) -----------
+
+def calm_rules(o, recover=0, explored=False, stalled=False, blocked=frozenset()):
+    avail = available(o, explored, set(blocked), stalled, recover=bool(recover))
+    return baseline(o, avail, explored, recover=recover)
+
+
+STAIRS_KNOWN = dict(dist_down=6, god="Trog")
+
+
+def test_recover_is_off_by_default():
+    assert Style().recover == 0
+    for status in (["-Berserk", "Slow"], ["Berserk"]):
+        o = obs(status=status, **STAIRS_KNOWN)
+        assert calm_rules(o, explored=True) == "descend"
+        assert calm_rules(o) == "explore"
+        assert "rest" not in available(o, True, set(), False)       # full HP: nothing to rest for, as before
+
+
+def test_recover_rests_before_the_stairs_while_spent():
+    for status in (["-Berserk", "Slow"], ["-Berserk"], ["Slow"], ["Berserk"]):
+        o = obs(status=status, **STAIRS_KNOWN)
+        assert calm_rules(o, 1, explored=True) == "rest", status
+        assert calm_rules(o, 2, explored=True) == "rest", status
+    fresh = obs(**STAIRS_KNOWN)
+    assert calm_rules(fresh, 1, explored=True) == "descend"
+    assert calm_rules(fresh, 2, explored=True) == "descend"
+
+
+def test_recover_level_1_explores_on_and_level_2_waits():
+    o = obs(status=["-Berserk", "Slow"], **STAIRS_KNOWN)
+    assert calm_rules(o, 1) == "explore"
+    assert calm_rules(o, 2) == "rest"
+
+
+def test_recover_rests_at_full_hp_even_after_a_rest_that_healed_nothing():
+    o = obs(status=["-Berserk"], **STAIRS_KNOWN)
+    assert "rest" in available(o, True, set(), True, recover=True)
+    assert calm_rules(o, 1, explored=True, stalled=True) == "rest"
+    # a rest that passed no time at all is set aside like any other action: then on to the stairs
+    assert calm_rules(o, 1, explored=True, blocked={"rest"}) == "descend"
+    # not spent: a stalled rest is still ruled out
+    assert "rest" not in available(obs(hp=10, **STAIRS_KNOWN), True, set(), True, recover=True)
+
+
+def test_recover_never_rests_with_something_in_view():
+    o = obs(status=["-Berserk", "Slow"], n_hostiles=1, mons=[mon(dx=5)], **STAIRS_KNOWN)
+    assert "rest" not in available(o, True, set(), False, recover=True)
+    assert calm_rules(o, 2, explored=True) == "fight"
+
+
+def test_recover_keeps_the_other_calm_choices_first():
+    o = obs(status=["-Berserk", "Slow"], hp=10, **STAIRS_KNOWN)          # hurt: the usual rest, either way
+    assert calm_rules(o, 0, explored=True) == "rest"
+    unknown = obs(status=["-Berserk"], inv={"heal": 0, "unknown_potions": 1, "unknown_scrolls": 0, "teleport": 0},
+                  **STAIRS_KNOWN)
+    assert calm_rules(unknown, 2, explored=True) == "quaff_unknown"
+
+
+def test_recover_switch_is_a_style_and_old_runs_still_match():
+    import argparse
+    from ladder.brain.cli import _style
+    assert _style(argparse.Namespace(style=["recover=2"])).recover == 2.0
+    old = {k: v for k, v in Style().to_dict().items() if k != "recover"}       # a run saved before the switch
+    assert {**Style().to_dict(), **old} == Style().to_dict()
+    assert {**Style().to_dict(), **old} != Style(recover=1).to_dict()
+
+
+def test_recover_reaches_the_rules_inside_brain_tiers():
+    seen = {}
+    for level in (0, 1):
+        tiers = BrainTiers(style=Style(recover=level), rng=random.Random(0))
+        state = stairs_state()
+        state.player["status"] = [{"light": "-Berserk"}, {"light": "Slow"}]
+        tiers.level_explored = True
+        seen[level] = tiers.next_action(state)
+    assert seen[0] == "travel" and seen[1] == "rest"
+
+
 def test_inventory_largest_stack_first():
     state = with_inv(make_state(["@."]), s0=item("fizzy potion", POTIONS, 1, letter=ord("c")),
                      s1=item("murky potion", POTIONS, 3, letter=ord("d")))

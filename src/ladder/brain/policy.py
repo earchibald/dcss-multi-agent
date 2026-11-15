@@ -57,6 +57,8 @@ class Style:
     wiki: float = 0.0         # 1 = the rules of thumb follow the DCSS wiki's guides (docs/wiki-strategy.md)
     teleport: float = 0.0     # 1 = the rules of thumb read teleportation when spent after a rage (`teleport_rule`),
                               # 2 = also when outnumbered by something dangerous. Off by default.
+    recover: float = 0.0      # 1 = with nothing in view, rest out a rage and its exhaustion (`recovering`) before
+                              # taking the stairs, 2 = before exploring on as well. Off by default.
 
     def weights(self) -> np.ndarray:
         return np.asarray([getattr(self, c) for c in COMPONENTS], dtype=np.float32)
@@ -120,12 +122,30 @@ def needs_cure(obs: dict) -> bool:
     return poison_share(obs) > SERIOUS_POISON and obs["inv"].get("curing", 0) > 0
 
 
-def available(obs: dict, level_explored: bool, blocked: set[str], rest_stalled: bool) -> list[str]:
-    """The actions that can be carried out right now, in ACTIONS order."""
+RECOVERING = ("Berserk", "-Berserk", "Slow")     # a rage, the exhaustion after it, the slowness it leaves
+
+
+def recovering(obs: dict) -> bool:
+    """In a rage or just out of one: `Berserk`, `-Berserk` (exhausted: no second rage) or `Slow` showing.
+
+    The end of a rage leaves the character slowed for 14-36 turns and unable to rage again for twice that
+    (`player_end_berserk`). Resting (`5`) passes that time even at full HP ("You start waiting."), and a rage
+    with nothing to hit wears off sooner (`_do_berserk_no_combat_penalty`).
+    """
+    return any(x in RECOVERING for x in obs.get("status") or [])
+
+
+def available(obs: dict, level_explored: bool, blocked: set[str], rest_stalled: bool, recover: bool = False) -> list[str]:
+    """The actions that can be carried out right now, in ACTIONS order.
+
+    `recover` (`Style.recover`): `rest` is also possible at full HP while `recovering`, and a rest that left HP
+    where it was doesn't rule it out then (HP is full; the rest was for the time).
+    """
     inv, hostiles = obs["inv"], obs["n_hostiles"] > 0
     adjacent = any(max(abs(m["dx"]), abs(m["dy"])) <= 1 for m in obs["mons"])
     hurt = obs["hp"] < obs["hp_max"]
     status = obs.get("status") or []
+    waiting_out = recover and recovering(obs)
     calm = not any(x.startswith("Berserk") for x in status)             # no potions or scrolls in a rage
     can_read = calm and not any(x.startswith(("silenced", "Conf")) for x in status)
     # curing can be drunk at full HP while poisoned or confused; heal wounds can't
@@ -133,7 +153,7 @@ def available(obs: dict, level_explored: bool, blocked: set[str], rest_stalled: 
     can = {
         "explore": not hostiles and not level_explored,
         "fight": hostiles,
-        "rest": not hostiles and (hurt or obs["mp"] < obs["mp_max"]) and not rest_stalled,
+        "rest": not hostiles and (hurt or obs["mp"] < obs["mp_max"] or waiting_out) and (not rest_stalled or waiting_out),
         "descend": obs["on_down"] or obs["dist_down"] >= 0,
         # the stairs up from D:1 leave the dungeon
         "flee_up": hostiles and (obs["on_up"] or obs["dist_up"] >= 0)
@@ -175,11 +195,15 @@ def teleport_rule(obs: dict, level: int) -> tuple[bool, bool]:
     return spent, crowded
 
 
-def baseline(obs: dict, avail: list[str], level_explored: bool, wiki: bool = False, teleport: int = 0) -> str:
+def baseline(obs: dict, avail: list[str], level_explored: bool, wiki: bool = False, teleport: int = 0,
+             recover: int = 0) -> str:
     """Rules of thumb: the stub's behaviour, plus drinking a healing potion instead of giving up.
 
     `wiki` plays the variant that follows the DCSS wiki's strategy guides instead (`Style.wiki`).
     `teleport` 1 or 2 adds the opt-in teleport rules (`teleport_rule`, `Style.teleport`); 0 leaves them out.
+    `recover` 1 rests out a rage and its exhaustion (`recovering`) with nothing in view before taking the
+    stairs, 2 before exploring on as well (`Style.recover`); 0 leaves it out. `avail` must then come from
+    `available(..., recover=True)`, or `rest` is seldom there at full HP.
     """
     if wiki:
         return baseline_wiki(obs, avail, level_explored)
@@ -193,8 +217,11 @@ def baseline(obs: dict, avail: list[str], level_explored: bool, wiki: bool = Fal
                 (["quaff_heal"] if frac <= 0.5 else []) + (["read_teleport"] if crowded else []) + \
                 ["fight", "descend", "flee_up", "wait"]
     else:
+        onward = ["descend"] if level_explored else ["explore"]
+        if recover and recovering(obs) and (level_explored or recover >= 2):
+            onward = ["rest"] + onward              # arrive, or explore on, able to rage and at full speed
         order = cure + ["wield", "wear"] + (["rest"] if frac < 0.8 else ["read_unknown", "quaff_unknown"]) + \
-                (["descend"] if level_explored else ["explore"]) + ["rest", "descend", "explore"]
+                onward + ["rest", "descend", "explore"]
     return next((a for a in order if a in avail), avail[0])
 
 
@@ -287,7 +314,8 @@ class BrainTiers(StubTiers):
             "hp_delta": 0.0 if self.prev_frac is None else frac - self.prev_frac, "last_action": self.last_action})
         self.prev_frac = frac
         blocked = {a for a, until in self.blocked.items() if state.turn < until}
-        avail = available(obs, self.level_explored, blocked, self.rest_stalled_at == (state.turn, state.hp))
+        avail = available(obs, self.level_explored, blocked, self.rest_stalled_at == (state.turn, state.hp),
+                          recover=bool(self.style.recover))
         if not avail and "wait" not in blocked and self.idle < IDLE_LIMIT:
             # Everything else went nowhere: let a turn pass. Now and then look again, since "partly
             # explored, can't reach some places" stops being true once a cloud of gas has cleared.
@@ -300,7 +328,8 @@ class BrainTiers(StubTiers):
             raise Escalation(f"{self.level_steps} choices on this level without leaving it")
         if not avail:
             raise Escalation("nothing the brain can do here" + (f" (tried: {', '.join(sorted(blocked))})" if blocked else ""))
-        base = baseline(obs, avail, self.level_explored, wiki=bool(self.style.wiki), teleport=int(self.style.teleport))
+        base = baseline(obs, avail, self.level_explored, wiki=bool(self.style.wiki), teleport=int(self.style.teleport),
+                        recover=int(self.style.recover))
         choice, source, extra = base, "baseline", {}
         if self.fork_turn is not None and self.horizon and state.turn > self.fork_turn + self.horizon:
             raise Escalation(FORK_DONE)

@@ -7,6 +7,14 @@ runs in numpy in well under a millisecond. It is the same idea as the trained br
 
 ## Where it stands
 
+**2026-11-14, night: a diagnosis of where the rules of thumb lose games** (section "Where the rules of thumb
+lose games", below). A rage stops autoexplore, so the rules leave most levels from D:4 on mid-way, raging or
+exhausted (64% of all level exits), arrive under qw's level and unable to rage, and a quarter of all games
+end within 50 turns of such an arrival. Resting the rage out before the stairs (`--style recover=1`, off by
+default) is +0.29 [−0.01, +0.59] on the tuning blocks A and C, untested on a fresh block. The larger loss is
+in the fights themselves: at the same XL and depth the rules die on a level about twice as often as qw,
+mostly after a rage runs out with monsters left. 6% of games stop alive, stuck on a staircase.
+
 **2026-11-14, evening:** the rule `v5-seen` seemed to have found (read teleportation when spent after a rage,
 monsters in view) is in the rules of thumb as an opt-in switch, `--style teleport=1`, and does not beat them:
 +0.10 on the tuning blocks, −0.01 [−0.16, +0.13] on two fresh ones (pre-registered). It stays off. Still
@@ -539,6 +547,189 @@ Paired by dungeon over games both finished and neither resumed a stale save; 95%
 - Blocks F (570000–) and G (580000–) are now spent. Runs: `runs/brain/v5/games/{A,C}-rules-h`,
   `{A,C}-tele{1,2}`, `{F,G}-rules`, `{F,G}-tele1`; scripts in the job's `brain-v5d/` scratch directory.
 
+#### Where the rules of thumb lose games (2026-11-14, night)
+
+A diagnosis from games already played, not another knob. Source: the 786 finished plain-rules games on the
+spent blocks A, C, F and G (`{A,C}-rules-h`, `{F,G}-rules`; none resumed a stale save), with each death's
+DCSS morgue file (copied from the server: exact killer, statuses, what was really in the pack) matched to
+its game by seed and turn count (all 719 deaths matched). qw's five base runs (988 finished games, other
+dungeons) are the reference for a stronger bot with the same character. Scripts in the job's `brain-v5e/`.
+
+**Summary.**
+
+- **One mechanism explains most of the early exits from a level, and a quarter of the deaths.** DCSS
+  refuses to autoexplore during a rage ("Calm down first, please."). Two refusals and the brain sets
+  `explore` aside for 50 turns (`BLOCK_TURNS`), so the rules head for the stairs and go down, mid-level,
+  raging or exhausted. **64% of all level exits happen that way, and 90% from D:4 on**; only 28% of exits
+  follow a level explored to the end. So the bot skips most of every level from D:4, spends a quarter of
+  qw's turns per level (about 250 against 950), arrives a level or two under qw, and arrives slowed and
+  unable to rage: **25% of all games end with a death within 50 turns (median 8) of such an arrival**.
+- **Fixing that helps less than it removes.** A switch that rests a rage out before taking the stairs
+  (`--style recover=1`, below) cuts arrivals raging or spent from 57% to 9% and is **+0.29 [−0.01, +0.59]**
+  on the tuning blocks A and C (383 dungeons): the best lead so far, not yet tested on a fresh block. Also
+  resting before exploring on (`recover=2`) brings XL on arrival to within half a level of qw's and is level
+  (−0.01 [−0.32, +0.30]). Either way most of the removed deaths reappear later, in fights.
+- **The rules lose fights that qw survives at the same level and depth.** Arriving on D:3–9 with XL one
+  above the depth, the rules die on that level 17% of the time (24% with `recover=2`), qw 9%. qw's chance of
+  dying on a level stays at 6–10% from D:4 to D:10; the rules' rises from 15% to 50%. What kills it is
+  mostly a rage that runs out with the fight still on: in the plain rules that happened 1,031 times, and
+  30% died within 50 turns (67% with four or more hostiles left, 54% under half HP).
+- **Not deaths: 6% of games stop at the 1,500-choice limit on one level**, 41 of 49 on D:1–3, all but a
+  few pressing `>` on a staircase that the game answers with "You can't go down here!" one step later (a
+  reply one key behind, the dead end listed in Next, 5). Another 2% stop with nothing possible.
+
+**Death and ending causes.** One cause per game, the first that applies in this order. "The last fight"
+is the run of choices on the death level since nothing was last in view. "Spent" is DCSS's exhaustion
+after a rage: `-Berserk` (no second rage yet) and usually `Slow` (every action takes twice as long). The
+bound in the last column is a back-of-envelope ceiling, not a measurement: a game that ended at depth d is
+given what the rules' own games reach once past d, E[max depth | max depth > d], as if every such ending
+were avoided and the character then did as well as the average survivor; summed and divided by all 786.
+
+| cause | games | share | D:1–3 | D:4–6 | D:7+ | mean depth | arrived below qw's median XL | known teleport scroll held | bound if avoided |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| took the stairs raging or spent, died within 50 turns of arriving | 196 | 24.9% | 23 | 103 | 70 | 5.93 | 161 | 55 | +0.65 |
+| walked into the last fight already spent (same level) | 119 | 15.1% | 27 | 53 | 39 | 5.61 | 82 | 36 | +0.42 |
+| raged in the last fight, the rage ran out before the fight did | 226 | 28.8% | 43 | 85 | 98 | 6.05 | 173 | 71 | +0.77 |
+| died still raging (the rage was not enough) | 88 | 11.2% | 32 | 30 | 26 | 4.95 | 59 | 22 | +0.33 |
+| killed in melee, never raged (no reason under the rules) | 44 | 5.6% | 12 | 18 | 14 | 5.59 | 31 | 10 | +0.16 |
+| poisoned to death (none of the above) | 23 | 2.9% | 8 | 7 | 8 | 5.00 | 15 | 9 | +0.09 |
+| killed from range or by a spell (none of the above) | 13 | 1.7% | 2 | 7 | 4 | 6.54 | 10 | 4 | +0.04 |
+| autofight refused (confused, out of reach) and it stood or fled | 10 | 1.3% | 5 | 3 | 2 | 4.50 | 6 | 0 | +0.04 |
+| *not a death*: 1,500 choices on one level (stuck on a staircase) | 49 | 6.2% | 41 | 7 | 1 | 2.24 | | | +0.25 |
+| *not a death*: nothing the brain can do | 18 | 2.3% | 8 | 7 | 3 | 4.11 | | | +0.08 |
+
+Read alongside it (deaths only, not exclusive): spent at death 78%; 59% had four or more hostiles in view at
+once; 30% died holding a scroll of teleportation (29% knew it), 44% some escape scroll (teleportation,
+blinking, fear, fog); 5% a healing potion; 9% died of poison in all; 17% were killed from range or by a
+spell in all. Commonest killers: gnoll 58, orc wizard 52, wight 34, killer bee 31, orc 26, Sigmund 23, ogre
+22. qw's: gnoll 79, Sigmund 51, orc priest 36, orc wizard 31, electric eel 25 (the same early killers; qw's
+later deaths are in Lair and other branches, where the rules never go).
+
+**Pacing against qw.** XL on first arrival at each depth (mean), and the share of games arriving that die
+on that level. qw arrives later and stronger, and its per-level death rate barely rises with depth.
+
+| depth | rules: arriving | XL | turn (median) | died there | qw: arriving | XL | turn (median) | died there |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| D:2 | 750 | 1.9 | 607 | 9% | 966 | 2.1 | 895 | 10% |
+| D:3 | 666 | 3.1 | 1049 | 12% | 860 | 3.6 | 1750 | 10% |
+| D:4 | 570 | 4.2 | 1475 | 15% | 776 | 4.9 | 2617 | 8% |
+| D:5 | 473 | 5.3 | 1826 | 23% | 705 | 6.4 | 3595 | 8% |
+| D:6 | 376 | 6.1 | 2097 | 30% | 648 | 7.6 | 4616 | 6% |
+| D:7 | 258 | 6.9 | 2394 | 37% | 606 | 8.5 | 5644 | 9% |
+| D:8 | 163 | 7.5 | 2747 | 39% | 556 | 9.1 | 6651 | 10% |
+| D:9 | 99 | 8.1 | 3075 | 48% | 446 | 10.2 | 7740 | 8% |
+| D:10 | 48 | 8.6 | 3364 | 50% | 364 | 11.3 | 9202 | 6% |
+
+| XL on arrival against the depth (D:3–9 pooled) | rules: arrivals | died on that level | rules `recover=2` (A only) | qw: arrivals | died on that level |
+| --- | --- | --- | --- | --- | --- |
+| two or more below | 84 | 36% | 3, 67% | 19 | 21% |
+| one below | 545 | 32% | 30, 33% | 108 | 19% |
+| equal | 1249 | 22% | 195, 18% | 819 | 12% |
+| one above | 614 | 17% | 289, 24% | 2081 | 9% |
+| two or more above | 113 | 9% | 125, 16% | 1570 | 5% |
+
+Share of deaths by depth: rules 21% on D:1–3, 43% on D:4–6, 29% on D:7–9, 7% deeper; qw 21%, 17%, 15%, 8%,
+and 39% in branches. So both: **the rules dive (by accident, through the explore block) and arrive under
+qw's level, and at the same level they still die about twice as often.** Removing the dive (below) shows the
+second is what holds the depth down.
+
+How each level is left (3,520 exits): explore set aside, character spent 36%, raging 27%, fresh 4%; level
+explored 31%; fell through a trapdoor 1%. From D:4 down to D:10, 83–91% of exits are with explore set aside.
+With `recover=2` on block A, 79% of exits follow a level explored to the end.
+
+**What each cause is worth.** The bounds in the cause table are ceilings. For the top causes there is
+also a measurement:
+
+- *Took the stairs, or walked into a fight, spent* (40% of games, ceiling +1.07 together). Measured
+  directly by a switch that removes it (`recover`, next paragraph), played on A and C: whole games, paired
+  by dungeon. `recover=1` removes five arrivals in six that were raging or spent (deaths of the first kind
+  94 → 24 on A + C) and gains +0.29 [−0.01, +0.59], a quarter of the ceiling: the rest of those deaths
+  happen a level or so later, mostly when a rage runs out mid-fight (110 → 140). The saved character is not
+  an average survivor; it is still the bot that loses fights.
+- *The rage ran out before the fight did* (29%, ceiling +0.77). No fork measures it: the rules choose
+  `fight` again on the next choice after any single different action, so a one-action fork changes
+  nothing, and the existing forks (`ladder brain forks`) refuse evaluation seeds. The nearest measurement
+  is the teleport switch above: reading teleportation at exactly that moment (spent, monsters in view) was
+  −0.01 [−0.16, +0.13] on F and G. Of the 1,031 times a rage ran out with something still in view, 30% died
+  within 50 turns: 19% with one hostile left, 33% with two or three, 67% with four or more; 54% under half
+  HP. The stairs up were known in 192 of the 219 deaths of this kind, within 10 steps in 89.
+- *Stuck on a staircase* (6%, ceiling +0.25; +0.29 to +0.38 per block). Not a death, so the ceiling is
+  close to the value: these characters were alive, mostly on D:1–3, and stopped. A fix to the reply that
+  comes one key late would recover most of it. With `recover=2` the game spends more choices per level and
+  it happens more (13 → 18 on A).
+
+**The switch, `--style recover=1|2` (off by default).** `policy.recovering` is true while `Berserk`,
+`-Berserk` or `Slow` shows. With nothing in view and `recovering`, the rules rest (`5`; at full HP DCSS
+"starts waiting", so the turns pass) before taking the stairs (`recover=1`), and also before exploring on
+(`recover=2`). `available(..., recover=True)` lets `rest` be chosen at full HP then, and a rest that left
+HP where it was doesn't rule it out (it was for the time, not the HP). A rest that passes no time at all is
+set aside like any other action. Resting while still raging also ends the rage sooner (DCSS shortens a
+rage with nothing to hit). In the smoke games a spell of exhaustion took two rests, about 25–30 turns.
+
+Tuning on A and C only (whole games against the plain rules replayed with today's code; paired by dungeon,
+none stale, 95% bootstrap). Here play diverges from the first rage, so every game differs and the
+interval is wide.
+
+| arm | block | finished (hung) | mean depth | died | died on D:1–3 | XL | turns | arrivals raging or spent | vs rules | 95% interval | deeper / same / shallower |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| rules of thumb | A | 197 (3) | 5.46 | 179 | 35 | 5.62 | 2046 | 55% | | | |
+| `recover=2` | A | 195 (5) | 5.51 | 169 | 25 | 6.62 | 3639 | 11% | +0.04 | [−0.43, +0.50] | 69 / 56 / 69 |
+| rules of thumb | C | 194 (6) | 5.36 | 173 | 44 | 5.66 | 2023 | 59% | | | |
+| `recover=2` | C | 196 (4) | 5.39 | 172 | 44 | 6.35 | 3541 | 11% | −0.06 | [−0.48, +0.36] | 65 / 59 / 67 |
+| `recover=2`, A + C | | | | | | | | | −0.01 | [−0.32, +0.30] | 134 / 115 / 136 |
+| `recover=1` | A | 195 (5) | 5.85 | 171 | 23 | 6.56 | 3227 | 8% | +0.39 | [−0.02, +0.81] | 80 / 58 / 56 |
+| `recover=1` | C | 194 (6) | 5.54 | 174 | 44 | 6.13 | 3023 | 9% | +0.18 | [−0.24, +0.60] | 70 / 55 / 64 |
+| **`recover=1`, A + C** | | | | | | | | | **+0.29** | **[−0.01, +0.59]** | 150 / 113 / 120 |
+| `recover=1` − `recover=2`, A + C | | | | | | | | | +0.24 | [−0.08, +0.56] | 145 / 129 / 111 |
+
+- **`recover=1` is the better level**, and the only arm since the champion with a tuning-block interval
+  that nearly clears zero. It rests in 177–179 of ~195 games per block (5,000–5,500 rests), so it touches
+  almost every game; it plays 50% more turns and ends about 0.5–0.9 XL higher.
+- Resting before exploring too (`recover=2`) adds nothing: it explores whole levels (79% of exits follow
+  a level explored to the end, against 52% with `recover=1` and 31% plain), gains XP, and meets more fights
+  per level. Arriving fresh is what pays, not exploring more.
+- Causes on A + C (cause table's order; plain → `recover=1` → `recover=2`): took the stairs spent 94 → 24 →
+  33; walked into the last fight spent 59 → 66 → 70; rage ran out 110 → 140 → 129; died raging 42 → 47 → 56;
+  melee without a rage 20 → 41 → 28; stuck on a staircase 29 → 32 → 35. Deaths on D:1–3 on A: 35 → 23 → 25.
+- Not confirmed: A and C are where it was tuned (two levels tried). The pre-registration for a fresh block
+  is the orchestrator's to write; `recover=1` against the plain rules is the configuration it would test.
+
+**Proposed rule changes, ranked by what the evidence supports** (none tested on a fresh block):
+
+1. **Rest out a rage before taking the stairs: `--style recover=1`** (cause: took the stairs raging or
+   spent; 25% of games; ceiling +0.65). Implemented, off by default; +0.29 [−0.01, +0.59] on A + C
+   (tuning); touches about 90% of games. The candidate for a fresh-block test.
+2. **Fix the staircase dead end** (cause: stuck on a staircase; 6% of games, 41 of 49 on D:1–3; ceiling
+   +0.25, and close to it since these characters are alive). When `>` on a staircase is answered "You
+   can't go down here!", the replies are a key behind: catch up (`Connection.catch_up()`, as before menus)
+   before the next key. A bug fix rather than a rule; it changes nothing else, so it should show most of
+   its +0.25 wherever it is tested, and adds to rule 1.
+3. **Retreat when a rage runs out mid-fight** (cause: rage ran out; 29% of games, 36% under `recover=1`;
+   ceiling +0.77, +1.10 under `recover=1`). Spent, with two or more hostiles in view and the stairs up
+   known: walk to them and go up (committed, as the stairs forks commit, since the rules would otherwise
+   turn and fight after one step), then rest out the exhaustion upstairs (`recover`). It targets the moments
+   that kill: 441 of the 1,031 rage endings had two or more hostiles left, and 40% of those died within 50
+   turns. The stairs up were within 10 steps in 89 of 219 such deaths. Caution: the teleport switch acted
+   at the same moments and gained nothing, and adjacent monsters follow up the stairs, so the gain may be
+   well under the ceiling.
+
+Not proposed, for want of evidence: raging later (the rules rage at the first threat-2 monster within two
+squares; 59% of deaths had four or more hostiles at once), and drinking before the rage (the wiki variant
+did that and came out behind).
+
+- **Verified**: every count and table in this section; the morgue matched to every death (seed, turn count,
+  time); that `explore` is set aside after "Calm down first, please." and that the rules then go down
+  (protocol logs, step logs); that `recover` rests pass 10–30 turns at full HP and end the exhaustion
+  (smoke games); that the switch off leaves play unchanged (unit tests; the code path is not entered).
+- **Inferred**: that the "one key behind" reply causes the staircase loop (the protocol shows `>`
+  followed by a step and "You can't go down here!" one key later, but the cause in `act()` was not traced);
+  the ceilings, which assume the saved character does as well as the average survivor, and the `recover`
+  arms show it doesn't; that qw's lower death rate comes from its fighting (retreat, escapes, choosing
+  ground) rather than from its dungeons: qw played other seeds, so its numbers are a reference, not a pair.
+- Runs: `runs/brain/v5/games/{A,C}-recover{1,2}`; the 8-game smoke test in `runs/brain/v5e/`. Scripts
+  (`gather.py`, `flags.py`, `causes.py`, `pace.py`, `pace_xl.py`, `departures.py`, `rage_end.py`, `arms.py`)
+  and the copied morgues in the job's `brain-v5e/` scratch directory.
+
 ## What carried over from s1-battle, and what couldn't
 
 | s1-battle | here |
@@ -618,6 +809,11 @@ the measurement and the rest of what the guides say.
 after a rage (`-Berserk` and `Slow`) with monsters in view, not while a teleport is already coming.
 `teleport=2` also reads it with 3 or more hostiles in view, one dangerous, where the rules wouldn't rage.
 Both are off by default: neither beat the plain rules ("The teleport rule on its own", above).
+
+`--style recover=1` rests out a rage and the exhaustion after it (`Berserk`, `-Berserk` or `Slow`,
+`policy.recovering`) with nothing in view before taking the stairs; `recover=2` before exploring on as well.
+Off by default: `recover=1` is +0.29 [−0.01, +0.59] on the tuning blocks A and C, `recover=2` level; neither
+has been tried on a fresh block ("Where the rules of thumb lose games", above).
 
 ## What it sees
 
@@ -780,7 +976,7 @@ have sight fields and 24,346 (3.0%) are marked missing. Evaluation dungeons and 
 | `src/ladder/brain/reobserve.py` | rebuilds `sight` fields for old step logs from their protocol logs |
 | `src/ladder/brain/net.py` | model file format, numpy forward pass, parity check, `Ensemble` and `load_model` |
 | `src/ladder/brain/gear.py` | ranks weapons and armour, and says which piece in the pack is better than the one in use |
-| `src/ladder/brain/policy.py` | `available`, `baseline`, `baseline_wiki`, `teleport_rule`, `Style`, and `BrainTiers`, which sits in Reflex where `StubTiers` did |
+| `src/ladder/brain/policy.py` | `available`, `baseline`, `baseline_wiki`, `teleport_rule`, `recovering`, `Style`, and `BrainTiers`, which sits in Reflex where `StubTiers` did |
 | `docs/wiki-strategy.md` | the DCSS wiki's strategy guides, sorted by what the brain would need to use each piece of advice |
 | `src/ladder/brain/steplog.py` | `steps.jsonl` writer shared by self-play, `spike` and the cockpit |
 | `src/ladder/brain/selfplay.py` | parallel games, one process each, with a watchdog for hung reads |
@@ -883,6 +1079,11 @@ In the order I would take them:
    difference between two actions directly from paired forks instead of each action's outcome on its own.*
    *(a) done: level on fresh blocks (−0.01 [−0.16, +0.13]); the switch `teleport=1` stays off. (b) is next;
    mined rules need a fresh-block test each, and blocks F and G are spent.*
+   *Diagnosis (2026-11-14, night; "Where the rules of thumb lose games"): the rules lose fights qw survives
+   at the same level and depth, mostly once a rage has run out with monsters left. A rage blocks explore
+   and sends the rules down the stairs spent; resting it out first (`recover=1`) is +0.29 [−0.01, +0.59] on
+   the tuning blocks and is the next fresh-block candidate. Then: fix the staircase dead end (5, below), and
+   retreat up the stairs when a rage runs out mid-fight.*
 4. **Promote on more than 60 dungeons.** Differences under 0.3 depths can't be seen with 60; the same
    baseline replayed varies by 0.1. 200 evaluation dungeons would take about 15 minutes per model.
 5. **The remaining dead ends**: games that hang (1 in 20 with random choices in round 4, 1 in 40
