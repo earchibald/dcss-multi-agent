@@ -1691,8 +1691,12 @@ def calm_rules(o, recover=0, explored=False, stalled=False, blocked=frozenset())
 STAIRS_KNOWN = dict(dist_down=6, god="Trog")
 
 
-def test_recover_is_off_by_default():
-    assert Style().recover == 0
+def test_recover_is_on_by_default_and_off_plays_as_before():
+    assert Style().recover == 1
+    for status in (["-Berserk", "Slow"], ["Berserk"]):
+        o = obs(status=status, **STAIRS_KNOWN)
+        assert calm_rules(o, Style().recover, explored=True) == "rest"
+    # recover=0: the rules as they were before the switch
     for status in (["-Berserk", "Slow"], ["Berserk"]):
         o = obs(status=status, **STAIRS_KNOWN)
         assert calm_rules(o, explored=True) == "descend"
@@ -1744,9 +1748,13 @@ def test_recover_switch_is_a_style_and_old_runs_still_match():
     import argparse
     from ladder.brain.cli import _style
     assert _style(argparse.Namespace(style=["recover=2"])).recover == 2.0
-    old = {k: v for k, v in Style().to_dict().items() if k != "recover"}       # a run saved before the switch
-    assert {**Style().to_dict(), **old} == Style().to_dict()
-    assert {**Style().to_dict(), **old} != Style(recover=1).to_dict()
+    assert _style(argparse.Namespace(style=["recover=0"])).recover == 0.0
+    # a run saved before the switch existed was played with it off, not with today's default
+    old = {k: v for k, v in Style(recover=0).to_dict().items() if k != "recover"}
+    assert Style.saved(old) == Style(recover=0, retreat=old["retreat"])
+    assert Style.saved(old) != Style()
+    assert Style.saved(Style().to_dict()) == Style()                         # one saved since: as saved
+    assert Style.saved(Style(recover=0).to_dict()) == Style(recover=0)
 
 
 def test_recover_reaches_the_rules_inside_brain_tiers():
@@ -1837,11 +1845,16 @@ PAIR = dict(n_hostiles=2, mons=[mon(dx=1), mon(dx=2)])
 BIG = [{**mon(dx=4), "avghp": 15, "mdam": 0}, {**mon(dx=5), "avghp": 15, "mdam": 2}]    # 15 + 10.5 HP left
 
 
-def test_retreat_and_stairs_are_off_by_default_and_play_as_before():
-    assert Style().retreat == 0 and Style().stairs == 0
+def test_retreat_is_2_and_stairs_off_by_default_and_retreat_0_plays_as_before():
+    assert Style().retreat == 2 and Style().stairs == 0
     o = obs(status=["-Berserk", "Slow"], **PAIR, **UP_KNOWN)
     assert rules(o) == "fight"
+    # the default: a rage that runs out with two left and the stairs up close goes up them
     tiers = BrainTiers(rng=random.Random(0))
+    tiers.fight_moves(1, obs(status=["Berserk"], **PAIR, **UP_KNOWN))
+    assert tiers.fight_moves(1, o) == (True, True, False)
+    # retreat=0: as before the switch
+    tiers = BrainTiers(style=Style(retreat=0), rng=random.Random(0))
     tiers.fight_moves(1, obs(status=["Berserk"], **PAIR, **UP_KNOWN))
     assert tiers.fight_moves(1, o) == (False, False, False)
     assert tiers.fight_moves(1, obs(mons=BIG, n_hostiles=2, **UP_KNOWN)) == (False, False, False)
@@ -1956,9 +1969,29 @@ def test_retreat_and_stairs_switches_are_styles_and_old_runs_still_match():
     import argparse
     from ladder.brain.cli import _style
     assert _style(argparse.Namespace(style=["retreat=1", "stairs=1"])) == Style(retreat=1, stairs=1)
-    old = {k: v for k, v in Style().to_dict().items() if k not in ("retreat", "stairs")}
-    assert {**Style().to_dict(), **old} == Style().to_dict()
-    assert {**Style().to_dict(), **old} != Style(retreat=1).to_dict()
+    # a run saved before the switches existed (before recover too) was played with all of them off
+    old = {k: v for k, v in Style().to_dict().items() if k not in ("recover", "retreat", "stairs")}
+    assert Style.saved(old) == Style(recover=0, retreat=0, stairs=0)
+    assert Style.saved(old) != Style()
+    # one saved with recover but before retreat existed
+    assert Style.saved({**old, "recover": 1.0}) == Style(recover=1, retreat=0)
+    assert Style.saved(None) == Style(recover=0, retreat=0)
+
+
+def test_evaluate_reuses_a_saved_run_only_when_its_style_matches(tmp_path, monkeypatch):
+    import argparse
+    from ladder.brain import cli
+    old = {k: v for k, v in Style().to_dict().items() if k not in ("recover", "retreat")}
+    for name in ("eval-baseline", "eval-baseline-recover=0-retreat=0"):
+        (tmp_path / name).mkdir()
+        (tmp_path / name / "results.json").write_text(json.dumps({"results": [{"game": 500000}], "style": old}))
+    played = []
+    monkeypatch.setattr(cli, "_play", lambda args, name, seeds, model, eps: played.append(name) or {"results": []})
+    # saved before recover and retreat existed: played with both off, so not today's defaults
+    for style, reused in (([], False), (["recover=0", "retreat=0"], True)):
+        played.clear()
+        s = cli.evaluate(argparse.Namespace(style=style, out=str(tmp_path)), None, 1)
+        assert (s.get("style") == old) == reused and bool(played) != reused, style
 
 
 def test_inventory_largest_stack_first():

@@ -57,15 +57,16 @@ class Style:
     wiki: float = 0.0         # 1 = the rules of thumb follow the DCSS wiki's guides (docs/wiki-strategy.md)
     teleport: float = 0.0     # 1 = the rules of thumb read teleportation when spent after a rage (`teleport_rule`),
                               # 2 = also when outnumbered by something dangerous. Off by default.
-    recover: float = 0.0      # 1 = with nothing in view, rest out a rage and its exhaustion (`recovering`) before
-                              # taking the stairs, 2 = before exploring on as well. Off by default.
+    recover: float = 1.0      # 1 = with nothing in view, rest out a rage and its exhaustion (`recovering`) before
+                              # taking the stairs, 2 = before exploring on as well, 0 = off. 1 by default since
+                              # 2026-11-15 (with retreat=2: +0.45 [+0.24, +0.65] on 996 fresh dungeons).
     calm: float = 0.0         # 1 = with nothing in view, wait out a rage instead of trying to explore (DCSS
                               # refuses: "Calm down first, please."), and don't count that refusal as the
                               # level being done (`raging`). Off by default.
-    retreat: float = 0.0      # 1 = when a rage runs out with RETREAT_LEFT or more hostiles in view and stairs up
+    retreat: float = 2.0      # 1 = when a rage runs out with RETREAT_LEFT or more hostiles in view and stairs up
                               # known, go up them (kept to on that level while `recovering`), then rest the
                               # exhaustion out before anything else; 2 = the same, only with the stairs up within
-                              # STAIRS_NEAR steps. Off by default.
+                              # STAIRS_NEAR steps; 0 = off. 2 by default since 2026-11-15 (with recover=1).
     stairs: float = 0.0       # 1 = before a fight bigger than one rage (`big_fight`), nothing adjacent and no rage
                               # on, walk to stairs up within STAIRS_NEAR steps first, once per fight. Off by default.
 
@@ -74,6 +75,21 @@ class Style:
 
     def to_dict(self) -> dict:
         return asdict(self)
+
+    @classmethod
+    def saved(cls, saved: dict | None) -> Style:
+        """The style a saved run (results.json, a step log's header) was played with.
+
+        A key missing from it was played with the value the key had when it was added
+        (`STYLE_ADDED_AS`), not with today's default: `recover` and `retreat` were added at 0 and are
+        on by default only since. Every other key's default has never changed."""
+        known = cls().to_dict()
+        return cls(**{**known, **STYLE_ADDED_AS, **{k: v for k, v in (saved or {}).items() if k in known}})
+
+
+# Style keys whose default has changed since they were added, with the value they were added at: a run
+# saved before the key existed was played with this value.
+STYLE_ADDED_AS = {"recover": 0.0, "retreat": 0.0}
 
 
 SERIOUS_POISON = 65       # % of current HP the poison will take: the game's "seriously poisoned" (status.cc)
