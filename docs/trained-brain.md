@@ -7,6 +7,15 @@ runs in numpy in well under a millisecond. It is the same idea as the trained br
 
 ## Where it stands
 
+**2026-11-15, morning: a model beats the rules of thumb in a pre-registered test for the first time.** `v6-clean3`
+(the `s12` recipe at 3 training seeds, trained only on 2,600 games played with today's code and rules) at
+`--style margin=0.6` is **+0.14 [+0.06, +0.23]** deeper than the rules alone on 600 fresh dungeons (seeds
+660000–660599; section "New default rules, and a model retrained on clean games", below). It leaves the rules at 0.1%
+of choices, almost all to read teleportation when spent after a rage, hurt and facing dangerous monsters; at the
+default margin the same model dives and loses (−0.28 on A + C). `recover=1 retreat=2` is now the default rules of
+thumb. The champion `iter2` at its default margin is −0.30 [−0.65, +0.04] against the new rules on A + C, so the
+cockpit's `--brain` should not play it at that margin. `models/brain.json` is unchanged.
+
 **2026-11-15, night: `recover=1 retreat=2` passes a pre-registered replication on 1,000 fresh dungeons, +0.45
 [+0.24, +0.65]** against HEAD defaults (seeds 650000–650999; section "The wrong dungeon fixed, and a larger
 replication", below). Mean depth 5.97 against 5.53; dying just after taking the stairs spent falls from 24% of games
@@ -1303,6 +1312,185 @@ the defaults did, each well inside the other's noise).
   `recover: 0.0` and `retreat: 0.0` and would be replayed, which is right. The safe change is to fill missing keys
   with the value they had when the key was added (0 for both), not with the current default.
 
+#### New default rules, and a model retrained on clean games (2026-11-15, morning)
+
+**Summary.**
+
+- **For the first time a model beats the rules of thumb in a pre-registered test: `v6-clean3` at `margin=0.6` is
+  +0.14 [+0.06, +0.23] deeper than the new default rules alone on 600 fresh dungeons** (seeds 660000–660599; 54
+  deeper, 521 the same, 25 shallower). It does it by leaving the rules at 0.1% of choices, almost all to read
+  teleportation when spent after a rage, hurt and facing several dangerous monsters. 97% of the gain is in the
+  games where it did that. `models/brain.json` is not replaced; that is the orchestrator's call.
+- **The new rules are the defaults**: `recover=1 retreat=2` (`Style`), with saved runs that lack the keys read as
+  played with them off (`Style.saved`). With no `--style`, block A replays the saved `recover=1 retreat=2` games
+  exactly (every game that was on its seed in both runs: 8 of 8 in 14, 193 of 194 in 200).
+- **The champion (`iter2`) hurts on top of the new rules at its default margin**: −0.30 [−0.65, +0.04] on A + C,
+  mostly by going for the stairs instead of resting out a rage (`rest → descend`, 4,000+ times a block), which
+  undoes `recover`. At `margin=1.0` it is +0.08 [−0.05, +0.21], again from teleport reads. So `--brain` with the
+  champion at its default margin should not be used over the new rules.
+- **A clean corpus**: 2,600 self-play games played with today's code and rules (no reply lag, no wrong dungeon,
+  live sight fields on every row: no `reobserve`), 1.36M rows. Trained on it alone, the `s12` recipe predicts
+  death and depth better than any earlier model on held-out clean games, and its bias toward the stairs is a third
+  of the version 5 models'. At the default margin it still dives and loses (−0.28 on A + C); adding the old
+  corpus makes it worse (−0.53).
+- A bug found on the way: a map cell's `bg` can come as a pair of numbers (flags past 32 bits), and
+  `state.in_view` raised on it (1 game in 2,000). Fixed.
+
+**The defaults** (`src/ladder/brain/policy.py`, `src/ladder/brain/cli.py`; tests in `tests/test_brain.py`).
+`Style.recover` is 1 and `Style.retreat` 2 by default; `--style recover=0 retreat=0` plays the rules as before (the
+tests pin both). `Style.saved(d)` is the style a saved run was played with: a key missing from it takes the value it
+had when it was added (`STYLE_ADDED_AS`: `recover` 0, `retreat` 0; every other key's default has never changed),
+and `cli.evaluate` compares with that, so an old run saved without the keys is not reused for today's defaults. No
+other place reloads a saved style: self-play writes the full style into each run, the corpus reads the logged
+`baseline` action, and training's `Style().weights()` takes only outcome weights (unchanged). The cockpit's and
+`games.py`'s `--brain` and fork continuations take the current defaults, which is intended.
+
+**Task: does the champion help on top of the new rules?** Blocks A (500000–500199) and C (540000–540199), both
+tuning blocks for the rules, so description only. All games with this tree's code, no random choices; paired by
+dungeon over games both finished and neither stale nor off its seed; 95% bootstrap, 10,000 resamples.
+
+| arm | A: mean depth | C: mean depth | XL (A, C) | turns (A, C) | leaves the rules | commonest changes | − new rules, A + C | 95% interval | deeper / same / shallower |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| new default rules (`recover=1 retreat=2`) | 6.29 | 5.93 | 6.89, 6.43 | 3367, 3092 | | | | | |
+| champion `iter2`, `margin=0.25` | 5.89 | 5.71 | 6.10, 6.01 | 2184, 2184 | 17.8% | `quaff_unknown` → `descend` 16,070, `rest` → `descend` 8,358, `wear` → `descend` 8,102 | −0.30 | [−0.65, +0.04] | 142 / 95 / 162 |
+| champion `iter2`, `margin=1.0` | 6.36 | 6.02 | 6.92, 6.52 | 3391, 3171 | 0.1% | `fight` → `read_teleport` 160, `flee_up` → `read_teleport` 21 | +0.08 | [−0.05, +0.21] | 39 / 335 / 24 |
+
+A alone, C alone: −0.40 [−0.89, +0.07] and −0.20 [−0.68, +0.29] at the default margin; +0.07 [−0.10, +0.24] and
++0.09 [−0.11, +0.29] at 1.0. At its default margin the champion arrives on a new floor raging or spent at 32% of
+arrivals (the new rules 9%), so it takes back most of what `recover` gave. At 1.0 all of its gain is in the 107
+games where it read teleportation (+0.32 each).
+
+**The clean corpus** (`runs/brain/v5i/clean/`, training seeds only, 12 workers asked, 10 accounts play).
+
+| round | seeds | games | who plays | random choices | rows | choices left to the model |
+| --- | --- | --- | --- | --- | --- | --- |
+| 0 | 100000–101999 | 2,000 | the new default rules | `--epsilon 0.2` (14% of rows) | 1,116,249 | |
+| 1 | 110000–110599 | 600 | `v6-r03` (round 0's `s12` ensemble, seeds 0–2), `margin=0.25` | `--epsilon 0.2` | 247,417 | 8.4% (`quaff_unknown` → `descend` most) |
+| all | | 2,600 (2,535 deaths) | | | **1,363,666** (277,731 held out by dungeon) | |
+
+The version 5 corpus had 3,333 games (about 1,170 self-play games, the rest forks) and 810,581 rows. Cut, for time:
+forks (each costs about one game; earlier forks changed nothing) and further rounds. Every row has live sight
+fields (1,363,666 live, 0 from sidecars, 0 missing), so `reobserve` is not needed for new games. Every game's
+protocol greets its own seed and none resumed a save; 1 game errored (the `bg` bug, fixed during the round) and 3
+hung. The round-0 models are in the job's scratch directory, not in `models/`.
+
+**Offline**, on the clean corpus's held-out games (277,731 rows; default value `depth_end − died_soon` of the
+action taken; true value mean 2.69, 4.3% of rows die within 30 turns). `v6-clean` is trained on the clean corpus
+alone; `v6-mix` on the clean corpus and the version 5 corpus together (2.17M rows; the held-out rows are the same).
+
+| model | R² died_soon | AUC died_soon | R² depth_end | danger AUC | value: mean pred − true | slope (true on pred) | true value in the lowest / highest fifth of predictions |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| champion `iter2` (version 4) | 0.252 | 0.868 | 0.118 | 0.782 | −0.32 | 0.95 | 1.31 / 3.76 |
+| `v5-seen` | 0.251 | 0.871 | 0.139 | 0.780 | −0.29 | 0.94 | 1.26 / 3.85 |
+| `v5-ens5` | 0.297 | 0.894 | 0.159 | 0.789 | −0.25 | 1.07 | 1.18 / 3.86 |
+| `v5-forks3` | 0.315 | 0.898 | 0.184 | 0.800 | +0.05 | 1.09 | 1.07 / 3.86 |
+| `v6-clean` seeds 0 / 1 / 2 | 0.309 / 0.307 / 0.308 | 0.900 / 0.895 / 0.888 | 0.195 / 0.200 / 0.199 | 0.812 / 0.809 / 0.816 | −0.16 / −0.01 / −0.09 | 1.00 / 0.93 / 0.96 | |
+| **`v6-clean3`** (ensemble) | **0.328** | **0.911** | 0.206 | **0.819** | −0.09 | 0.99 | 1.00 / 3.92 |
+| `v6-mix` seeds 0 / 1 / 2 | 0.305 / 0.310 / 0.307 | 0.903 / 0.896 / 0.895 | 0.202 / 0.197 / 0.204 | 0.808 / 0.808 / 0.812 | −0.06 / −0.09 / −0.02 | 0.97 / 1.05 / 0.97 | |
+| `v6-mix3` (ensemble) | 0.325 | 0.907 | **0.208** | 0.815 | −0.06 | 1.03 | 0.99 / 3.94 |
+
+Preference for `descend` over `explore` at the 19,577 moments of the new rules' block-A games where the rules
+explored with the stairs known (`gap.py`):
+
+| model | value gap | above 0.25 | above 0.6 |
+| --- | --- | --- | --- |
+| champion `iter2` | +0.11 | 9.5% | 0.1% |
+| `v5-seen` / `v5-ens5` | +0.30 / +0.20 | 64% / 28% | 1.8% / 0.1% |
+| `v6-clean` seeds 0 / 1 / 2 | +0.08 / +0.19 / +0.06 | 8% / 30% / 4% | 0.1% / 0.2% / 0% |
+| `v6-clean3` / `v6-mix3` | +0.11 / +0.12 | 9.5% / 4.4% | 0% / 0% |
+
+- The clean models are the best predictors yet on clean games (in their own distribution, which favours them),
+  and the two ensembles are nearly unbiased in value. The old corpus adds nothing offline.
+- The seed still moves the stairs bias (+0.06 to +0.19), and the ensembles keep a positive one, about the
+  champion's. No fork rows exist in the clean corpus, so fork regret was not measured.
+
+**Tuning on A and C** (each ensemble at three margins against the new rules alone; the same rules as above).
+
+| arm | A: mean depth | C: mean depth | leaves the rules (A, C) | commonest changes | − new rules, A + C | 95% interval | deeper / same / shallower |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `v6-clean3`, `margin=0.25` | 6.02 | 5.63 | 5.2%, 4.7% | `explore` → `descend` 2,761, `fight` → `descend` 2,711, `rest` → `descend` 1,523, `fight` → `flee_up` 1,354 | −0.28 | [−0.55, −0.02] | 121 / 140 / 138 |
+| **`v6-clean3`, `margin=0.6`** | **6.56** | **6.04** | 0.1%, 0.1% | `fight` → `read_teleport` 136, `explore` → `descend` 34, `flee_up` → `read_teleport` 26 | **+0.19** | **[+0.05, +0.33]** | 41 / 344 / 14 |
+| `v6-clean3`, `margin=1.0` | 6.41 | 5.94 | 0.03%, 0.03% | `fight` → `read_teleport` 67, `flee_up` → `read_teleport` 12 | +0.07 | [+0.03, +0.12] | 13 / 384 / 2 |
+| `v6-mix3`, `margin=0.25` | 5.46 | 5.67 | 11.1%, 10.4% | `quaff_unknown` → `descend` 4,641, `berserk` → `fight` 4,850, `wield` → `descend` 2,788 | −0.53 | [−0.91, −0.17] | 142 / 81 / 175 |
+| `v6-mix3`, `margin=0.6` | 6.37 | 5.88 (9 hung) | 0.8%, 1.2% | `wield` → `descend` 2,583, `fight` → `read_teleport` 59 | +0.06 | [−0.12, +0.25] | 55 / 287 / 49 |
+| `v6-mix3`, `margin=1.0` | 6.33 | 5.91 | 0.01%, 0.01% | `read_teleport` from several, 25 in all | +0.01 | [−0.03, +0.05] | 6 / 390 / 3 |
+
+`v6-clean3` at 0.6, A alone +0.27 [+0.09, +0.46], C alone +0.11 [−0.09, +0.31]. Split by game: the 102 games where
+it read teleportation instead of the rules' choice gain +0.73 each, 99% of the gain; the 293 with no override play
+the same. At 1.0 the same, fewer (65 games, +0.42 each). `v6-mix3` at 0.6 gains in its teleport games (+1.02 each)
+and loses it again in the games where it skips wielding for the stairs (−0.71 each), an override that repeats
+because the rules offer `wield` again at every choice. C's 9 hangs in that run are one burst (seeds 540050–540068).
+
+`v6-clean3`'s teleport reads (A + C, 180): the rules would have fought (136), gone up (26) or drunk a potion (10);
+138 were spent after a rage (`-Berserk` and `Slow`, the plain `teleport=1` rule's condition), at median 42% HP
+(100 under half), median 3 hostiles in view, a monster of threat 2 or 3 in view in 166, around D:8 and XL 8. The plain
+rule reads at every spent moment with monsters in view, whatever the HP and the threat, and was level on fresh
+blocks F and G (with the old rules and the reply lag). The model is choosier.
+
+**Pre-registered (written before any game on seeds 660000–660599).** Configuration: this working tree's code
+(the default rules are now `recover=1 retreat=2`, and `state.in_view` reads a two-part `bg`), playing the model
+`models/v6-clean3.json` (the `s12` recipe at training seeds 0–2 on the clean corpus only, outputs averaged) with
+`--style margin=0.6`, no random choices. Baseline: the same code with no model and the default style (the new
+default rules alone). Dungeons: seeds 660000–660599 (600, never used before), played as three blocks of 200
+(660000, 660200, 660400), each block by both arms one run after the other, the arm that goes first alternating
+from block to block (configuration first on 660000 and 660400, baseline first on 660200); 12 workers asked, the
+accounts that log in play (the two that fail are not repaired). Analysis: paired by dungeon over games both
+finished (not hung, crashed or an error) and neither stale nor off its seed (stale: its first step is after
+turn 1; off its seed: no morgue on that custom seed with the game's turn count); 95% bootstrap over dungeons,
+10,000 resamples (`brain-v5i/arms.py`); analysed once, after all 1,200 games are played, with no early stopping.
+**Pass: the interval's lower end is above zero.** Reported alongside, outside the pass rule: each block's
+difference, mean depth, XL, deaths by depth band, override rate and what is overridden. Chosen because it is the
+furthest above zero on the tuning blocks A + C of the configurations tried (+0.19 [+0.05, +0.33], tables below);
+`models/brain.json` is not replaced whatever the result.
+
+**Result: passes.** `v6-clean3` at `margin=0.6` is **+0.14 [+0.06, +0.23]** deeper than the new default rules alone
+on 600 fresh dungeons, all 600 paired (no game hung, stale or off its seed). Analysed once, after all 1,200 games.
+
+| fresh blocks (660000–660599) | finished (hung) | mean depth | XL | turns | died | died on D:1–3 / 4–6 / 7+ | leaves the rules |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| F1, new rules | 200 (0) | 5.96 | 6.54 | 3122 | 194 | 36 / 76 / 82 | |
+| F1, `v6-clean3` `margin=0.6` | 200 (0) | 6.22 | 6.75 | 3192 | 195 | 34 / 72 / 89 | 0.10% |
+| F2, new rules | 200 (0) | 5.75 | 6.41 | 3070 | 195 | 48 / 75 / 72 | |
+| F2, `v6-clean3` `margin=0.6` | 200 (0) | 5.80 | 6.46 | 3126 | 195 | 48 / 75 / 72 | 0.08% |
+| F3, new rules | 200 (0) | 5.72 | 6.33 | 2917 | 196 | 46 / 80 / 70 | |
+| F3, `v6-clean3` `margin=0.6` | 200 (0) | 5.83 | 6.43 | 3033 | 196 | 46 / 75 / 75 | 0.07% |
+
+| `v6-clean3` `margin=0.6` − new rules | first arm played | dungeons | difference | 95% interval | deeper / same / shallower |
+| --- | --- | --- | --- | --- | --- |
+| F1 (660000–660199) | the model | 200 | +0.27 | [+0.12, +0.43] | 25 / 170 / 5 |
+| F2 (660200–660399) | the rules | 200 | +0.05 | [−0.10, +0.21] | 11 / 176 / 13 |
+| F3 (660400–660599) | the model | 200 | +0.12 | [−0.03, +0.26] | 18 / 175 / 7 |
+| **F1–F3 (the pre-registered test)** | | 600 | **+0.14** | **[+0.06, +0.23]** | 54 / 521 / 25 |
+
+- **What it overrides** (346 of 412,201 choices): `fight` → `read_teleport` 212, `flee_up` → `read_teleport` 32,
+  `explore` → `descend` 44, `quaff_heal` → `read_teleport` 17, `wait` → `read_teleport` 9. Split by game: the 173
+  games with a teleport read gain +0.49 each (97% of the gain; 51 deeper, 24 shallower), the 17 with only other
+  overrides +0.29 each, and 409 of the 410 with no override play the same game.
+- **The moments** (279 teleport reads): spent after a rage in 229, median HP 48% (145 under half), median 4 hostiles
+  in view, a monster of threat 2 or 3 in 258, median D:8, XL 8, as on the tuning blocks. 33 were read while a teleport
+  was already coming (`Tele`), which wastes the scroll; the plain rule doesn't, the model's `available` allows it.
+- Read with care: the gain is small (one dungeon in eleven is deeper, one in twenty-four shallower) and comes from
+  one kind of choice the rules lack, not from the model's estimate in general (at the default margin the same
+  model loses). That fits "use the network only where it is confident and mine its overrides for rules" (Next,
+  3(b)).
+- **Verified**: every number in this section (`brain-v5i/arms.py`, `overrides.py`, `attrib.py`, `teleports.py`,
+  `offline.py`, `gap.py`; the batched forward pass matches `TrainedNet.forward` within 2e-6); each fresh game's seed
+  three ways (`verify.py`); the default style replaying the saved `recover=1 retreat=2` games (14 and 200 on block A:
+  every game on its seed in both runs identical, but one in 194); the `bg` bug (the game's protocol; a test with the
+  live value); the tests (`uv run pytest`, `uv run ruff check`).
+- **Inferred**: that the gain comes from the teleport reads (an attribution by game, not a test of the reads alone);
+  that the clean data is why this model's confident overrides help where the champion's at `margin=1.0` were level
+  (+0.08 on A + C; never tested fresh); that the model's narrower teleport moments are why it works where the plain
+  rule didn't (the plain rule was tested with the old rules and the reply lag).
+- Seeds 660000–660599 are now spent. Runs: `runs/brain/v5i/{A,C}-rules`, `-brain`, `-brain-m1`, `-v6-{clean,mix}-m{0.25,0.6,1.0}`,
+  `F{1,2,3}-rules`, `F{1,2,3}-v6-clean-m0.6`, `A14-default` (the replay check); the clean corpus's games in
+  `runs/brain/v5i/clean/`, its corpus `runs/brain/v5i/corpus-clean.npz` and the merged one `corpus-mix.npz`. Models:
+  `models/v6-clean-s{0,1,2}.json`, `v6-clean3.json` (manifest), `models/v6-mix-s{0,1,2}.json`, `v6-mix3.json`, each
+  member with its parity file. Scripts in the job's `brain-v5i/` scratch directory: `chain.sh` and the `jobs-*.txt`
+  files, `build_train.sh`, `train3.py`, `merge.py`, `offline.py`, `check_offline.py`, `gap.py`, `overrides.py`,
+  `attrib.py`, `teleports.py`, `same.py`, `usedseeds.py`, and copies of `arms.py`, `seeds.py`, `verify.py`,
+  `refresh.sh`, `mindex.py`; the round-0 models in `brain-v5i/models/`.
+
 ## What carried over from s1-battle, and what couldn't
 
 | s1-battle | here |
@@ -1383,10 +1571,14 @@ after a rage (`-Berserk` and `Slow`) with monsters in view, not while a teleport
 `teleport=2` also reads it with 3 or more hostiles in view, one dangerous, where the rules wouldn't rage.
 Both are off by default: neither beat the plain rules ("The teleport rule on its own", above).
 
-`--style recover=1` rests out a rage and the exhaustion after it (`Berserk`, `-Berserk` or `Slow`,
-`policy.recovering`) with nothing in view before taking the stairs; `recover=2` before exploring on as well.
-Off by default: `recover=1` is +0.29 [−0.01, +0.59] on the tuning blocks A and C, `recover=2` level; neither
-has been tried on a fresh block ("Where the rules of thumb lose games", above).
+`recover=1` (**on by default since 2026-11-15**) rests out a rage and the exhaustion after it (`Berserk`,
+`-Berserk` or `Slow`, `policy.recovering`) with nothing in view before taking the stairs; `recover=2` before
+exploring on as well; `--style recover=0` turns it off. `retreat=2` (**on by default since 2026-11-15**) goes up
+stairs within 8 steps when a rage runs out with two or more hostiles in view, then rests the exhaustion off;
+`retreat=1` at any distance, `retreat=0` off. Together they passed a pre-registered test on 996 fresh dungeons
+(+0.45 [+0.24, +0.65]; "The wrong dungeon fixed", above). `--style recover=0 retreat=0` plays the rules as they
+were before. A saved run whose style lacks either key was played with it at 0, and `evaluate` reads it so
+(`Style.saved`, `STYLE_ADDED_AS`).
 
 ## What it sees
 
@@ -1561,6 +1753,7 @@ have sight fields and 24,346 (3.0%) are marked missing. Evaluation dungeons and 
 | `models/brain.json`, `models/brain.ledger.json` | the champion (none yet) and the record of every `iterate` round |
 | `models/iter<n>.json` | each round's candidate, with its parity vectors |
 | `models/v5-*.json` | version 5 experiments, each with its parity file; `v5-ens5`, `v5-forks3`, `v5-pairs3` are ensemble manifests |
+| `models/v6-*.json` | trained on clean games (2026-11-15): `v6-clean3` (clean corpus only) and `v6-mix3` (clean + version 5 corpus) are manifests of three seeds each; `v6-clean3` at `margin=0.6` passed a fresh test |
 | `models/v2/` | the first three candidates, from before the equipment actions; today's code refuses to load them |
 
 ## What it found on the way
@@ -1668,6 +1861,16 @@ In the order I would take them:
    *(2026-11-15, night) (a) done: the quit now waits for the game to end, and a guard checks every start's seed.
    Instead of (b), `recover=1 retreat=2` was replicated unchanged on 1,000 fresh dungeons and passes (+0.45 [+0.24,
    +0.65]). Next: decide on the defaults (fill missing style keys in saved runs with 0 first), then (c).*
+   *(2026-11-15, morning) Done: `recover=1 retreat=2` are the defaults (`Style.saved` reads old runs as played with
+   0). A model trained only on clean games, `v6-clean3` at `margin=0.6`, passes a pre-registered fresh test against
+   the new rules (+0.14 [+0.06, +0.23], 600 dungeons), all but 3% of it from reading teleportation when spent, hurt
+   and outnumbered. Next, cheapest first: (a) decide whether `--brain` plays `v6-clean3` at `margin=0.6` (the
+   champion at its default margin is behind the new rules); (b) don't let `read_teleport` be chosen while a teleport
+   is already coming (`Tele`: 33 of the 279 fresh reads); (c) write the model's teleport moments down as a rule
+   (spent, HP under about half, 3+ hostiles with one of threat 2–3) and test it against the model on fresh seeds,
+   since the plain `teleport=1` failed with the old rules; (d) more clean rounds with the new model playing, and
+   forks on them, to see if the default margin can be trusted again; then (c) of the earlier list, more to do in
+   the fight.*
 4. **Promote on more than 60 dungeons.** Differences under 0.3 depths can't be seen with 60; the same
    baseline replayed varies by 0.1. 200 evaluation dungeons would take about 15 minutes per model.
 5. **The remaining dead ends**: games that hang (1 in 20 with random choices in round 4, 1 in 40

@@ -1,0 +1,9 @@
+{
+ "format": "dcss-trained-brain-ensemble",
+ "note": "v6: clean corpus only (2,600 games, today's code and default rules): the s12 recipe at training seeds 0-2, outputs averaged",
+ "members": [
+  "v6-clean-s0.json",
+  "v6-clean-s1.json",
+  "v6-clean-s2.json"
+ ]
+}

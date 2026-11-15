@@ -56,6 +56,16 @@ def test_remembered_monster_out_of_view_is_not_hostile_in_view():
     assert state.cells[(4, 0)]["mon"] == 3          # still remembered
 
 
+def test_background_flags_past_32_bits_come_as_a_pair():
+    # webtiles sends [low 32 bits, the rest] (seen live: [1140851677, 2]); the view flags are in the low part
+    state = make_state(["@...."])
+    add_monster(state, (4, 0), 3, "rat")
+    state.apply({"msg": "map", "cells": [{"x": 4, "y": 0, "t": {"bg": [1140851677, 2]}}]})
+    assert [m.name for m in state.hostiles()] == ["rat"]
+    state.apply({"msg": "map", "cells": [{"x": 4, "y": 0, "t": {"bg": [1 | BG_UNSEEN, 2]}}]})
+    assert state.hostiles() == []
+
+
 def test_plants_and_allies_are_not_hostile():
     state = make_state(["@...."])
     state.apply({"msg": "map", "cells": [{"x": 2, "y": 0, "mf": 11, "t": {"bg": 1},

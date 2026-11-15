@@ -70,6 +70,8 @@ class Monster:
 
 def in_view(cell: dict) -> bool:
     bg = (cell.get("t") or {}).get("bg")
+    if isinstance(bg, list):          # webtiles sends flags past 32 bits as [low 32 bits, the rest]
+        bg = bg[0] if bg else 0
     return bg is None or not (bg & (BG_UNSEEN | BG_MM_UNSEEN))
 
 

@@ -1,0 +1,9 @@
+{
+ "format": "dcss-trained-brain-ensemble",
+ "note": "v6: clean corpus + the version 5 corpus (810,581 rows): the s12 recipe at training seeds 0-2, outputs averaged",
+ "members": [
+  "v6-mix-s0.json",
+  "v6-mix-s1.json",
+  "v6-mix-s2.json"
+ ]
+}
