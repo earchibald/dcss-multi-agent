@@ -1,0 +1,9 @@
+{
+ "format": "dcss-trained-brain-ensemble",
+ "note": "v7: clean corpus rounds 0-2 with forks (today's code and default rules): the s12 recipe at training seeds 0-2, outputs averaged",
+ "members": [
+  "v7-clean-s0.json",
+  "v7-clean-s1.json",
+  "v7-clean-s2.json"
+ ]
+}

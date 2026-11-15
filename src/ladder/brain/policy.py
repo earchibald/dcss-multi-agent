@@ -223,7 +223,8 @@ def available(obs: dict, level_explored: bool, blocked: set[str], rest_stalled: 
         "quaff_heal": inv["heal"] > 0 and (hurt or ailing) and calm,
         "quaff_unknown": inv["unknown_potions"] > 0 and calm,
         "read_unknown": inv["unknown_scrolls"] > 0 and can_read,
-        "read_teleport": inv["teleport"] > 0 and hostiles and can_read,
+        # not while a teleport is already coming (`Tele`): a second scroll cancels it ("You feel strangely stable")
+        "read_teleport": inv["teleport"] > 0 and hostiles and can_read and "Tele" not in status,
         "wait": hostiles and not adjacent,
         # Trog's Berserk: refused while berserk or exhausted, which the no-progress block then handles.
         # Never with poison that would kill once the rage is over: the rage would block the cure.

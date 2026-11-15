@@ -1656,6 +1656,17 @@ def test_no_second_scroll_while_a_teleport_is_coming():
     assert teleport_rule(o, 2) == (False, False)
 
 
+def test_read_teleport_is_not_available_while_a_teleport_is_coming():
+    # a model (or a random choice) could pick it from `available`: 33 of 279 model reads on 660000-660599 were
+    # made with `Tele` showing, which cancels the teleport already coming
+    o = obs(**SPENT)
+    assert "read_teleport" in available(o, False, set(), False)
+    pending = obs(**{**SPENT, "status": ["-Berserk", "Slow", "Tele"], "inv": {**SCROLL, "teleport": 2}})
+    avail = available(pending, False, set(), False)
+    assert "read_teleport" not in avail
+    assert avail == [a for a in available(o, False, set(), False) if a != "read_teleport"]   # nothing else changes
+
+
 def test_spent_rule_needs_the_scroll_to_be_readable():
     assert rules(obs(**{**SPENT, "status": ["-Berserk", "Slow", "Conf"]}), 1) == "fight"
     assert rules(obs(**SPENT), 1, blocked={"read_teleport"}) == "fight"

@@ -7,6 +7,14 @@ runs in numpy in well under a millisecond. It is the same idea as the trained br
 
 ## Where it stands
 
+**2026-11-15, afternoon: `v6-clean3` at `margin=0.6` is still the best configuration; its successor `v7-clean3` is not
+ahead on the tuning blocks, so no fresh seeds were spent** (section "No second teleport scroll, a second clean round
+with forks, and `v7-clean3`", below). `read_teleport` is no longer possible while a teleport is coming (+0.05 [+0.02,
++0.09] for `v6-clean3` on A + C). The clean corpus grew to 3.09M rows with a round played by `v6-clean3` and 1,792
+forks. `v7-clean3`, trained on it, predicts a little better and no longer dives at the default margin (+0.16 [−0.04,
++0.37] against the rules on A + C), but it has lost the confident teleport reads, and against `v6-clean3` at 0.6 it is
+−0.06 [−0.27, +0.16] at 0.25 and −0.24 at 0.6.
+
 **2026-11-15, morning: a model beats the rules of thumb in a pre-registered test for the first time.** `v6-clean3`
 (the `s12` recipe at 3 training seeds, trained only on 2,600 games played with today's code and rules) at
 `--style margin=0.6` is **+0.14 [+0.06, +0.23]** deeper than the rules alone on 600 fresh dungeons (seeds
@@ -1491,6 +1499,135 @@ on 600 fresh dungeons, all 600 paired (no game hung, stale or off its seed). Ana
   `attrib.py`, `teleports.py`, `same.py`, `usedseeds.py`, and copies of `arms.py`, `seeds.py`, `verify.py`,
   `refresh.sh`, `mindex.py`; the round-0 models in `brain-v5i/models/`.
 
+#### No second teleport scroll, a second clean round with forks, and `v7-clean3` (2026-11-15, afternoon)
+
+**Summary.**
+
+- **Nothing new beats `v6-clean3` at `margin=0.6` on the tuning blocks, so the fresh seeds 670000–670599 were not
+  played** and nothing was pre-registered. The best new configuration, `v7-clean3` at the default margin (0.25), is
+  −0.06 [−0.27, +0.16] against `v6-clean3` at `margin=0.6` on A + C; at 0.4 it is −0.10 [−0.26, +0.05], and at 0.6 and
+  0.8 it is −0.24 and −0.23, since there it hardly leaves the rules at all.
+- **`read_teleport` is no longer possible while a teleport is already coming** (`Tele` showing; a second scroll
+  cancels the first: "You feel strangely stable"). This changes the model's games only from such a moment on, and
+  the rules' games mainly where every other action was blocked and the scroll was their fallback (8 of 400 games on A + C, and 4 more that part later in a game with a `Tele` moment). `v6-clean3` at `margin=0.6`
+  with the fix is +0.05 [+0.02, +0.09] on A + C against itself without it (10 deeper, 389 the same, 0 shallower).
+- **The clean corpus is more than twice as large**: 1.36M → 3.09M rows. A second round of 1,800 self-play games
+  played by `v6-clean3` (margins 0.6 and 0.25, `--epsilon 0.2`), plus 1,792 forks of those games (600 stairs moments
+  forked both ways, 300 other moments with up to 3 other actions), played on by `v6-clean3` at `margin=0.6`.
+- **`v7-clean3`** (the `s12` recipe at 3 seeds on it) predicts a little better on held-out clean games, has almost no
+  pull toward the stairs (+0.04 against +0.11), and **no longer dives at the default margin**: +0.16 [−0.04, +0.37]
+  against the rules alone on A + C, where `v6-clean3` at 0.25 was −0.28. But it has lost `v6-clean3`'s confident
+  teleport reads: at the moments `v6-clean3` reads, `v7-clean3` rates the read +0.09 above fighting (median), where
+  `v6-clean3` rated it +0.73. At the default margin it mostly skips the rules' rage (`berserk → fight`).
+- Fork regret, now measurable on 160 held-out fork moments, does not favour `v7-clean3` (1.84, against 1.52 for
+  `v6-clean3` and 1.67 for choosing at random); 160 moments are too few to separate the models.
+
+**Task 1: no second teleport scroll** (`src/ladder/brain/policy.py`, `available`; test
+`test_read_teleport_is_not_available_while_a_teleport_is_coming` in `tests/test_brain.py`). `read_teleport` now needs
+`Tele` absent from the status line, as the opt-in `teleport_rule` already did. That DCSS cancels a pending teleport on
+a second read was checked in a saved game's protocol (seed 660043: "You feel strangely stable" after the model's
+second read). What changes, by replaying A and C with this tree:
+
+| replay on A + C (400 dungeons) | games not identical | first difference at a moment with `Tele` showing | `Tele` earlier in the game | no `Tele` |
+| --- | --- | --- | --- | --- |
+| rules alone | 13 | 8 (every other action blocked, so the rules' fallback was the scroll; now `wait` or a rage) | 4 | 1 |
+| `v6-clean3`, `margin=0.6` | 29 | 27 (a read the model can no longer make) | 2 | 0 |
+
+The 40-game check run first (seeds 500000–500039, rules alone) was 40 of 40 identical. One game in 200 differs on
+replay with nothing changed (found before); the one rules game with no `Tele` is that. In round 2's 950,343 choices,
+3,564 had `Tele` showing and in none of them was `read_teleport` offered. The rules alone on A + C with the fix: +0.01
+[+0.00, +0.01] and +0.03 [+0.00, +0.08] against the saved runs; every comparison below uses the replays with the fix.
+
+**Task 2: the second clean round** (training seeds 120000–121799, not used before; `runs/brain/v6b/clean/` and
+`runs/brain/v6b/forks/`; 12 workers asked, 10 accounts play).
+
+| part | seeds | games | who plays | rows added | notes |
+| --- | --- | --- | --- | --- | --- |
+| self-play, `margin=0.6` | 120000–120599, 120800–121199, 121400–121599 | 1,200 | `v6-clean3`, `--epsilon 0.2` | | mean depth 4.6–5.4 a block; it leaves the rules at 0.02% of choices (block c2-0) |
+| self-play, `margin=0.25` | 120600–120799, 121200–121399, 121600–121799 | 600 | `v6-clean3`, `--epsilon 0.2` | | mean depth 4.8–5.1; 3.5% overrides, mostly toward the stairs (block c2-3) |
+| self-play, both | | 1,800 (3 hung) | | 950,343 | 132,196 of them random choices |
+| stairs forks | moments in those games | 1,200 (3 hung, 2 left the recorded game) | `v6-clean3` `margin=0.6` after the fork | | 600 explore-or-descend moments, each forked both ways with `commit` |
+| other forks | moments in those games | 592 | the same | | 300 moments (70% within 40 choices of a death), up to 3 other actions each |
+| forks, both | | 1,792 (1,789 finished) | | 776,850 | the replayed steps before each fork are not rows |
+| **clean corpus, rounds 0–2** | | 6,190 games and forks (6,046 deaths) | | **3,090,859** (581,241 held out by dungeon) | every row with live sight fields; no old pre-fix rows |
+
+About 3 hours of machine time (10:27–13:16). Training: 3 × about 5 minutes; each member kept epoch 3 of 20, as
+`v6-clean3`'s kept 2–3.
+
+**Task 3: `v7-clean3`, offline**, on the enlarged corpus's held-out games (581,241 rows: the earlier held-out clean
+games and round 2's; true value mean 2.72, 4.7% die within 30 turns). Columns as in the morning's table.
+
+| model | R² died_soon | AUC died_soon | R² depth_end | danger AUC | value: mean pred − true | slope | true value in the lowest / highest fifth |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `v6-clean3` | 0.322 | 0.911 | 0.174 | 0.819 | −0.26 | 0.96 | 1.08 / 3.97 |
+| `v7-clean` seeds 0 / 1 / 2 | 0.325 / 0.321 / 0.326 | 0.898 / 0.905 / 0.907 | 0.182 / 0.185 / 0.181 | 0.822 / 0.824 / 0.822 | +0.17 / +0.07 / +0.13 | 0.94 / 0.94 / 0.88 | |
+| **`v7-clean3`** (ensemble) | **0.341** | **0.915** | **0.190** | **0.827** | +0.12 | 0.94 | 1.05 / 3.95 |
+
+Fork regret on the 160 held-out fork moments (by dungeon, the same split; regret = value of the best action tried
+there − value of the action chosen; lower is better):
+
+| chooser | stairs moments (115) | other moments (45) | all (160) | best action picked (all) |
+| --- | --- | --- | --- | --- |
+| at random | 1.70 | 1.60 | 1.67 | |
+| what the game did | 2.35 | 2.71 | 2.45 | |
+| the rules' action | 1.72 | 2.53 | 1.95 | |
+| `v6-clean3`, its top action | 1.56 | 1.42 | 1.52 | 49% |
+| `v7-clean` seeds 0 / 1 / 2, top action | 2.04 / 1.71 / 1.61 | 1.84 / 1.96 / 1.42 | 1.98 / 1.78 / 1.56 | 43% / 44% / 49% |
+| `v7-clean3`, its top action | 1.70 | 2.20 | 1.84 | 44% |
+
+At margins 0.4–0.8 both ensembles keep the rules' action at almost every fork moment, so their regret there is the
+rules' (1.92–1.95). The other forks are mostly the last moments before a death, which is why what the game did there
+is so bad. Preference for `descend` over `explore` where the rules explored with the stairs known (block A's rules
+games, 19,577 moments; `gap.py`): `v6-clean3` +0.11 (9.5% above 0.25), `v7-clean3` +0.04 (0% above 0.25; seeds −0.01,
++0.07, +0.06).
+
+**Task 4: tuning on A (500000–500199) and C (540000–540199).** All with this tree's code (the fix included), no random
+choices; paired by dungeon over games both finished and neither stale nor off their seed (`arms.py`; 399 of 400, C
+has one hung game in every arm); 95% bootstrap, 10,000 resamples. Description only: these blocks are spent.
+
+| arm | A: mean depth | C: mean depth | leaves the rules (A, C) | commonest changes | − rules alone, A + C | 95% interval | − `v6-clean3` 0.6, A + C | 95% interval |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| rules alone (`recover=1 retreat=2`) | 6.29 | 5.96 | | | | | | |
+| **`v6-clean3`, `margin=0.6`** | **6.64** | **6.05** | 0.1%, 0.1% | `fight` → `read_teleport` 136, `explore` → `descend` 36, `flee_up` → `read_teleport` 29 | **+0.22** | **[+0.09, +0.36]** | | |
+| `v7-clean3`, `margin=0.25` | 6.62 | 5.96 | 0.8%, 1.2% | `berserk` → `fight` 2,016, `quaff_heal` → `fight` 225, `berserk` → `wait` 48+, `fight` → `read_teleport` 46+ | +0.16 | [−0.04, +0.37] | −0.06 | [−0.27, +0.16] |
+| `v7-clean3`, `margin=0.4` | 6.33 | 6.17 | 0.04%, 0.06% | `quaff_heal` → `fight` 60, `fight` → `read_teleport` 37 | +0.12 | [+0.01, +0.24] | −0.10 | [−0.26, +0.05] |
+| `v7-clean3`, `margin=0.6` | 6.29 | 5.93 | 0.01%, 0.01% | `quaff_heal` → `fight` 10, `fight` → `read_teleport` 7 | −0.02 | [−0.05, +0.01] | −0.24 | [−0.38, −0.10] |
+| `v7-clean3`, `margin=0.8` | 6.29 | 5.94 | 0%, 0.00% | `wait` → `read_teleport` 2 | −0.01 | [−0.04, +0.00] | −0.23 | [−0.38, −0.10] |
+
+By block, against the rules alone: `v6-clean3` 0.6 A +0.35 [+0.15, +0.56], C +0.09 [−0.10, +0.28]; `v7-clean3` 0.25 A
++0.33 [+0.04, +0.62], C +0.00 [−0.29, +0.27]; 0.4 A +0.03, C +0.21. Split by the kind of override in a game (a game
+counts under each kind it has; `attrib2.py`), `v7-clean3` at 0.25: games with a skipped rage 102, +0.81 each; with a
+teleport read 90, +1.16; with a skipped healing potion 58, +0.26; 223 games with none play the same. At 0.4 the
+skipped potions cost (20 games, −0.80 each) and the teleport reads gain (51 games, +1.06 each).
+
+- **Does the model now have useful confident choices beyond teleport reads?** Not at 0.6 or above: `v7-clean3` there
+  is the rules. At 0.25 its confident choices are to fight on without raging and without drinking, and those games
+  come out ahead on average, but so much changes after the first override that this split is not evidence for any
+  one of them.
+- **Does a lower margin stop losing?** Yes for the new model: at 0.25 it is level or ahead of the rules (+0.16
+  [−0.04, +0.37]) where `v6-clean3` at 0.25 lost (−0.28 [−0.55, −0.02]), and it no longer goes for the stairs (`→
+  descend` is 9% of its overrides, 257 of 2,974; `v6-clean3` at 0.25: 81%, 7,901 of 9,743).
+- **Why the teleport reads went**: at the 140 moments in round 2 where `v6-clean3` read teleportation and the rules
+  wouldn't have, both models predict the read about right (`v6-clean3` 0.88, `v7-clean3` 0.65; what followed 0.99),
+  but `v7-clean3` rates the rules' action there much higher (0.58 against 0.26), so the gap shrinks from +0.62 to
+  +0.07 (`readvalue.py`). Which estimate of fighting on is right can't be told from these rows; `v6-clean3`'s games say
+  the read pays.
+
+**Task 5: not run.** No configuration was ahead of `v6-clean3` at `margin=0.6` on A + C, so no pre-registration was
+written and seeds 670000–670599 are unused.
+
+- **Verified**: every number in this section (`brain-v6b/arms.py`, `overrides.py`, `attrib2.py`, `offline.py`,
+  `forkregret.py`, `gap.py`, `telegap.py`, `readvalue.py`, `same.py`, `telediff.py`); that the fix changes games only
+  from a `Tele` moment on (the replay table above); DCSS's "strangely stable" on a second read (one saved protocol); the
+  tests (`uv run pytest`, `uv run ruff check`).
+- **Inferred**: that `v7-clean3` lost the teleport reads because the larger corpus moved its estimate of fighting on,
+  not of reading (an average over 140 moments, not a test); that its skipped rages help (an attribution by game).
+- Runs: `runs/brain/v6b/{A,C}-rules`, `-v6-m0.6`, `-v7-m{0.25,0.4,0.6,0.8}`, `chk-A40-rules`; round 2 in
+  `runs/brain/v6b/clean/c2-{0..8}` and `runs/brain/v6b/forks/f2-{stairs,any}`; the corpus `runs/brain/v6b/corpus-clean2.npz`.
+  Models: `models/v7-clean-s{0,1,2}.json` (each with its parity file) and the manifest `models/v7-clean3.json`. Scripts in
+  the job's `brain-v6b/` scratch directory: `round2.sh`, `build7.sh`, `chain.sh` and the `jobs-*.txt` files, and the
+  analysis scripts named above. Seeds spent: training 120000–121799; evaluation seeds replayed: A and C only.
+
 ## What carried over from s1-battle, and what couldn't
 
 | s1-battle | here |
@@ -1754,6 +1891,7 @@ have sight fields and 24,346 (3.0%) are marked missing. Evaluation dungeons and 
 | `models/iter<n>.json` | each round's candidate, with its parity vectors |
 | `models/v5-*.json` | version 5 experiments, each with its parity file; `v5-ens5`, `v5-forks3`, `v5-pairs3` are ensemble manifests |
 | `models/v6-*.json` | trained on clean games (2026-11-15): `v6-clean3` (clean corpus only) and `v6-mix3` (clean + version 5 corpus) are manifests of three seeds each; `v6-clean3` at `margin=0.6` passed a fresh test |
+| `models/v7-*.json` | `v7-clean3`: the `s12` recipe at three seeds on the enlarged clean corpus (rounds 0–2 with forks, 2026-11-15, afternoon); not ahead of `v6-clean3` at `margin=0.6` on the tuning blocks |
 | `models/v2/` | the first three candidates, from before the equipment actions; today's code refuses to load them |
 
 ## What it found on the way
@@ -1871,6 +2009,14 @@ In the order I would take them:
    since the plain `teleport=1` failed with the old rules; (d) more clean rounds with the new model playing, and
    forks on them, to see if the default margin can be trusted again; then (c) of the earlier list, more to do in
    the fight.*
+   *(2026-11-15, afternoon) (b) done. (d) done once: `v7-clean3` (3.09M clean rows, 1,792 forks) no longer dives at
+   the default margin (+0.16 [−0.04, +0.37] against the rules on A + C) but has lost the teleport reads and is not
+   ahead of `v6-clean3` at 0.6 (−0.06 [−0.27, +0.16]); seeds 670000–670599 are still unused. Next, cheapest first:
+   (a) (c) above, the teleport moments as a rule, now that the model that found them may not keep them; (b) test
+   `v7-clean3`'s one big habit at the default margin, fighting on instead of raging (`berserk → fight`, 2,016 times on
+   A + C), as a rule or a fork kind of its own; (c) forks that try `read_teleport` against `fight` at spent moments,
+   so the estimate of fighting on there comes from paired outcomes and not from which games happened to read; (d) a
+   mixed ensemble (`v6-clean3` + `v7-clean3`) is untried.*
 4. **Promote on more than 60 dungeons.** Differences under 0.3 depths can't be seen with 60; the same
    baseline replayed varies by 0.1. 200 evaluation dungeons would take about 15 minutes per model.
 5. **The remaining dead ends**: games that hang (1 in 20 with random choices in round 4, 1 in 40
