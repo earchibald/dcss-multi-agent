@@ -13,7 +13,8 @@ hostiles in view have at least 1.5 times the character's current HP left between
 deeper than the rules alone on 600 fresh dungeons (seeds 670000–670599), and +0.00 [−0.10, +0.10] against `v6-clean3`
 at `margin=0.6`, which replicated its own gain there (+0.24 [+0.15, +0.35]). On the saved runs the rule fires in 82%
 of the spells of exhaustion where the model reads, and the model reads in 83% of those it fires in; on the tuning
-blocks the model adds nothing on top of it (+0.00). It stays off by default; the defaults are the orchestrator's call
+blocks the model adds nothing on top of it (+0.00). It was tested as an opt-in switch and is the default since the commit after that test (`--style teleport=0` turns
+it off; saved runs from before are read as played with it off)
 (section "The model's teleport reads as a rule", below). Forks that read or fight from the same exhausted,
 outnumbered state put one read at +0.29 [+0.00, +0.58] deeper where the rule would read (+0.35 [+0.12, +0.62] where the
 model would; +0.91 with 6+ hostiles), so the reads themselves pay.

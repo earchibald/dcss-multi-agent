@@ -55,9 +55,10 @@ class Style:
     margin: float = 0.25      # leave the rules of thumb only for an action predicted this much better
     min_count: float = 40     # ...and only for actions the model saw at least this often in training
     wiki: float = 0.0         # 1 = the rules of thumb follow the DCSS wiki's guides (docs/wiki-strategy.md)
-    teleport: float = 0.0     # 1 = the rules of thumb read teleportation when spent after a rage (`teleport_rule`),
+    teleport: float = 3.0     # 1 = the rules of thumb read teleportation when spent after a rage (`teleport_rule`),
                               # 2 = also when outnumbered by something dangerous, 3 = only when exhausted after a
-                              # rage and outmatched (the hostiles' HP left at 1.5x the character's). Off by default.
+                              # rage and outmatched (the hostiles' HP left at 1.5x the character's), 0 = off.
+                              # 3 by default since 2026-11-15 (+0.24 [+0.16, +0.34] on 600 fresh dungeons).
     recover: float = 1.0      # 1 = with nothing in view, rest out a rage and its exhaustion (`recovering`) before
                               # taking the stairs, 2 = before exploring on as well, 0 = off. 1 by default since
                               # 2026-11-15 (with retreat=2: +0.45 [+0.24, +0.65] on 996 fresh dungeons).
@@ -90,7 +91,7 @@ class Style:
 
 # Style keys whose default has changed since they were added, with the value they were added at: a run
 # saved before the key existed was played with this value.
-STYLE_ADDED_AS = {"recover": 0.0, "retreat": 0.0}
+STYLE_ADDED_AS = {"recover": 0.0, "retreat": 0.0, "teleport": 0.0}
 
 
 SERIOUS_POISON = 65       # % of current HP the poison will take: the game's "seriously poisoned" (status.cc)

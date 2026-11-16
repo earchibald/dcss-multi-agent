@@ -1668,11 +1668,11 @@ CROWD3 = dict(god="Trog", inv=SCROLL, n_hostiles=3,
               mons=[mon(dx=5, threat=2), mon(dx=6), mon(dx=6, dy=1)])
 
 
-def test_teleport_rules_are_off_by_default():
+def test_teleport_is_3_by_default_and_0_plays_as_before():
     for o in (obs(**SPENT), obs(**CROWD3)):
         assert rules(o) == "fight"
         assert baseline(o, available(o, False, set(), False), False) == "fight"
-    assert Style().teleport == 0
+    assert Style().teleport == 3
 
 
 def test_spent_after_a_rage_reads_teleportation():
@@ -1779,9 +1779,11 @@ def test_teleport_switch_is_a_style_and_old_runs_still_match():
     import argparse
     from ladder.brain.cli import _style
     assert _style(argparse.Namespace(style=["teleport=2"])).teleport == 2.0
-    old = {k: v for k, v in Style().to_dict().items() if k != "teleport"}      # a run saved before the switch
-    assert {**Style().to_dict(), **old} == Style().to_dict()
-    assert {**Style().to_dict(), **old} != Style(teleport=1).to_dict()
+    # a run saved before the switch existed was played with it off, not with today's default
+    old = {k: v for k, v in Style().to_dict().items() if k != "teleport"}
+    assert Style.saved(old) == Style(teleport=0)
+    assert Style.saved(old) != Style()
+    assert Style.saved(Style().to_dict()) == Style()
 
 
 # --- the opt-in rule to rest out a rage before going on (Style.recover, policy.recovering) -----------
@@ -2078,7 +2080,7 @@ def test_retreat_and_stairs_switches_are_styles_and_old_runs_still_match():
     assert Style.saved(old) != Style()
     # one saved with recover but before retreat existed
     assert Style.saved({**old, "recover": 1.0}) == Style(recover=1, retreat=0)
-    assert Style.saved(None) == Style(recover=0, retreat=0)
+    assert Style.saved(None) == Style(recover=0, retreat=0, teleport=0)
 
 
 def test_evaluate_reuses_a_saved_run_only_when_its_style_matches(tmp_path, monkeypatch):
