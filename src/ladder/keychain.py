@@ -25,7 +25,9 @@ def get_or_create_dcss_password(username: str) -> tuple[str, bool]:
     existing = get(account)
     if existing:
         return existing, False
-    password = _secrets.token_urlsafe(24)
+    # Hex only: the WebTiles server's default hashing uses the password as a DES
+    # salt, and one that starts with "-" or "_" is stored as a hash no login matches.
+    password = _secrets.token_hex(18)
     set(account, password)
     return password, True
 
