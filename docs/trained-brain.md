@@ -2206,6 +2206,102 @@ together. Seeds 690000–690599 are unspent; no fork was played.
 - Runs: none. (An abandoned start of `A-ref`, 50 games all `hung` at once, left no files; its empty directory was
   removed.) Seeds spent: none.
 
+#### The fights the rules start, tuned: no candidate is ahead (2026-11-16, small hours)
+
+With space on the server again (46 GB free, terminal recording off; the disk stayed at 52% through every run below),
+the previous section's tasks 3–5 were run. **Result: none of the five candidates, nor the best two together, is
+ahead of today's defaults on the tuning blocks, so no fresh test was played and seeds 690000–690599 are still
+unspent.** No default was changed.
+
+**What each switch does** (`src/ladder/brain/policy.py`, `Style`; checked against the code before playing):
+`avoid=k` and `retreat=3` are as the previous section describes. `calm=1` is not literally "finish exploring before
+the stairs down": with nothing in view it rests out a rage instead of trying to explore (which DCSS refuses, "Calm
+down first, please."), and a refusal for the rage no longer counts toward setting `explore` aside. The effect is the
+one (a) asks for: levels are explored to the end far more often (table below). `recover=2` adds resting out the
+exhaustion after the rage before exploring on.
+
+**Method.** This working tree's code, no model, no random choices, 9 workers (`ladderbrain*` accounts), each arm on A
+(500000–500199) and C (540000–540199), played one after another (23:30–03:21; `chain.sh`, `jobs-tune.txt`,
+`jobs-combo.txt`). Reference: the defaults (`recover=1 retreat=2 teleport=3 unseen=2`) replayed with this tree,
+`runs/brain/v6e/{A,C}-ref`; against yesterday's `v6d/{A,C}-u2b` it is −0.01 [−0.01, +0.00], 397 of 399 dungeons the
+same depth. Each candidate − the reference, paired by dungeon over games both finished and neither stale nor off its
+seed (`arms.py`); 95% bootstrap over dungeons, 10,000 resamples. Description only: these blocks are spent.
+
+| arm (`--style`) | A: mean depth | C: mean depth | − reference, A | − reference, C | **− reference, A + C** | deeper / same / shallower |
+| --- | --- | --- | --- | --- | --- | --- |
+| reference (the defaults) | 6.99 | 6.27 | | | | |
+| `avoid=1.5` | 6.87 | 6.27 | −0.12 [−0.31, +0.06] | +0.00 [−0.12, +0.13] | **−0.06 [−0.17, +0.05]** | 27 / 337 / 35 |
+| `avoid=1.0` | 6.79 | 6.08 | −0.20 [−0.48, +0.07] | −0.19 [−0.43, +0.05] | **−0.20 [−0.38, −0.02]** | 39 / 295 / 65 |
+| `retreat=3` | 6.92 | 6.24 | −0.07 [−0.33, +0.18] | −0.03 [−0.20, +0.14] | **−0.05 [−0.20, +0.10]** | 41 / 322 / 36 |
+| `calm=1` | 6.49 | 6.24 | −0.50 [−1.00, +0.01] | −0.06 [−0.51, +0.40] | **−0.28 [−0.62, +0.07]** | 134 / 98 / 167 |
+| `calm=1 recover=2` | 6.49 | 6.25 | −0.51 [−1.01, +0.01] | −0.05 [−0.50, +0.41] | **−0.28 [−0.61, +0.07]** | 135 / 98 / 166 |
+| `retreat=3 avoid=1.5` (the best two) | 6.86 | 6.19 | −0.13 [−0.43, +0.16] | −0.08 [−0.29, +0.14] | **−0.10 [−0.29, +0.08]** | 53 / 281 / 63 |
+
+Dungeons paired: 399 in every row (200 on A, 199 on C: seed 540052 hangs in the reference, as it has in every C run)
+except the last, 397: two games of that arm, 500173 and 540196, died in under 130 turns and their morgues are stamped
+7 s before the game's directory, outside `seeds.py`'s 5-second window. Their morgues are on the right seed with the
+right turn count, and both seeds end the same in every arm, so leaving them out changes nothing. Every game of the 14
+runs was checked on its seed three ways (`verify.py`): no "Welcome back", no protocol without its seed, no first step
+after turn 1; 5 games hung, all on 540052.
+
+**Where each one acts** (`cattrib.py`: games whose choices are the reference's are the same game, difference 0 in all
+of them; the rest "part", and the first choice where they part says which rule did it; `avoidafter.py`, `calmdiag.py`):
+
+- **`avoid`**: it reads in about a quarter of games (1.5: 68 reads in 50 games on A, 54 in 40 on C; 1.0: 119 in 75,
+  114 in 66), and all but 1–4 of the games that part do so at one of these reads. Those games are −0.46 (A) and +0.00 (C) each
+  at 1.5, −0.54 and −0.55 at 1.0. After 94–96% of the reads the rules rage anyway within the next few choices (the
+  scroll takes a few turns, and the rule allows it), and in 74–80% the character is soon alone, so the rage is spent with
+  nobody to hit and the scroll is gone. Deaths within 50 turns of a read are 11–19%, under the 18–26% the previous
+  section counted after rages begun in the same state, but that does not carry through to depth (inferred: what the
+  read costs later outweighs the death it saves now).
+- **`retreat=3`**: it parts 64 games on A (−0.22 each) and 50 on C (−0.10), every one at a walk up the stairs with
+  hostiles in view while exhausted. Games that die with their last fight begun exhausted fall (A 50 → 41, C 46 → 37),
+  but depth does not rise: level within ±0.2.
+- **`calm=1`**: it changes nearly every game (190 of 200 on A, 185 of 199 on C part from the reference, all at a rest
+  in a rage with nothing in view). What it changes:
+
+| run | levels left down (D:3 on) explored to the end | XL on first arrival at D:4 / 5 / 6 / 7 / 8 | turns | died on D:1–3 / 4–6 / 7+ |
+| --- | --- | --- | --- | --- |
+| A reference | 361 of 873 (41%) | 4.6 / 5.8 / 6.7 / 7.5 / 8.3 | 4011 | 22 / 67 / 101 |
+| A `calm=1` | 612 of 750 (82%) | 4.6 / 6.1 / 7.2 / 8.0 / 8.7 | 4404 | 25 / 90 / 77 |
+| C reference | 305 of 721 (42%) | 4.5 / 5.7 / 6.8 / 7.5 / 8.1 | 3374 | 42 / 54 / 95 |
+| C `calm=1` | 563 of 706 (80%) | 4.8 / 6.2 / 7.2 / 7.9 / 8.7 | 4204 | 41 / 66 / 86 |
+
+  It does what (a) wanted: twice as many levels explored to the end and the character arrives 0.3–0.6 XL higher from
+  D:5 on. But more of the games end on D:4–6 (A 67 → 90, C 54 → 66), and depth falls on A and is level on C. The
+  extra exploring meets more fights at the same depth, and the XL it buys doesn't pay for them. This is the earlier
+  finding again (+1.0 XL, the same depth, under older rules), now with the defaults.
+- **`recover=2` on top of `calm=1`** parts nearly every game from `calm=1` alone (at a rest while exhausted) but ends
+  them the same: +0.01 [−0.05, +0.07] against `calm=1`, 392 of 400 at the same depth.
+- **The best two together** (by the pooled difference: `retreat=3` −0.05, `avoid=1.5` −0.06) are −0.10 [−0.29,
+  +0.08] against the reference and −0.06 [−0.19, +0.08] against `retreat=3` alone: the two do not add up to a gain.
+
+**No fresh test.** The plan was to pre-register a test on 690000–690599 only for a candidate clearly ahead on A + C.
+None is ahead: the best point estimate is −0.05, and no interval's upper end is above +0.10. So nothing was
+pre-registered and **seeds 690000–690599 were not played; they are still unused.**
+
+**Summary of the section.**
+
+- On A + C against today's defaults: `avoid=1.5` −0.06 [−0.17, +0.05], `avoid=1.0` −0.20 [−0.38, −0.02], `retreat=3`
+  −0.05 [−0.20, +0.10], `calm=1` −0.28 [−0.62, +0.07], `calm=1 recover=2` −0.28 [−0.61, +0.07], `retreat=3
+  avoid=1.5` −0.10 [−0.29, +0.08]. None ahead; `avoid=1.0` is behind.
+- Reading teleportation instead of starting a rage (`avoid`) doesn't work as built: the rules rage anyway while the
+  scroll takes effect, and the rage is then wasted. Leaving a fight met exhausted (`retreat=3`) saves some deaths and
+  costs as much elsewhere. Exploring every level (`calm`) buys XL but not depth.
+- **Measured**: every number above (scripts below); the reference against yesterday's runs; every game on its seed
+  three ways; the two morgues stamped early (on the server, on their seed, with their turn counts); the tests (`uv
+  run pytest -q`: 478 passed, 5 deselected; `uv run ruff check`: clean).
+- **Inferred**: why `avoid` loses (the rage after the read and the lost scroll, read from the choices after it, not
+  forked); why `calm`'s extra XL doesn't turn into depth (the death bands and turns, not a cause table); that
+  `retreat=3`'s saved deaths are paid back later (the count of deaths falls while depth stays level).
+- Not measured: forks for any of these; a `teleport=3` at a lower ratio ((d) of the previous section); `avoid` with a
+  rule that holds the rage until the scroll takes effect.
+- Runs: `runs/brain/v6e/{A,C}-{ref,av15,av10,r3,calm,calmrec2,r3av15}`. Scripts in the job's `brain-v6e/` scratch
+  directory: `chain.sh`, `jobs-ref.txt` (not used on its own: the reference is the first two lines of
+  `jobs-tune.txt`), `jobs-tune.txt`, `jobs-combo.txt`, `arms.py`, `seeds.py`, `verify.py`, `refresh.sh`,
+  `mindex.py` (copies), and new: `cattrib.py`, `avoidafter.py`, `calmdiag.py`, `oddseeds.py`. Seeds spent: none;
+  evaluation seeds replayed: A and C only.
+
 ## What carried over from s1-battle, and what couldn't
 
 | s1-battle | here |
@@ -2618,6 +2714,10 @@ In the order I would take them:
    and `calm=1 recover=2` (the rage's "Calm down" is why most levels from D:4 on are left unexplored), the best two
    together, and a pre-registered test on 690000–690599 only if one is ahead. (d) above is dropped: the fights met while
    exhausted come after resting, not exploring.*
+   *(2026-11-16) Done, with the server's disk freed: none is ahead on A + C (best `retreat=3` −0.05 [−0.20, +0.10];
+   `avoid=1.0` −0.20 [−0.38, −0.02]; section "The fights the rules start, tuned"). 690000–690599 are still unspent.
+   Left from the list: `avoid` that holds the rage until the scroll takes effect (as built, the rules rage anyway and
+   waste it); forks before any new fight rule; `teleport=3` at a lower ratio.*
 4. **Promote on more than 60 dungeons.** Differences under 0.3 depths can't be seen with 60; the same
    baseline replayed varies by 0.1. 200 evaluation dungeons would take about 15 minutes per model.
 5. **The remaining dead ends**: games that hang (1 in 20 with random choices in round 4, 1 in 40
