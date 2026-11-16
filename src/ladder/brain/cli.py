@@ -235,9 +235,10 @@ def add_parser(sub) -> None:
                    help="game turns played after the fork; 0 = to the end, which the depth_end label needs")
     q.add_argument("--model", help="plays on after the fork; without one the rules of thumb do")
     q.add_argument("--seed", type=int, default=0, help="which moments are picked")
-    q.add_argument("--kind", choices=("any", "stairs"), default="any",
+    q.add_argument("--kind", choices=("any", "stairs", "teleport"), default="any",
                    help="any: late and other moments, other actions tried; stairs: explore-or-descend moments, "
-                        "forked both ways and committed for the rest of that level (forks.py)")
+                        "forked both ways and committed for the rest of that level; teleport: exhausted after a "
+                        "rage and outnumbered, forked to read_teleport and to fight, one per spell (forks.py)")
     q.set_defaults(fn=cmd_forks)
 
     q = bsub.add_parser("human", help="turn recordings of your own games (play<n>.jsonl) into step logs")

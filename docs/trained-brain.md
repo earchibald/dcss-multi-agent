@@ -7,6 +7,17 @@ runs in numpy in well under a millisecond. It is the same idea as the trained br
 
 ## Where it stands
 
+**2026-11-15, evening: the model's teleport habit, written as a one-threshold rule, passes a pre-registered fresh test
+and plays as well as the model.** `--style teleport=3` (read teleportation when exhausted after a rage and the
+hostiles in view have at least 1.5 times the character's current HP left between them) is **+0.24 [+0.16, +0.34]**
+deeper than the rules alone on 600 fresh dungeons (seeds 670000–670599), and +0.00 [−0.10, +0.10] against `v6-clean3`
+at `margin=0.6`, which replicated its own gain there (+0.24 [+0.15, +0.35]). On the saved runs the rule fires in 82%
+of the spells of exhaustion where the model reads, and the model reads in 83% of those it fires in; on the tuning
+blocks the model adds nothing on top of it (+0.00). It stays off by default; the defaults are the orchestrator's call
+(section "The model's teleport reads as a rule", below). Forks that read or fight from the same exhausted,
+outnumbered state put one read at +0.29 [+0.00, +0.58] deeper where the rule would read (+0.35 [+0.12, +0.62] where the
+model would; +0.91 with 6+ hostiles), so the reads themselves pay.
+
 **2026-11-15, afternoon: `v6-clean3` at `margin=0.6` is still the best configuration; its successor `v7-clean3` is not
 ahead on the tuning blocks, so no fresh seeds were spent** (section "No second teleport scroll, a second clean round
 with forks, and `v7-clean3`", below). `read_teleport` is no longer possible while a teleport is coming (+0.05 [+0.02,
@@ -1628,6 +1639,208 @@ written and seeds 670000–670599 are unused.
   the job's `brain-v6b/` scratch directory: `round2.sh`, `build7.sh`, `chain.sh` and the `jobs-*.txt` files, and the
   analysis scripts named above. Seeds spent: training 120000–121799; evaluation seeds replayed: A and C only.
 
+#### The model's teleport reads as a rule: `teleport=3` (2026-11-15, evening)
+
+**Pre-registered (written at 16:20, after the tuning runs on A and C and before any game on seeds 670000–670599).**
+Configuration: this working tree's code, the rules of thumb (default style, `recover=1 retreat=2`) with `--style
+teleport=3`, no model, no random choices. `teleport=3` reads teleportation first in a fight (after a cure and a
+retreat up close stairs) when exhausted after a rage (`-Berserk` showing) and the hostiles in view have at least 1.5
+times the character's current HP left between them (`foe_hp`; `policy.OUTMATCHED`), never while `Tele` shows.
+Baseline: the same code with no model and the default style (the rules alone). A third arm, descriptive only:
+`models/v6-clean3.json` at `--style margin=0.6` with the default style otherwise (no `teleport` rule). Dungeons: seeds
+670000–670599 (600, never used before), played as three blocks of 200 (670000, 670200, 670400); each block by all
+three arms one run after the other, the order rotated by block (670000: rule, rules alone, model; 670200: rules
+alone, model, rule; 670400: model, rule, rules alone); 12 workers asked, the accounts that log in play (the two that
+fail are not repaired). **Primary comparison: (rules + `teleport=3`) − rules alone**, paired by dungeon over games
+both finished (not hung, crashed or an error) and neither stale nor off its seed (stale: its first step is after turn
+1; off its seed: no morgue on that custom seed with the game's turn count); 95% bootstrap over dungeons, 10,000
+resamples (`brain-v6c/arms.py`); analysed once, after all 1,800 games are played, with no early stopping. **Pass: the
+interval's lower end is above zero.** Secondary, descriptive, outside the pass rule: rule − `v6-clean3` 0.6, and
+`v6-clean3` 0.6 − rules alone (a replication of the earlier +0.14), each with the same pairing; per-block differences,
+reads per arm. Chosen because on the tuning blocks A + C it is +0.27 [+0.14, +0.41] against the rules alone and +0.05
+[−0.08, +0.18] against `v6-clean3` at 0.6 (tables below). Style defaults are not changed whatever the result.
+
+**Task 1: where the model reads.** Source: every moment in the saved runs where `read_teleport` could be chosen with
+no teleport already coming (147,384 moments in 14 runs: `v6-clean3` at 0.6 and the rules alone on A and C in
+`runs/brain/v5i` and `v6b`, and on 660000–660599). At each, the model's choice was recomputed offline with the batched
+forward pass and `prefer`'s rule (margin 0.6, `min_count` 40); in the model's own games it matches the logged choice at
+all 71,728 moments. The model would read at 3,105 of them (`moments.py`).
+
+| at the moment | moments | model reads | HP (median) | hostiles (median) | threat 2+ in view | foes' HP left ÷ own HP (median) | holding a healing potion |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| spent (`-Berserk` and `Slow`), model reads | | 2,517 | 33% | 3 | 93% | 2.6 | 17% |
+| spent, model doesn't read | 21,133 | | 80% | 1 | 61% | 0.4 | 40% |
+| `-Berserk` only (no longer slowed) | 4,380 | 287 (6.6%) | | | | | |
+| not after a rage | 119,354 | 301 (0.3%) | 64% (reads) | 2 (reads) | 96% (reads) | 2.0 (reads) | |
+
+While spent, the read rate climbs with every measure of being outmatched (HP under 10%: 92%; 90%+: 1.2%; 8+ hostiles:
+60%; one hostile: 4%), but none separates the reads as cleanly as the hostiles' HP left against the character's own,
+`foe_hp` (the estimate `big_fight` already uses: each monster's average HP times the share its damage level leaves):
+under 1×, 1.3% read; 1–2×, 22%; 2–3×, 59%; 3×+, 79–100%. A grid over the status gate, that ratio, HP fraction,
+hostile count and worst threat (`fit.py`) puts one threshold on that ratio first; adding the others moves F1 by 0.01.
+
+Precision and recall against the model's reads (`prtable.py`, `spellx.py`). "Moments" counts each moment; a "spell" is
+one spell of exhaustion in one game (moments with `-Berserk` under 40 turns apart; 3,414 spells, 857 with a model
+read), where a condition "fires" if it holds at some moment of the spell. A rule reads once and the spell is over, so
+the spell view is the one that matters for play.
+
+| condition | moments it holds | precision | recall | spells it fires in | precision | recall | first holds at / before / after the model's first read |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `teleport=1`: spent (`-Berserk` and `Slow`) | 23,650 | 11% | 81% | 3,242 | 26% | 99% | 271 / 574 / 0 |
+| `teleport=2`: spent, or 3+ hostiles with one of threat 2+ | 33,046 | 8% | 90% | 3,250 | 26% | 99% | 273 / 574 / 0 |
+| spent, HP ≤ 50%, 3+ hostiles, one of threat 2+ (the morning's guess) | 1,290 | 72% | 30% | 414 | 87% | 42% | 151 / 72 / 136 |
+| best without foes' HP: `-Berserk`, HP ≤ 40%, one of threat 2+ | 2,700 | 55% | 48% | 717 | 73% | 61% | 198 / 123 / 201 |
+| **`-Berserk`, foes' HP ≥ 1.5 × own HP (`teleport=3`)** | 3,675 | **60%** | **71%** | 854 | **83%** | **82%** | 421 / 191 / 93 |
+| `-Berserk`, foes' HP ≥ 2 × own HP | 2,469 | 74% | 59% | 685 | 89% | 71% | 339 / 108 / 162 |
+| `-Berserk`, foes' HP ≥ 1.5 ×, one of threat 2+ | 3,263 | 62% | 66% | 769 | 84% | 75% | 381 / 173 / 93 |
+
+- The old rules read at the first spent moment of every spell; the model reads in a quarter of them. That is the
+  difference between `teleport=1` (level on fresh blocks) and the model.
+- `teleport=3` agrees with the model in 4 spells of 5 either way, and when both read in a spell, it reads at the same
+  moment in 60% of them and earlier in 27%. By block the moment-level precision and recall hold: A 54% / 74%, C 64% /
+  69%, the fresh 660000–660599 63% / 71%.
+- What it misses: about 300 reads not after a rage (median HP 64%, nearly all with a threat-2+ monster), and reads at
+  moments a single strong monster is in view (median 1 hostile, foes' HP 1.1× own). Where it holds and the model
+  doesn't read, the character more often holds a healing potion (38% against 16%); the model prefers the potion
+  there (of the moments where the condition holds and the rules would drink, the model reads at 138 of 368, against
+1,715 of 2,555 where they would fight).
+
+**Task 2: `teleport=3`** (`src/ladder/brain/policy.py`: `teleport_rule`, `OUTMATCHED = 1.5`; `Style.teleport`'s
+comment). Level 3 is not cumulative: it replaces level 1's spent condition with the outmatched one, in the same place
+in the fight order (after curing serious poison and after `retreat`'s walk up close stairs, before a rage and the
+healing potion), and has no crowded clause. `Tele` still blocks it. Off by default (`Style().teleport == 0`); no
+default changed. Tests in `tests/test_brain.py`: `test_outmatched_reads_teleportation_at_level_3`,
+`..._needs_exhaustion_and_more_foe_hp_than_its_threshold` (the threshold, damage already done, the monster table
+fallback), `..._is_not_the_spent_or_crowded_rule`, `..._keeps_the_guards` (`Tele`, confusion, no scroll, blocked, retreat
+and cure first).
+
+**Task 3: tuning on A (500000–500199) and C (540000–540199).** All with this tree's code, no random choices; the rules
+alone and `v6-clean3` 0.6 are the afternoon's runs (`runs/brain/v6b/{A,C}-rules`, `-v6-m0.6`, same code but for the
+new switch, which is off there); paired by dungeon over games both finished and neither stale nor off their seed
+(`arms.py`; 399 of 400, C's one hung game in every arm); 95% bootstrap, 10,000 resamples. Description only.
+
+| arm | A: mean depth | C: mean depth | teleport reads (A, C) | games with a read (A, C) | − rules alone, A + C | 95% interval | deeper / same / shallower |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| rules alone | 6.29 | 5.96 | 9, 23 (fallbacks) | 5, 14 | | | |
+| `v6-clean3`, `margin=0.6` | 6.64 | 6.05 | 106, 107 | 59, 55 | +0.22 | [+0.09, +0.36] | 47 / 338 / 14 |
+| **rules + `teleport=3`** | **6.63** | **6.17** | 85, 92 | 48, 52 | **+0.27** | **[+0.14, +0.41]** | 43 / 342 / 14 |
+| `v6-clean3` 0.6 + `teleport=3` | 6.69 | 6.11 | 116, 118 (43 and 50 the model's own) | 62, 57 | +0.27 | [+0.12, +0.43] | 54 / 325 / 20 |
+
+| comparison, A + C | difference | 95% interval | deeper / same / shallower | A | C |
+| --- | --- | --- | --- | --- | --- |
+| rules + `teleport=3` − rules alone | **+0.27** | **[+0.14, +0.41]** | 43 / 342 / 14 | +0.34 [+0.14, +0.55] | +0.21 [+0.06, +0.37] |
+| rules + `teleport=3` − `v6-clean3` 0.6 | +0.05 | [−0.08, +0.18] | 30 / 339 / 30 | −0.01 [−0.18, +0.15] | +0.12 [−0.08, +0.32] |
+| `v6-clean3` 0.6 + `teleport=3` − rules + `teleport=3` | +0.00 | [−0.11, +0.10] | 22 / 361 / 16 | +0.06 | −0.06 |
+| `v6-clean3` 0.6 + `teleport=3` − `v6-clean3` 0.6 | +0.05 | [−0.02, +0.13] | 15 / 372 / 12 | +0.04 | +0.06 |
+
+- **The rule carries the model's whole gain on the tuning blocks**, and on block C a little more. All of it comes from
+  the 87 games where the rule read more scrolls than the rules alone (+1.25 each, 43 deeper / 31 same / 13 shallower);
+  297 of the 299 games with no read in either are the same game (`ruleattrib.py`).
+- **The model adds nothing once the rule exists** (+0.00 [−0.11, +0.10]). On top of the rule it still overrides at
+  0.03–0.06% of choices, mostly to read where the rule doesn't.
+
+**Task 4: result on 670000–670599: passes.** Rules + `teleport=3` is **+0.24 [+0.16, +0.34]** deeper than the rules
+alone, all 600 dungeons paired (no game hung, stale or off its seed in any of the nine runs: `verify.py` three ways).
+Analysed once, after all 1,800 games (16:30–17:56).
+
+| fresh blocks | arm (order played) | finished (hung) | mean depth | XL | turns | died on D:1–3 / 4–6 / 7+ | teleport reads | games with a read |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| P1 (670000–) | rules + `teleport=3` (1st) | 200 (0) | 6.07 | 6.58 | 3213 | 42 / 75 / 74 | 101 | 53 |
+| | rules alone (2nd) | 200 (0) | 5.82 | 6.45 | 3066 | 43 / 78 / 70 | 9 (fallbacks) | 7 |
+| | `v6-clean3` 0.6 (3rd) | 200 (0) | 6.01 | 6.59 | 3223 | 42 / 73 / 77 | 104 (99 the model's) | 60 |
+| P2 (670200–) | rules alone (1st) | 200 (0) | 5.78 | 6.39 | 2995 | 44 / 74 / 78 | 4 | 3 |
+| | `v6-clean3` 0.6 (2nd) | 200 (0) | 6.11 | 6.59 | 3188 | 43 / 68 / 85 | 113 (107) | 71 |
+| | rules + `teleport=3` (3rd) | 200 (0) | 6.09 | 6.62 | 3239 | 43 / 67 / 86 | 91 | 58 |
+| P3 (670400–) | `v6-clean3` 0.6 (1st) | 200 (0) | 6.29 | 6.79 | 3472 | 34 / 68 / 84 | 100 (93) | 55 |
+| | rules + `teleport=3` (2nd) | 200 (0) | 6.25 | 6.76 | 3473 | 34 / 70 / 82 | 69 | 45 |
+| | rules alone (3rd) | 200 (0) | 6.08 | 6.67 | 3373 | 34 / 76 / 76 | 4 | 2 |
+
+| comparison | P1 | P2 | P3 | **P1–P3 (600 dungeons)** | deeper / same / shallower |
+| --- | --- | --- | --- | --- | --- |
+| **rules + `teleport=3` − rules alone (the pre-registered test)** | +0.24 [+0.09, +0.41] | +0.32 [+0.15, +0.50] | +0.17 [+0.04, +0.33] | **+0.24 [+0.16, +0.34]** | 57 / 529 / 14 |
+| rules + `teleport=3` − `v6-clean3` 0.6 (descriptive) | +0.05 [−0.10, +0.20] | −0.01 [−0.20, +0.17] | −0.04 [−0.20, +0.13] | +0.00 [−0.10, +0.10] | 40 / 513 / 47 |
+| `v6-clean3` 0.6 − rules alone (replication, descriptive) | +0.20 [+0.06, +0.34] | +0.33 [+0.14, +0.54] | +0.21 [+0.04, +0.40] | +0.24 [+0.15, +0.35] | 73 / 505 / 22 |
+
+- **Passes the pre-registered rule**: the lower end is +0.16. Each block on its own is above zero too, whichever arm
+  played first.
+- **The rule is level with the model** (+0.00 [−0.10, +0.10]), and the model's earlier result replicates, larger
+  (+0.24 here against +0.14 on 660000–660599).
+- All of the gain is in the games where the rule read: 148 games with more reads than the rules alone, +0.95 each
+  (55 deeper / 79 same / 14 shallower), 96% of the difference; 443 of the 444 games where neither read are the same
+  game (`ruleattrib.py`). Deaths on D:4–6 fall (228 → 212 over the three blocks) and more games reach D:7+.
+- So the gain no longer depends on one model keeping a habit: a two-line rule, with one threshold, plays as well.
+  Whether reading itself is what helps, rather than what the rule's moments have in common, is task 5.
+
+**Task 5: forks that read or fight from the same state** (`forks.plan(kind="teleport")`, `ladder brain forks --kind
+teleport`; test `test_plan_teleport_forks_read_and_fight_once_per_spell`). Source: 600 new games of the rules alone
+(default style, no random choices) on training seeds 130000–130599 (`runs/brain/v6c/src-{0,1,2}`; every game on its
+seed three ways, 1 hung). Moments: exhausted after a rage (`-Berserk`), 2 or more hostiles in view, `read_teleport`
+and `fight` both possible; one at random from each spell of exhaustion: 371 moments in 184 games. Each was forked to
+`read_teleport` and to `fight`, both played on to the end by the rules alone (no `teleport` rule), 742 forks
+(`runs/brain/v6c/forks/tp-rules`; none hung, none left the recorded game, the two forks' states identical in all 371
+pairs). Outcome: deepest floor of the read fork − the fight fork; 95% bootstrap over source games (10,000 resamples;
+`forkdiff.py`). This is the paired, causal estimate of one read against fighting on there.
+
+| moments | pairs | depth: read − fight | 95% interval | deeper / same / shallower | died within 30 turns: read − fight |
+| --- | --- | --- | --- | --- | --- |
+| all | 371 | +0.21 | [−0.06, +0.50] | 120 / 158 / 93 | −7 points |
+| HP ≤ 25% | 43 | +0.09 | [+0.00, +0.29] | 1 / 42 / 0 | 0 |
+| HP 25–50% | 46 | +0.59 | [−0.06, +1.29] | 15 / 25 / 6 | −30 |
+| HP 50–75% | 97 | −0.23 | [−0.83, +0.37] | 30 / 33 / 34 | −3 |
+| HP 75–100% | 185 | +0.38 | [+0.01, +0.77] | 74 / 58 / 53 | −5 |
+| 2 hostiles | 190 | +0.13 | [−0.24, +0.51] | 58 / 80 / 52 | −2 |
+| 3 hostiles | 74 | −0.04 | [−0.69, +0.64] | 21 / 31 / 22 | −8 |
+| 4–5 hostiles | 72 | +0.36 | [−0.13, +0.80] | 29 / 27 / 16 | −14 |
+| 6+ hostiles | 35 | +0.91 | [+0.31, +1.57] | 12 / 20 / 3 | −17 |
+| HP ≤ 50% and 3+ hostiles | 55 | +0.55 | [+0.19, +0.95] | 13 / 39 / 3 | −16 |
+| **where `teleport=3` would read** | 108 | **+0.29** | **[+0.00, +0.58]** | 23 / 72 / 13 | −13 |
+| where it would not | 263 | +0.18 | [−0.17, +0.55] | 97 / 86 / 80 | −5 |
+| where `v6-clean3` 0.6 would read | 85 | +0.35 | [+0.12, +0.62] | 15 / 66 / 4 | −16 |
+| where it would not | 286 | +0.17 | [−0.19, +0.53] | 105 / 92 / 89 | −4 |
+
+- **Reading is worth something where the rule and the model read**: +0.29 (rule) and +0.35 (model) a moment; the read
+  fork is deeper in 23 pairs and shallower in 13 (rule), 15 and 4 (model), with 13–16 points fewer deaths within 30
+  turns. Where either would not read, the estimate is smaller and much noisier (+0.17–0.18, intervals across zero):
+  at high HP with two hostiles the two forks part often and either way.
+- **Outmatched is where it pays most**: 6+ hostiles +0.91 [+0.31, +1.57]; HP under half with 3+ hostiles +0.55 [+0.19,
+  +0.95]. At HP ≤ 25% the two forks nearly always end on the same floor (42 of 43). The middle HP band is the one
+  without a gain (−0.23, wide).
+- These are per read at one moment. A game with the rule reads about 1.8 scrolls, which fits the +0.95 per reading game
+  in task 4 only loosely; the fork estimate is the cleaner number.
+- The model's predicted gap (read − fight) at these moments averages +0.31, close to the measured +0.21, but does not
+  rank the moments: its correlation with the pairs' outcome differences is 0.00 (one pair's outcome is mostly noise).
+  The fork rows are the comparison the model needs to learn from; they are on training seeds and can go into the
+  next corpus as they are. No retraining this round.
+
+**Summary of the section.**
+
+- Task 1: one threshold reproduces `v6-clean3` 0.6's reads: exhausted after a rage and the hostiles' HP left at 1.5×
+  the character's or more. Per spell of exhaustion, 83% precision and 82% recall (`teleport=1`: 26% and 99%).
+- Task 2: it is `--style teleport=3`, off by default, with tests.
+- Task 3: on A + C it is +0.27 [+0.14, +0.41] against the rules alone and +0.05 [−0.08, +0.18] against the model; the
+  model adds +0.00 [−0.11, +0.10] on top of it.
+- Task 4: pre-registered on 670000–670599 and **passes, +0.24 [+0.16, +0.34]**; level with the model (+0.00 [−0.10,
+  +0.10]), whose own gain replicates (+0.24 [+0.15, +0.35]).
+- Task 5: one read against fighting on, from the same state, is +0.29 [+0.00, +0.58] where the rule would read, +0.35
+  [+0.12, +0.62] where the model would, +0.91 with 6+ hostiles; +0.21 [−0.06, +0.50] over all exhausted-and-outnumbered
+  moments.
+- **Verified**: every number in this section (scripts below); the offline model choices against the logged ones
+  (71,728 of 71,728); every fresh and source game on its seed three ways (`verify.py`: protocol greeting, first step,
+  morgue), no stale, hung or off-seed game in the nine fresh runs; that with no read the rule's games are the rules'
+  games (297 of 299 on A + C, 443 of 444 fresh); the fork pairs' identical states; the tests (`uv run pytest`, `uv run
+  ruff check`).
+- **Inferred**: that the gain of both the rule and the model is the reads themselves, not something that comes with
+  their moments: the forks support it where they read (+0.29 and +0.35 a moment, the lower ends at 0.00 and +0.12)
+  but do not separate those moments from the others (+0.18 there, wide), so the rule's threshold is shown to pick
+  moments where reading helps, not shown to be the best place to put it. That the model adds nothing on top of the
+  rule rests on the tuning blocks only.
+- Runs: `runs/brain/v6c/{A,C}-rules-t3`, `{A,C}-v6-m0.6-t3` (tuning), `P{1,2,3}-{rules,t3,v6}` (fresh), `src-{0,1,2}`
+  and `forks/tp-rules` (forks). Scripts in the job's `brain-v6c/` scratch directory: `moments.py` (the 147,384 moments,
+  `moments.jsonl`), `explore.py`, `fit.py`, `prtable.py`, `spellx.py`, `bybase.py`, `reads.py`, `ruleattrib.py`,
+  `forkdiff.py`, `plancount.py`, `chain.sh`, `after.sh`, the `jobs-*.txt` files, and copies of `arms.py`, `seeds.py`,
+  `verify.py`, `refresh.sh`, `mindex.py`, `offline.py`, `overrides.py`. Seeds spent: evaluation 670000–670599 (task 4);
+  training 130000–130599; evaluation seeds replayed: A and C only.
+
 ## What carried over from s1-battle, and what couldn't
 
 | s1-battle | here |
@@ -1882,7 +2095,7 @@ have sight fields and 24,346 (3.0%) are marked missing. Evaluation dungeons and 
 | `docs/wiki-strategy.md` | the DCSS wiki's strategy guides, sorted by what the brain would need to use each piece of advice |
 | `src/ladder/brain/steplog.py` | `steps.jsonl` writer shared by self-play, `spike` and the cockpit |
 | `src/ladder/brain/selfplay.py` | parallel games, one process each, with a watchdog for hung reads |
-| `src/ladder/brain/forks.py` | picks the moments to fork and writes the replay scripts (`kind="stairs"`: explore vs descend) |
+| `src/ladder/brain/forks.py` | picks the moments to fork and writes the replay scripts (`kind="stairs"`: explore vs descend; `kind="teleport"`: read teleportation vs fight, exhausted and outnumbered) |
 | `src/ladder/brain/humanplay.py` | a person's recorded game to a step log |
 | `src/ladder/brain/corpus.py` | step logs to labelled training rows |
 | `src/ladder/brain/train.py` | PyTorch training and export |
@@ -2017,6 +2230,15 @@ In the order I would take them:
    A + C), as a rule or a fork kind of its own; (c) forks that try `read_teleport` against `fight` at spent moments,
    so the estimate of fighting on there comes from paired outcomes and not from which games happened to read; (d) a
    mixed ensemble (`v6-clean3` + `v7-clean3`) is untried.*
+   *(2026-11-15, evening) (a) done: `teleport=3` (exhausted, hostiles' HP left ≥ 1.5× own) passes on 670000–670599
+   (+0.24 [+0.16, +0.34]) and is level with `v6-clean3` 0.6 there. (c) done once: 371 paired forks put a read at +0.29
+   [+0.00, +0.58] where the rule reads. Next, cheapest first: (a) decide whether `teleport=3` becomes a default (it
+   would need `STYLE_ADDED_AS["teleport"] = 0`, so saved runs keep reading as played with it off) and whether
+   `--brain` then needs a model at all; (b) the fork rows (742, training seeds) into the clean corpus, and more teleport
+   forks, so a retrained model learns the read from paired outcomes and keeps it; (c) the reads the rule misses: about
+   300 model reads not after a rage, at median 64% HP with a threat-2+ monster in view, and lone strong monsters;
+   forks there before any rule; (d) whether the healing potion or the scroll comes first when both are held (the model
+   prefers the potion there); (e) (b) of the afternoon list, `berserk → fight`, still untested.*
 4. **Promote on more than 60 dungeons.** Differences under 0.3 depths can't be seen with 60; the same
    baseline replayed varies by 0.1. 200 evaluation dungeons would take about 15 minutes per model.
 5. **The remaining dead ends**: games that hang (1 in 20 with random choices in round 4, 1 in 40

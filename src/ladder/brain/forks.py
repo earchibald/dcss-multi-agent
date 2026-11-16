@@ -17,6 +17,11 @@ played on by the same policy, so the pair compares going down now with exploring
 The rows otherwise seldom compare those two. A `descend` is one step toward the stairs, after which the
 rules would turn back to exploring, so these forks commit (`BrainTiers.commit`): on that level the
 forked action replaces the other one wherever the rules would choose it.
+
+`kind="teleport"` picks moments exhausted after a rage (`-Berserk`) with TELEPORT_CROWD or more hostiles in
+view, where a scroll of teleportation can be read and `fight` is possible: one moment, at random, from each
+spell of exhaustion. Each is forked twice, to `read_teleport` and to `fight`, both played on by the same
+policy, so the pair is a paired estimate of what reading there is worth against fighting on.
 """
 
 from __future__ import annotations
@@ -26,8 +31,10 @@ import random
 from .corpus import HOLDOUT_SEED, read_games
 
 LATE_WINDOW = 40          # choices before the end of a game that count as "late"
-KINDS = ("any", "stairs")
+KINDS = ("any", "stairs", "teleport")
 STAIRS = ("explore", "descend")
+TELEPORT = ("read_teleport", "fight")
+TELEPORT_CROWD = 2        # hostiles in view that make an exhausted moment outnumbered, for kind="teleport"
 
 
 def _replayable(g: dict) -> bool:
@@ -44,12 +51,22 @@ def _stairs_moment(s: dict) -> bool:
     return s.get("baseline") in STAIRS and all(a in s["avail"] for a in STAIRS) and not s["obs"].get("n_hostiles")
 
 
+def _exhausted(s: dict) -> bool:
+    return "-Berserk" in (s["obs"].get("status") or [])
+
+
+def _teleport_moment(s: dict) -> bool:
+    return _exhausted(s) and s["obs"].get("n_hostiles", 0) >= TELEPORT_CROWD and all(a in s["avail"] for a in TELEPORT)
+
+
 def plan(roots: list, points: int, *, alternatives: int = 3, horizon: int = 0, late_share: float = 0.7,
          seed: int = 0, kind: str = "any") -> list[dict]:
     """Jobs for selfplay.run: up to `points` moments, each forked once per alternative action.
 
     `kind="stairs"`: up to `points` explore-or-descend moments, at most one per visit to a level, each
     forked both ways with `commit` (`alternatives` and `late_share` don't apply).
+    `kind="teleport"`: up to `points` exhausted-and-outnumbered moments (`_teleport_moment`), one per spell of
+    exhaustion, each forked to `read_teleport` and to `fight` (`alternatives` and `late_share` don't apply).
     """
     if kind not in KINDS:
         raise ValueError(f"no fork kind {kind!r} (have: {', '.join(KINDS)})")
@@ -57,6 +74,8 @@ def plan(roots: list, points: int, *, alternatives: int = 3, horizon: int = 0, l
     games = [g for g in read_games(roots) if _replayable(g)]
     if kind == "stairs":
         return _plan_stairs(games, points, horizon, rng)
+    if kind == "teleport":
+        return _plan_teleport(games, points, horizon, rng)
     candidates = []
     for g in games:
         n = len(g["steps"])
@@ -97,4 +116,31 @@ def _plan_stairs(games: list[dict], points: int, horizon: int, rng: random.Rando
         for alt in STAIRS:
             jobs.append({"seed": step["game"], "id": f"{step['game']}-{i + 1}-{alt}", "script": prefix + [alt],
                          "horizon": horizon, "commit": True})
+    return jobs
+
+
+def _plan_teleport(games: list[dict], points: int, horizon: int, rng: random.Random) -> list[dict]:
+    spells = []                    # (game, the indices of its fork moments) per spell of exhaustion
+    for g in games:
+        current: list[int] | None = None
+        for i, s in enumerate(g["steps"]):
+            if not _exhausted(s):
+                if current:
+                    spells.append((g, current))
+                current = None
+                continue
+            current = current if current is not None else []
+            if _teleport_moment(s):
+                current.append(i)
+        if current:
+            spells.append((g, current))
+    rng.shuffle(spells)
+    jobs = []
+    for g, moments in spells[:points]:
+        i = rng.choice(moments)
+        step = g["steps"][i]
+        prefix = [s["action"] for s in g["steps"][:i]]
+        for alt in TELEPORT:
+            jobs.append({"seed": step["game"], "id": f"{step['game']}-{i + 1}-{alt}", "script": prefix + [alt],
+                         "horizon": horizon})
     return jobs

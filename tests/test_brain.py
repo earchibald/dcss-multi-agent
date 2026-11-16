@@ -1413,6 +1413,41 @@ def test_plan_stairs_forks_both_ways_once_per_level_visit_and_commits(tmp_path):
         plan([root], 2, kind="nope")
 
 
+def record_spent_game(directory, game):
+    """A seeded game with two spells of exhaustion: steps 2-4 (outnumbered at 3 and 4) and 7-8 (outnumbered
+    at 8, alone at 7); step 6 is outnumbered but not exhausted, and step 4 has no scroll to read."""
+    directory.mkdir(parents=True, exist_ok=True)
+    spent = {2, 3, 4, 7, 8}
+    crowd = {3, 4, 6, 8}
+    with (directory / "steps.jsonl").open("a") as f:
+        for i in range(1, 11):
+            n = 2 if i in crowd else 1
+            o = point(5 * i, 10, status=["-Berserk", "Slow"] if i in spent else [], n_hostiles=n,
+                      mons=[mon(dx=1 + k) for k in range(n)])
+            avail = ["fight", "read_teleport"] if i != 4 else ["fight"]
+            f.write(json.dumps({"game": game, "step": i, **step(o, "fight", avail)}) + "\n")
+        f.write(json.dumps({"type": "end", "game": game, "died": True, "turn": 60}) + "\n")
+
+
+def test_plan_teleport_forks_read_and_fight_once_per_spell(tmp_path):
+    from ladder.brain.forks import plan
+    root = tmp_path / "runs"
+    record_spent_game(root / "a", 7)
+    record_spent_game(root / "eval", 500_007)                           # an evaluation dungeon: never forked
+    jobs = plan([root], 10, kind="teleport", seed=1, horizon=0)
+    assert {j["seed"] for j in jobs} == {7}
+    by_spot: dict = {}
+    for j in jobs:
+        by_spot.setdefault(spot(j), []).append(j["script"][-1])
+        assert not j.get("commit") and j["horizon"] == 0
+        assert j["script"][:-1] == ["fight"] * (len(j["script"]) - 1)
+    # one moment per spell: step 3 (step 4 has no scroll, step 2 is alone) and step 8; step 6 isn't exhausted
+    assert sorted(by_spot) == ["7-3", "7-8"]
+    assert all(sorted(alts) == ["fight", "read_teleport"] for alts in by_spot.values())
+    assert len(plan([root], 1, kind="teleport", seed=1)) == 2
+    assert plan([root], 10, kind="teleport", seed=1) == plan([root], 10, kind="teleport", seed=1)
+
+
 def test_a_committed_descend_fork_keeps_descending_on_that_level_only():
     state = stairs_state()
     tiers = BrainTiers(rng=random.Random(0), script=["descend"], commit=True)
@@ -1681,6 +1716,63 @@ def test_crowded_reads_teleportation_only_at_level_2_and_after_a_rage():
     assert rules(obs(**{**CROWD3, "n_hostiles": 2, "mons": CROWD3["mons"][:2]}), 2) == "fight"     # two
     weak = [mon(dx=5), mon(dx=6), mon(dx=6, dy=1)]
     assert rules(obs(**{**CROWD3, "mons": weak}), 2) == "fight"                                    # none dangerous
+
+
+def outmatched(hp=10, status=("-Berserk", "Slow"), foes=(30, 30), heal=0, **over):
+    """Exhausted after a rage at `hp` of 40, with hostiles of the given average HP (unhurt) in view."""
+    mons = [{**mon(dx=1 + i), "avghp": a, "mdam": 0} for i, a in enumerate(foes)]
+    return obs(**{"god": "Trog", "hp": hp, "hp_max": 40, "status": list(status), "n_hostiles": len(mons),
+                  "mons": mons, "inv": {**SCROLL, "heal": heal}, **over})
+
+
+def test_outmatched_reads_teleportation_at_level_3():
+    # 60 HP of hostiles against 10 HP: 6x, far past OUTMATCHED
+    assert rules(outmatched(), 3) == "read_teleport"
+    assert teleport_rule(outmatched(), 3) == (True, False)
+    assert rules(outmatched(status=["-Berserk"]), 3) == "read_teleport"        # no longer slowed: still exhausted
+    assert rules(outmatched(heal=1), 3) == "read_teleport"                     # before the healing potion
+    assert rules(outmatched(), 0) == "fight"                                   # off by default
+
+
+def test_outmatched_needs_exhaustion_and_more_foe_hp_than_its_threshold():
+    from ladder.brain.policy import OUTMATCHED
+    assert OUTMATCHED == 1.5
+    for o in (outmatched(status=["Slow"]), outmatched(status=[])):             # slowed by something else; no rage
+        assert rules(o, 3) == rules(o, 0) == "berserk"                         # the rules rage, as without the switch
+    assert rules(outmatched(hp=20, foes=(29,)), 3) == "fight"                  # 29 < 1.5 x 20
+    assert rules(outmatched(hp=20, foes=(30,)), 3) == "read_teleport"          # 30 = 1.5 x 20
+    # damage already done to a monster counts against its HP (features.MDAM_LEFT): 3 is half left
+    hurt = outmatched(hp=20, foes=(40,))
+    hurt["mons"][0]["mdam"] = 3
+    assert rules(hurt, 3) == "fight"                                           # 20 left < 30
+    # a monster with no avghp falls back to the monster table (an orc has 11 HP or so)
+    table = obs(god="Trog", hp=2, hp_max=40, status=["-Berserk"], n_hostiles=1, mons=[mon()], inv=SCROLL)
+    assert rules(table, 3) == "read_teleport"
+
+
+def test_outmatched_is_not_the_spent_or_crowded_rule():
+    # level 3 does not read at every spent moment (level 1) or when merely crowded (level 2)
+    assert rules(obs(**SPENT), 1) == "read_teleport"
+    assert rules(outmatched(hp=30, foes=(10,)), 3) == "fight"                  # spent, but not outmatched
+    assert rules(obs(**CROWD3), 3) == "fight"
+    assert teleport_rule(obs(**CROWD3), 3) == (False, False)
+
+
+def test_outmatched_rule_keeps_the_guards():
+    pending = outmatched(status=["-Berserk", "Slow", "Tele"])
+    assert teleport_rule(pending, 3) == (False, False)                         # a teleport is already coming
+    assert rules(pending, 3) == "fight"
+    assert rules(outmatched(status=["-Berserk", "Conf"]), 3) == "fight"        # can't read while confused
+    assert rules(outmatched(inv=dict(SCROLL, teleport=0)), 3) == "fight"       # no scroll
+    assert rules(outmatched(), 3, blocked={"read_teleport"}) == "fight"
+    # a retreat up close stairs still comes first, as for level 1
+    o = outmatched(hp=30, foes=(50,), dist_up=3)
+    avail = available(o, False, set(), False)
+    assert baseline(o, avail, False, teleport=3) == "read_teleport"
+    assert baseline(o, avail, False, teleport=3, retreat=True) == "flee_up"
+    # serious poison: the cure still comes first
+    poisoned = outmatched(hp=30, foes=(50,), poison_survival=1, inv={**SCROLL, "heal": 1, "curing": 1})
+    assert rules(poisoned, 3) == "quaff_heal"
 
 
 def test_teleport_switch_is_a_style_and_old_runs_still_match():

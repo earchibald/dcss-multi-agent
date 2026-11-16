@@ -56,7 +56,8 @@ class Style:
     min_count: float = 40     # ...and only for actions the model saw at least this often in training
     wiki: float = 0.0         # 1 = the rules of thumb follow the DCSS wiki's guides (docs/wiki-strategy.md)
     teleport: float = 0.0     # 1 = the rules of thumb read teleportation when spent after a rage (`teleport_rule`),
-                              # 2 = also when outnumbered by something dangerous. Off by default.
+                              # 2 = also when outnumbered by something dangerous, 3 = only when exhausted after a
+                              # rage and outmatched (the hostiles' HP left at 1.5x the character's). Off by default.
     recover: float = 1.0      # 1 = with nothing in view, rest out a rage and its exhaustion (`recovering`) before
                               # taking the stairs, 2 = before exploring on as well, 0 = off. 1 by default since
                               # 2026-11-15 (with retreat=2: +0.45 [+0.24, +0.65] on 996 fresh dungeons).
@@ -238,21 +239,30 @@ def available(obs: dict, level_explored: bool, blocked: set[str], rest_stalled: 
 
 
 CROWD = 3                 # hostiles in view that count as outnumbered for `teleport_rule` 2
+OUTMATCHED = 1.5          # the hostiles' HP left (`foe_hp`) against the character's own HP now, for `teleport_rule` 3
 
 
 def teleport_rule(obs: dict, level: int) -> tuple[bool, bool]:
-    """When the opt-in teleport rules (`Style.teleport`) would read teleportation: (spent, crowded).
+    """When the opt-in teleport rules (`Style.teleport`) would read teleportation: (now, crowded).
 
-    - spent (level 1 and up): just out of a rage, exhausted and slowed (`-Berserk` with `Slow`), with
+    `now` is read first in a fight (after a cure and a retreat), `crowded` after a rage and the healing potion.
+    - level 1 and 2, `now` when spent: just out of a rage, exhausted and slowed (`-Berserk` with `Slow`), with
       monsters in view. Another rage is refused and every action takes twice as long.
-    - crowded (level 2): at least CROWD hostiles in view, one of them dangerous (webtiles threat 2 or 3).
+    - level 2, `crowded`: at least CROWD hostiles in view, one of them dangerous (webtiles threat 2 or 3).
       `baseline` puts it after a rage, so it covers a fight the rules wouldn't rage at, or can't.
+    - level 3, `now` when outmatched: exhausted after a rage (`-Berserk`, slowed or not) and the hostiles in
+      view have OUTMATCHED times the character's current HP or more left between them (`foe_hp`). This is
+      the condition that best reproduces `v6-clean3`'s reads at `margin=0.6` (in the spells of exhaustion of
+      the saved runs, 83% of the spells it fires in are ones the model read in, and it fires in 82% of
+      those). Not the level 1 and 2 rules: those read at every spent moment.
     Neither while a teleport is already coming (`Tele`): a second scroll would cancel it. That the scroll can
     be read at all is `available`'s part.
     """
     status = obs.get("status") or []
     if level < 1 or not obs["n_hostiles"] or "Tele" in status:
         return False, False
+    if level >= 3:
+        return "-Berserk" in status and foe_hp(obs) >= OUTMATCHED * max(obs["hp"], 1), False
     spent = "-Berserk" in status and "Slow" in status
     crowded = level >= 2 and obs["n_hostiles"] >= CROWD and any(m["threat"] >= 2 for m in obs["mons"])
     return spent, crowded
@@ -264,7 +274,7 @@ def baseline(obs: dict, avail: list[str], level_explored: bool, wiki: bool = Fal
     """Rules of thumb: the stub's behaviour, plus drinking a healing potion instead of giving up.
 
     `wiki` plays the variant that follows the DCSS wiki's strategy guides instead (`Style.wiki`).
-    `teleport` 1 or 2 adds the opt-in teleport rules (`teleport_rule`, `Style.teleport`); 0 leaves them out.
+    `teleport` 1, 2 or 3 adds the opt-in teleport rules (`teleport_rule`, `Style.teleport`); 0 leaves them out.
     `recover` 1 rests out a rage and its exhaustion (`recovering`) with nothing in view before taking the
     stairs, 2 before exploring on as well (`Style.recover`); 0 leaves it out. `avail` must then come from
     `available(..., recover=True)`, or `rest` is seldom there at full HP.
@@ -282,12 +292,12 @@ def baseline(obs: dict, avail: list[str], level_explored: bool, wiki: bool = Fal
     if obs["n_hostiles"]:
         near = [m for m in obs["mons"] if max(abs(m["dx"]), abs(m["dy"])) <= 2]
         rage = frac <= 0.5 or any(m["threat"] >= 2 for m in near) or len(near) >= 3
-        spent, crowded = teleport_rule(obs, teleport)
+        now, crowded = teleport_rule(obs, teleport)
         if retreat:
             away = (["quaff_heal"] if frac <= 0.5 else []) + ["flee_up"]
         else:
             away = ["flee_up"] if to_stairs else []
-        order = cure + away + (["read_teleport"] if spent else []) + (["berserk"] if rage and near else []) + \
+        order = cure + away + (["read_teleport"] if now else []) + (["berserk"] if rage and near else []) + \
                 (["quaff_heal"] if frac <= 0.5 else []) + (["read_teleport"] if crowded else []) + \
                 ["fight", "descend", "flee_up", "wait"]
     else:
