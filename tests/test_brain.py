@@ -2706,7 +2706,7 @@ def test_saved_models_still_load_and_choose_the_same_with_the_switches_on_or_off
     for p in paths[:6]:
         net = load_model(str(p))
         a = BrainTiers(net, Style(), rng=random.Random(0))
-        b = BrainTiers(net, Style(kit=1, hand=1), rng=random.Random(0))
+        b = BrainTiers(net, Style(kit=1, hand=1, throw=1, step=1), rng=random.Random(0))
         st = stairs_state()
         assert a.next_action(st) == b.next_action(st)
         assert a.last["obs"] == b.last["obs"] and a.last.get("values") == b.last.get("values")
@@ -2874,3 +2874,196 @@ def test_kit_and_hand_are_styles_and_old_runs_still_match():
     assert _style(argparse.Namespace(style=["kit=1", "hand=1"])) == Style(kit=1, hand=1)
     old = {k: v for k, v in Style().to_dict().items() if k not in ("kit", "hand")}
     assert Style.saved(old) == Style(kit=0) and Style.saved(old) != Style()   # a run saved before kit played without it
+
+
+# --- Style.throw and Style.step: javelins and boomerangs, a step out of a surround ------------------------------
+
+MISSILE = 1
+
+
+def throw_state(*items, foes=((7, 1, "goblin", 1),), **player_fields):
+    """`kit_state`'s room (the character at (3, 1)) with `items` in the pack and hostiles (x, y, name, threat)."""
+    state = kit_state(*items, **player_fields)
+    for i, (x, y, name, threat) in enumerate(foes):
+        add_monster(state, (x, y), 20 + i, name, threat=threat)
+    return state
+
+
+def javelins(n=4, letter="c"):
+    return item(f"{n} javelins", MISSILE, n, ord(letter))
+
+
+def surrounded(**player_fields):
+    """The character at the mouth of a corridor running west, two orcs in the room east of it."""
+    st = make_state(["#########", "....@...#", "#####...#", "#########"], xl=5, depth=3, god="Trog", **player_fields)
+    add_monster(st, (5, 1), 1, "orc", threat=1)
+    add_monster(st, (5, 2), 2, "orc", threat=1)
+    return st
+
+
+def test_throw_and_step_are_off_by_default_and_off_plays_as_before():
+    from ladder.brain import gear
+    assert Style().throw == 0 and Style().step == 0
+    for st in (throw_state(javelins()), surrounded()):
+        tiers = BrainTiers(style=Style(), rng=random.Random(0))
+        assert tiers.auto_step(st, st.hostiles()) is None
+        assert tiers.next_action(st) not in ("throw", "step") and tiers.auto is None
+    assert gear.THROW_RC not in gear.KIT_RC
+
+
+def test_throw_wanted_follows_qws_rule():
+    want = policy.throw_wanted
+    goblin = mon("goblin", 3, 0, 1)
+    assert want(obs(n_hostiles=1, mons=[goblin]), 4)
+    assert not want(obs(n_hostiles=1, mons=[goblin]), 0)                               # nothing to throw
+    assert not want(obs(), 4)                                                          # nothing in view
+    for st in (["Berserk"], ["Conf"], ["Held"]):
+        assert not want(obs(n_hostiles=1, mons=[goblin], status=st), 4), st            # qw's unable_to_throw
+    assert want(obs(n_hostiles=1, mons=[goblin], status=["-Berserk", "Slow"]), 4)
+    # one adjacent: the mace
+    assert not want(obs(n_hostiles=2, mons=[mon("goblin", 1, 1, 1), goblin]), 4)
+    # the threat in view at qw's moderate level or more: close in instead (2 up to XL 7, 5 from XL 10)
+    assert [policy.moderate_threat(x) for x in (1, 7, 8, 9, 10, 20)] == [2, 2, 3, 4, 5, 5]
+    two = obs(n_hostiles=2, mons=[goblin, mon("goblin", -3, 2, 1)])
+    assert not want(two, 4) and want({**two, "xl": 8}, 4)
+    # a threat-3 hostile out of reach: the throw is the best attack, whatever else is in view
+    assert want(obs(n_hostiles=2, mons=[mon("ogre", 4, 0, 3), mon("orc", 3, 3, 2)]), 4)
+    # a hostile that attacks from range or with reach: qw walks up to it
+    shooter = next(n for n in ("centaur", "kobold archer", "orc wizard", "deep elf archer", "gnoll")
+                   if (k := policy.monsters.lookup(n)) and {"ranged", "reach"} & set(k["kinds"]))
+    assert not want(obs(n_hostiles=1, mons=[mon(shooter, 3, 0, 1)], xl=12), 4)
+
+
+def test_throw_reaches_brain_tiers_only_where_the_rules_would_walk_up():
+    on = Style(throw=1)
+    st = throw_state(javelins())
+    tiers = BrainTiers(style=on, rng=random.Random(0))
+    assert tiers.next_action(st) == "throw" and tiers.last is None                    # no step log line
+    assert BrainTiers(style=Style(), rng=random.Random(0)).next_action(st) == "fight"
+    # not adjacent, not raging, not without missiles
+    assert BrainTiers(style=on).next_action(throw_state(javelins(), foes=((4, 1, "goblin", 1),))) != "throw"
+    assert BrainTiers(style=on).next_action(throw_state(javelins(), status=[{"light": "Berserk"}])) != "throw"
+    assert BrainTiers(style=on).next_action(throw_state()) != "throw"
+    # not where the rules drink first (half HP, a potion held) or rage first (threat 2 within two)
+    hurt = throw_state(javelins(), item("potion of curing", POTIONS, 1, ord("d")), hp=8)
+    assert BrainTiers(style=on).next_action(hurt) == "quaff_heal"
+    close = throw_state(javelins(), foes=((5, 1, "gnoll", 2),))
+    assert BrainTiers(style=on).next_action(close) == "berserk"
+    # a throw with no clear shot uses no time: tried again after THROW_RETRY turns, not BLOCK_TURNS
+    tiers = BrainTiers(style=on, rng=random.Random(0))
+    assert tiers.next_action(st) == "throw"
+    tiers.observe("throw", Before.capture(st), st, [])
+    assert tiers.auto_blocked["throw"] == st.turn + policy.THROW_RETRY
+    assert tiers.next_action(st) == "fight"
+
+
+def test_throw_quivers_a_missile_if_none_is_then_presses_the_throw_key():
+    from ladder.brain import gear
+    thrown = ActResult(messages=[{"msg": "msgs", "messages": [{"text": "You throw a javelin."}]}])
+    st = throw_state(javelins(), quiver_item=2)                         # slot 2 holds the javelins
+    conn = ScriptedConn([thrown])
+    tiers = BrainTiers(style=Style(throw=1))
+    tiers.perform(SimpleNamespace(state=st, conn=conn), "throw")
+    assert [k for k, _ in conn.sent] == [(gear.THROW_KEY,)] and tiers.kit_counts == {"throw": 1}
+    # nothing quivered: the Q menu ("Quiver which action?") first, and the javelins' line in it
+    quiver = ActResult(blocking="menu", messages=[menu("a - Throw: 3 boomerangs", "b - Throw: 4 javelins",
+                                                       "c - Abil: Berserk")])
+    conn = ScriptedConn([quiver, ActResult(), thrown])
+    tiers = BrainTiers(style=Style(throw=1))
+    tiers.perform(SimpleNamespace(state=throw_state(javelins(), quiver_item=-1), conn=conn), "throw")
+    assert [k for k, _ in conn.sent] == [("Q",), ("b",), (gear.THROW_KEY,)]
+    assert tiers.kit_counts == {"quiver": 1, "throw": 1}
+    # none listed: Esc, and no throw
+    conn = ScriptedConn([ActResult(blocking="menu", messages=[menu("c - Abil: Berserk")]), ActResult()])
+    BrainTiers(style=Style(throw=1)).perform(SimpleNamespace(state=throw_state(javelins(), quiver_item=-1),
+                                                             conn=conn), "throw")
+    assert [k for k, _ in conn.sent] == [("Q",), ("key_esc",)]
+    # only the missiles qw throws, and not ones marked useless
+    st = throw_state(item("5 darts", MISSILE, 5, ord("c")), item("3 boomerangs", MISSILE, 3, ord("d")),
+                     {**item("2 large rocks", MISSILE, 2, ord("e")), "useless": True})
+    assert gear.missiles(st) == {"3": 3}
+
+
+def test_step_square_leaves_a_surround_for_fewer_attackers():
+    st = surrounded()
+    # into the corridor: one square west, where neither orc is adjacent
+    assert policy.step_square(st, st.hostiles(), 1) == (-1, 0)
+    assert policy.step_square(st, st.hostiles(), 2) == (-1, 0)
+    assert policy.step_square(st, st.hostiles(), 3) is None
+    # one adjacent only: no step
+    one = make_state(["#########", "....@...#", "#####...#", "#########"], xl=5, depth=3)
+    add_monster(one, (5, 1), 1, "orc")
+    assert policy.step_square(one, one.hostiles(), 1) is None
+    # not into a cloud, nor onto another monster
+    st.apply({"msg": "map", "cells": [{"x": 3, "y": 1, "t": {"cloud": 5134}}]})
+    assert policy.step_square(st, st.hostiles(), 1) is None
+    st.apply({"msg": "map", "cells": [{"x": 3, "y": 1, "t": {"cloud": 0}}]})
+    assert policy.step_square(st, st.hostiles(), 1) == (-1, 0)
+    add_monster(st, (3, 1), 3, "rat", att=4)                           # a friendly one in the way
+    assert policy.step_square(st, st.hostiles(), 1) is None
+
+
+def test_step_reaches_brain_tiers_where_the_rules_would_fight_and_stops_after_step_max():
+    tiers = BrainTiers(style=Style(step=1), rng=random.Random(0))
+    st = surrounded()
+    assert tiers.next_action(st) == "step" and tiers.last is None and tiers.step_way == (-1, 0)
+    conn = ScriptedConn([ActResult()])
+    tiers.perform(SimpleNamespace(state=st, conn=conn), "step")
+    assert conn.sent == [((DIRECTIONS[(-1, 0)],), {})] and tiers.kit_counts == {"step": 1}
+    for _ in range(policy.STEP_MAX - 1):
+        assert tiers.next_action(st) == "step"
+        tiers.perform(SimpleNamespace(state=st, conn=ScriptedConn()), "step")
+    assert tiers.next_action(st) != "step"                              # STEP_MAX in this fight
+    tiers.next_action(stairs_state())                                   # nothing in view: a new fight
+    assert tiers.next_action(st) == "step"
+    # not raging (qw takes no tactical step in a rage), nor where the rules drink first (exhausted, at half HP)
+    assert BrainTiers(style=Style(step=1)).next_action(surrounded(status=[{"light": "Berserk"}])) != "step"
+    hurt = surrounded(hp=8, status=[{"light": "-Berserk"}])
+    with_inv(hurt, s0=item("potion of curing", POTIONS, 1, ord("d")))
+    assert BrainTiers(style=Style(step=1)).next_action(hurt) == "quaff_heal"
+    # but before a rage, as qw's tactical step comes before its berserk
+    assert BrainTiers(style=Style()).next_action(surrounded(hp=8)) == "berserk"
+    assert BrainTiers(style=Style(step=1)).next_action(surrounded(hp=8)) == "step"
+
+
+def test_throw_rc_is_sent_only_with_the_switch_on(tmp_path, monkeypatch):
+    import ladder.conn
+    from ladder.brain import gear, selfplay
+    sent = []
+
+    class Records:
+        def __init__(self, url, on_message=None, record=None):
+            self.on_message = on_message
+
+        def login(self, user):
+            pass
+
+        def set_rc(self, rc):
+            sent.append(rc)
+
+        def start_game(self, *a, seed=None):
+            for m in RESUMED:
+                self.on_message(m)
+            return RESUMED
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(ladder.conn, "Connection", Records)
+    for on in (0, 1):
+        cfg = {"user": "ladderbrain1", "model": None, "style": {"throw": on}, "epsilon": 0.0, "server": "x",
+               "species": "b", "background": "f", "weapon": "b", "max_steps": 10, "max_turns": 10}
+        log = RunLog(tmp_path / f"g{on}")
+        with pytest.raises(selfplay.StaleSave):
+            selfplay._play({"seed": 650000}, cfg, log, lambda: None)
+        log.close()
+    assert gear.THROW_RC not in sent[0] and gear.KIT_RC in sent[0]
+    assert sent[1].endswith(gear.THROW_RC) and "ladder_throw" in sent[1]
+
+
+def test_throw_and_step_are_styles_and_old_runs_still_match():
+    import argparse
+    from ladder.brain.cli import _style
+    assert _style(argparse.Namespace(style=["throw=1", "step=2"])) == Style(throw=1, step=2)
+    old = {k: v for k, v in Style().to_dict().items() if k not in ("throw", "step")}
+    assert Style.saved(old) == Style()                  # added off, and still off by default: no STYLE_ADDED_AS entry

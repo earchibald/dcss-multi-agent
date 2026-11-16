@@ -18,7 +18,8 @@ import numpy as np
 from ..conn import ActResult, cancel_prompt
 from ..interrupts import Before, Interrupt
 from ..reflex import Escalation, StubTiers
-from ..state import MF_STAIR_UP, GameState, strip_tags
+from ..state import MF_DOOR, MF_STAIR_UP, MF_TRAP, MF_WATER, NOT_WALKABLE, GameState, strip_tags
+from ..travel import DIRECTIONS
 
 from . import gear, monsters
 from .features import ACTIONS, COMPONENTS, MDAM_LEFT, encode, inventory, observe, path
@@ -32,6 +33,7 @@ REPLAY_DIVERGED, FORK_DONE = "replay diverged", "fork horizon reached"
 LEVEL_STEP_LIMIT = 1500   # choices on one level before the brain calls itself stuck
 IDLE_LIMIT = 60           # waits in a row, with nothing else possible, before it does the same
 BLOCK_TURNS = 50         # an action that went nowhere is left alone for this many game turns
+THROW_RETRY = 2          # ...but a throw with no clear shot (`Style.throw`) only for this many
 FENCE_KEY = chr(9350)      # the rc's ladder_fence_shops macro (crawlrc.txt)
 UNTIL_LEVEL = 10 ** 9     # ...or until the next level, for scrolls and potions that wouldn't go down
 COMMITS = {"descend": "explore", "explore": "descend"}   # a committed fork's action, and the one it replaces
@@ -106,6 +108,14 @@ class Style:
                               # since it passed its test on fresh dungeons (docs/trained-brain.md).
     hand: float = 0.0         # 1 = invoke Trog's Hand when a monster on qw's `hand_monsters` list is in view (`hand_wanted`),
                               # as an automatic step before the brain's choice. 0 = off. Off by default.
+    throw: float = 0.0        # 1 = pick up javelins, boomerangs and large rocks (`gear.THROW_RC`) and throw them at a hostile in
+                              # view with a clear shot when qw would (`throw_wanted`) and the rules of thumb would walk up to
+                              # it or wait for it; never while raging. An automatic step (`BrainTiers.auto_step`). 0 = off.
+                              # Off by default.
+    step: float = 0.0         # k > 0 = with two or more hostiles adjacent and not raging, step to the free adjacent square that
+                              # cuts the hostiles able to hit next turn by k or more (`step_square`; 2 is qw's "outnumbered"),
+                              # where the rules of thumb would fight, wait or rage; at most STEP_MAX steps per fight. An
+                              # automatic step (`BrainTiers.auto_step`). 0 = off. Off by default.
 
     def weights(self) -> np.ndarray:
         return np.asarray([getattr(self, c) for c in COMPONENTS], dtype=np.float32)
@@ -435,6 +445,92 @@ def hand_wanted(god: str, piety: int, xl: int, status: list[str], names: list[st
     return any(xl < HAND_MONSTERS.get(n.lower(), 0) for n in names)
 
 
+def moderate_threat(xl: int) -> int:
+    """qw's `moderate_threat_level` (qw.lua 7921-7923): 2 up to XL 7, then one more per level to 5 at XL 10."""
+    return 5 - max(0, min(3, 10 - xl))
+
+
+def throw_wanted(obs: dict, missiles: int) -> bool:
+    """`Style.throw`: whether qw would throw now (`plan_throw` with `get_throwing_target`, runs/qw/build-zk/qw.lua
+    11189-11201, `get_throwing_target_func` 587-605), given `missiles` held. Where the shot goes is the rc's `ladder_throw` (`gear.THROW_RC`).
+
+    - Not raging, confused or held (`unable_to_throw`, 15846-15856): the game refuses a throw in a rage.
+    - Hostiles in view and none adjacent: with one to hit in melee, qw's throw "prefers melee" (`prefer_melee`) and
+      doesn't throw (`get_ranged_attack_target`, 490-536).
+    - A threat-3 hostile in view (qw's "scary" enemy): out of reach of the mace, the throw is its best attack
+      (`get_high_threat_target` 558-585, `monster_best_player_attack` 935-955).
+    - Otherwise only while the threat in view (the hostiles' webtiles threat summed, as qw's `assess_enemies` sums
+      `minfo:threat()`) is under qw's moderate level for the XL (`have_moderate_threat` 8366-8369): against more, qw closes in
+      or waits; and not with a hostile in view that attacks from range or with reach (by the monster table), which qw
+      walks up to instead (`get_ranged_attack_target`'s `is_ranged` check).
+    Whether the rules of thumb would walk up or wait at all (not drink, read, retreat or rage first) is `BrainTiers`'."""
+    status = obs.get("status") or []
+    if missiles <= 0 or not obs["n_hostiles"] or any(x == "Berserk" or x.startswith(("Conf", "Held")) for x in status):
+        return False
+    mons = obs["mons"]
+    if any(max(abs(m["dx"]), abs(m["dy"])) <= 1 for m in mons):
+        return False
+    if any(m["threat"] >= 3 for m in mons):
+        return True
+    if sum(m["threat"] for m in mons) >= moderate_threat(obs["xl"]):
+        return False
+    for m in mons:
+        k = monsters.lookup(m["name"])
+        if k and {"ranged", "reach"} & set(k["kinds"]):
+            return False
+    return True
+
+
+STEP_MAX = 3              # `Style.step`: steps per fight at most (the count starts again once nothing is in view)
+STEP_INTO = {MF_DOOR, MF_WATER, MF_TRAP}   # not stepped into: a door may be shut (opening it is no step), shallow
+                                           # water slows (qw's `a.slow`), a trap isn't safe (qw's `is_safe_at`)
+OPEN_DOOR = "'"
+
+
+def step_square(state: GameState, hostiles: list, need: float) -> tuple[int, int] | None:
+    """`Style.step`: the direction (dx, dy) of a step out of a surround, as qw's `choose_tactical_step` with reason
+    "outnumbered" (runs/qw/build-zk/qw.lua: `choose_tactical_step` 9941-10005, `step_reason` 9798-9875 with the
+    "outnumbered" case at 9862-9870, `assess_square_enemies` 9686-9735),
+    or None.
+
+    Only with two or more of `hostiles` adjacent. A square counts the hostiles that could hit there next turn: those
+    adjacent to it, and those two away that the monster table says are faster than the character (qw's `a.ranged`; a
+    ranged attacker in view counts the same from every square, so it is left out). A step is taken to the free
+    adjacent square (walkable, no monster, no cloud, not a shut door, shallow water or a trap) whose count is `need`
+    or more below the count here; among those, the lowest count, then the one nearest a hostile (qw's
+    `step_improvement`: stay in the fight), then the first in `DIRECTIONS` order."""
+    px, py = state.pos
+    if sum(1 for m in hostiles if state.distance(m.pos) <= 1) < 2:
+        return None
+    speeds = {m.id: (monsters.lookup(m.name) or {}).get("speed", 10) for m in hostiles}
+
+    def count(sq: tuple[int, int]) -> int:
+        n = 0
+        for m in hostiles:
+            d = max(abs(m.pos[0] - sq[0]), abs(m.pos[1] - sq[1]))
+            n += d <= 1 or (d == 2 and speeds[m.id] > 10)
+        return n
+
+    here = count(state.pos)
+    taken = {m.pos for m in state.monsters()}
+    best = None
+    for dx, dy in DIRECTIONS:
+        sq = (px + dx, py + dy)
+        cell = state.cells.get(sq)
+        if cell is None or sq in taken or (cell.get("t") or {}).get("cloud"):
+            continue
+        mf = cell.get("mf", 0)
+        if mf in NOT_WALKABLE or (mf in STEP_INTO and not (mf == MF_DOOR and cell.get("g") == OPEN_DOOR)):
+            continue
+        n = count(sq)
+        if n > here - need:
+            continue
+        near = min(max(abs(m.pos[0] - sq[0]), abs(m.pos[1] - sq[1])) for m in hostiles)
+        if best is None or (n, near) < best[0]:
+            best = ((n, near), (dx, dy))
+    return best[1] if best else None
+
+
 KIT_SCROLLS = ("enchant armour", "enchant weapon", "brand weapon")
 
 
@@ -594,6 +690,8 @@ class BrainTiers(StubTiers):
         self.auto_blocked: dict[str, int] = {}  # automatic step -> the turn it may be tried again after going nowhere
         self.jewels: set[str] = set()          # letters of the rings and amulets on (Style.kit), as the P menu shows
         self.kit_counts: dict[str, int] = {}   # what the automatic steps did, for the end of game record
+        self.steps_taken = 0                   # Style.step: steps out of a surround in this fight (STEP_MAX)
+        self.step_way: tuple[int, int] = (0, 0)   # Style.step: the direction `auto_step` chose
 
     # --- choosing ------------------------------------------------------
 
@@ -602,6 +700,7 @@ class BrainTiers(StubTiers):
         hostiles = self.active_hostiles(state)
         if not hostiles:
             self.approach = False
+            self.steps_taken = 0
         if state.caught:
             return "struggle"
         shops = {(state.level_seq, s) for s in state.shops()}
@@ -689,8 +788,14 @@ class BrainTiers(StubTiers):
         - "trogs_hand" (`hand`): when `hand_wanted` holds.
         - "read_kit" (`kit`): nothing in view, no rage, able to read: a known enchant or brand scroll (`kit_scroll`).
         - "put_on" (`kit`): nothing in view, no rage: a ring or amulet to put on or take off (`gear.jewellery_choice`).
-        A step that used no game time is not tried again for BLOCK_TURNS turns (`observe`)."""
-        if not (self.style.kit or self.style.hand):
+        - "step" (`step`): out of a surround (`step_square`), not raging or confused, at most STEP_MAX per fight, where
+          the rules of thumb would fight, wait or rage (qw takes its tactical step after its heal, teleport and flight
+          and before its rage: `set_plan_emergency`, qw.lua 12594-12644).
+        - "throw" (`throw`): when `throw_wanted` holds and the rules of thumb would walk up to the hostiles or wait for
+          them (qw's `plan_throw` is in its attack plans, after all of the emergency ones).
+        A step that used no game time is not tried again for BLOCK_TURNS turns (`observe`); a throw that found no clear
+        shot, for THROW_RETRY."""
+        if not (self.style.kit or self.style.hand or self.style.throw or self.style.step):
             return None
         status = state.statuses
 
@@ -702,6 +807,18 @@ class BrainTiers(StubTiers):
                            state.player.get("xl", 1) or 1, status, [m.name for m in hostiles],
                            state.hp / max(state.hp_max, 1), inventory(state)["heal"] > 0):
                 return "trogs_hand"
+        if hostiles and "Berserk" not in status and not any(x.startswith("Conf") for x in status):
+            if self.style.step and self.steps_taken < STEP_MAX and ok("step"):
+                way = step_square(state, hostiles, self.style.step)
+                if way and self.rules_now(state, hostiles)[1] in ("fight", "wait", "berserk"):
+                    self.step_way = way
+                    return "step"
+            if self.style.throw and ok("throw"):
+                held = sum(gear.missiles(state).values())
+                if held:
+                    obs, rules = self.rules_now(state, hostiles)
+                    if rules in ("fight", "wait") and throw_wanted(obs, held):
+                        return "throw"
         if self.style.kit and not hostiles and "Berserk" not in status:
             readable = not any(x.startswith(("silenced", "Conf")) for x in status)
             if readable and ok("read_kit") and kit_scroll(state):
@@ -710,6 +827,36 @@ class BrainTiers(StubTiers):
                 return "put_on"
         return None
 
+    def rules_now(self, state: GameState, hostiles: list) -> tuple[dict, str]:
+        """(observation, the rules of thumb's choice) for this moment, as `next_action` would make them, changing
+        nothing: no counter, no remembered rage, no step log. `Style.retreat`'s state is read as `fight_moves` would
+        update it; the opt-in walk to the stairs (`Style.stairs`) and the unseen-attacker rules (nothing is unseen
+        with hostiles in view) are left out."""
+        frac = state.hp / state.hp_max
+        obs = observe(state, hostiles, {
+            "worn": self.worn or {}, "kit": bool(self.style.kit),
+            "level_explored": self.level_explored, "level_steps": self.level_steps, "level_turn": self.level_turn,
+            "hp_delta": 0.0 if self.prev_frac is None else frac - self.prev_frac, "last_action": self.last_action})
+        blocked = {a for a, until in self.blocked.items() if state.turn < until}
+        retreat = False
+        if self.style.retreat and obs["n_hostiles"]:
+            reach = STAIRS_NEAR if self.style.retreat >= 2 else 10 ** 9
+            now = raging(obs)
+            spent = self.style.retreat >= 3 and not now and "-Berserk" in (obs.get("status") or [])
+            starts = ((self.was_raging and not now) or spent) and obs["n_hostiles"] >= RETREAT_LEFT and \
+                (obs["on_up"] or 0 <= obs["dist_up"] <= reach)
+            retreat = starts or (self.retreat_from == state.level_seq and recovering(obs))
+        calm = bool(self.style.calm) and (not self.style.calmfor or obs["level_turns"] < self.style.calmfor)
+        avail = available(obs, self.level_explored, blocked, self.rest_stalled_at == (state.turn, state.hp),
+                          recover=bool(self.style.recover) or retreat, calm=calm)
+        if not avail:
+            return obs, ""
+        choice = baseline(obs, avail, self.level_explored, wiki=bool(self.style.wiki), teleport=int(self.style.teleport),
+                          recover=int(self.style.recover), calm=calm, retreat=retreat, assailed=None,
+                          avoid=self.style.avoid, escape=self.style.escape, unique=self.style.unique,
+                          rage=self.style.rage, hold=bool(self.style.hold) and hold_ground(obs))
+        return obs, choice
+
     def jewel_pieces(self, state: GameState) -> list[tuple[str, dict, bool]]:
         """(letter, item, worn) for each ring or amulet in the pack, worn as last seen (`self.jewels`)."""
         return [(chr(it.get("letter", 0)), it, chr(it.get("letter", 0)) in self.jewels)
@@ -717,6 +864,13 @@ class BrainTiers(StubTiers):
 
     def count(self, what: str) -> None:
         self.kit_counts[what] = self.kit_counts.get(what, 0) + 1
+
+    @staticmethod
+    def note(conn, **what) -> None:
+        """A line of ours in the game's protocol recording (`Connection._note`), to find a throw or a step afterwards:
+        they write no step log line."""
+        if (write := getattr(conn, "_note", None)):
+            write(**what)
 
     def fight_moves(self, level_seq: int, obs: dict) -> tuple[bool, bool, bool]:
         """What the opt-in fight rules want now, for `baseline`: (retreat, rest_out, to_stairs).
@@ -839,6 +993,14 @@ class BrainTiers(StubTiers):
             return self.put_on(conn, state)
         if action == "trogs_hand":
             return self.trogs_hand(conn)
+        if action == "step":
+            self.steps_taken += 1
+            self.count("step")
+            self.note(conn, auto="step", turn=state.turn, hp=state.hp, way=list(self.step_way),
+                      adjacent=sum(1 for m in self.active_hostiles(state) if state.distance(m.pos) <= 1))
+            return conn.act(DIRECTIONS[self.step_way])
+        if action == "throw":
+            return self.throw(conn, state)
         if action in ("wield", "wear"):
             kit = bool(self.style.kit)
             letter = gear.upgrades(state, self.worn or {}, kit=kit)[action]
@@ -938,6 +1100,34 @@ class BrainTiers(StubTiers):
         result.messages = opened.messages + result.messages
         return result
 
+    def throw(self, conn, state: GameState) -> ActResult:
+        """`Style.throw`: quiver a missile if none is (the `Q` menu, `gear.quiver_line`), then press the rc's
+        `ladder_throw` key (`gear.THROW_KEY`), which throws at the hostile with a clear shot or does nothing."""
+        held = gear.missiles(state)
+        result = ActResult()
+        self.note(conn, auto="throw", turn=state.turn, hp=state.hp, held=sum(held.values()))
+        if str(state.player.get("quiver_item", -1)) not in held:
+            behind = conn.catch_up()
+            if behind.blocking:
+                return behind
+            opened = conn.act("Q")
+            opened.messages = behind.messages + opened.messages
+            if opened.blocking != "menu":
+                return opened
+            letter = gear.quiver_line(gear.worn_from_menu(opened.messages))
+            result = conn.act(letter or "key_esc", through_menu=True)
+            result.messages = opened.messages + result.messages
+            if letter is None or result.blocking:
+                return result
+            self.count("quiver")
+        fired = conn.act(gear.THROW_KEY)
+        fired.messages = result.messages + fired.messages
+        text = " ".join(strip_tags(m.get("text", "")) for batch in fired.messages
+                        if batch.get("msg") == "msgs" for m in batch.get("messages", []))
+        if "You throw" in text:
+            self.count("throw")
+        return fired
+
     @staticmethod
     def through_menu(conn, verb: str, letter: str) -> ActResult:
         """Press `verb`, and `letter` only once its menu is up. A refused verb (reading while silenced)
@@ -957,7 +1147,8 @@ class BrainTiers(StubTiers):
 
     def observe(self, action: str, before: Before, state: GameState, interrupts: list[Interrupt]) -> None:
         if self.auto and state.turn == before.turn and state.level_seq == before.level_seq:
-            self.auto_blocked[self.auto] = state.turn + BLOCK_TURNS     # went nowhere: leave it a while
+            # went nowhere: leave it a while (a throw only briefly: the shot may be clear after the next move)
+            self.auto_blocked[self.auto] = state.turn + (THROW_RETRY if self.auto == "throw" else BLOCK_TURNS)
         if any(i.kind == "level_change" for i in interrupts):
             self.blocked.clear()
             self.stalls.clear()
@@ -995,6 +1186,6 @@ class BrainTiers(StubTiers):
 
     def describe(self) -> dict:
         out = {"model": self.net.name if self.net else None, "epsilon": self.epsilon, "style": asdict(self.style)}
-        if self.style.kit or self.style.hand:
+        if self.style.kit or self.style.hand or self.style.throw or self.style.step:
             out["kit"] = dict(self.kit_counts)
         return out

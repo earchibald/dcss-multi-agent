@@ -76,6 +76,80 @@ end)
 """
 JEWEL_GAIN = 50           # swap a worn piece only for one worth this much more
 
+# --- `Style.throw` only -------------------------------------------------------------------------------------------
+MISSILES = 1              # OBJ_MISSILES
+# What qw throws (`want_missile`, runs/qw/build-zk/qw.lua 5503-5510), best first by the game's damage (item-prop.cc).
+THROWN = ("javelin", "boomerang", "large rock")
+THROW_KEY = chr(9351)     # the rc's ladder_throw macro (THROW_RC)
+# The rc lines `Style.throw` adds (selfplay.py):
+# - pick up javelins, boomerangs and large rocks the game doesn't mark useless, as qw's autopickup does (explore's
+#   greedy pickup then fetches the thrown ones back after a fight);
+# - `ladder_throw`, bound to THROW_KEY: throw the quivered missile at the hostile in view whose shot is clear, as qw's
+#   `plan_throw` does (`get_ranged_attack_target`, `assess_ranged_position`, `throw_missile`, qw.lua 490-536, 270-404,
+#   11166-11201): the game's own beam path (`spells.path`) must reach the target before any other monster; a
+#   threat-3 ("extremely dangerous") hostile first, else the nearest; never one adjacent (that is for the mace). Aimed
+#   at the target (`do_targeted_command`'s aim_at_target), so a javelin stops there. With nothing quivered, or no
+#   clear shot, it does nothing and no time passes.
+THROW_RC = """
+{
+add_autopickup_func(function(it, name)
+  if it.class(true) ~= "missile" or it.is_useless then return nil end
+  local st = it.subtype()
+  if st == "javelin" or st == "boomerang" or st == "large rock" then return true end
+  return nil
+end)
+
+function ladder_clear_shot(x, y)
+  for _, c in ipairs(spells.path("Quicksilver Bolt", x, y, 0, 0, false)) do
+    if c[1] == x and c[2] == y then return true end
+    if monster.get_monster_at(c[1], c[2]) then return false end
+  end
+  return false
+end
+
+function ladder_throw()
+  local q = items.fired_item()
+  if not q or q.class(true) ~= "missile" then return end
+  local bx, by, bkey
+  for x = -7, 7 do
+    for y = -7, 7 do
+      local d = math.max(math.abs(x), math.abs(y))
+      local m = d > 1 and monster.get_monster_at(x, y)
+      if m and m:attitude() == 0 and not m:is_firewood() and you.see_cell_solid_see(x, y) then
+        local key = (m:threat() >= 3 and 0 or 100) + d
+        if (not bkey or key < bkey) and ladder_clear_shot(x, y) then
+          bx, by, bkey = x, y, key
+        end
+      end
+    end
+  end
+  if bkey then crawl.do_targeted_command("CMD_FIRE", bx, by, true) end
+end
+}
+macros += M \\{9351} ===ladder_throw
+"""
+
+
+def missiles(state: GameState) -> dict[str, int]:
+    """{inventory slot: how many} of the missiles `Style.throw` throws (THROWN), not marked useless."""
+    out = {}
+    for slot, item in (state.player.get("inv") or {}).items():
+        name = item.get("name", "")
+        if item.get("base_type") == MISSILES and not item.get("useless") and (item.get("quantity", 1) or 0) > 0 \
+                and any(t in name for t in THROWN):
+            out[str(slot)] = item.get("quantity", 1) or 1
+    return out
+
+
+def quiver_line(menu: list[tuple[str, str, bool]]) -> str | None:
+    """The letter of the best missile to quiver in the `Q` menu ("Quiver which action?": item lines read
+    "a - Throw: 6 javelins (quivered)"), by THROWN's order; None if none is listed."""
+    for kind in THROWN:
+        for letter, text, _ in menu:
+            if f"{letter} - Throw:" in text and kind in text:
+                return letter
+    return None
+
 
 def jewel(item: dict) -> tuple[str, str, float] | None:
     """(slot "ring" or "amulet", kind, value) for a ring or amulet worth wearing, else None. Artefacts are left alone,

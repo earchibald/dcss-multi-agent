@@ -3035,6 +3035,209 @@ a separate decision. `hand=1` was not fresh-tested.
     (choice-by-choice comparison of two runs), `jobs-off.txt`, `jobs-smoke.txt`, `jobs-tune.txt`, `jobs-fresh.txt`;
   - copies: `arms.py`, `seeds.py`, `verify.py`, `mindex.py`, `chain.sh` and `refresh.sh`.
 
+#### Throwing, a step out of a surround, and `calm=1` again, with the kit on by default (2026-11-16, evening)
+
+The comparison with qw listed what our bot can't do. After the kit, the next two were throwing (qw throws in 31% of its
+fights on D:3–7) and a tactical step (34%). This section builds both as opt-in automatic steps, as the kit was, and
+replays `calm=1` now that the kit is on by default. **Result on the tuning blocks: none is ahead of the defaults.
+`throw=1` is level, −0.12 [−0.37, +0.13] levels pooled over A and C. `step=1` is behind, −0.32 [−0.71, +0.07]: in 0.34
+a monster the character steps away from gets a free hit ("attacks as it pursues you"), and the steps more than
+quadrupled those hits. `calm=1` is now level, +0.07 [−0.32, +0.47] (it was −0.28 [−0.62, +0.07] before the kit). The
+two that are not behind, together (`throw=1 calm=1`), are −0.18 [−0.57, +0.20].** So no fresh test was pre-registered or
+played; seeds 690600–691199 are unspent. No default was changed.
+
+**What was built.** Two `Style` keys, both off by default, both *automatic steps* taken before the brain's choice
+(`BrainTiers.auto_step` in `src/ladder/brain/policy.py`), as `kit` and `hand` are.
+- `features.ACTIONS`, the observation and the input vector are unchanged. An automatic step writes no step-log line,
+  so the corpus never sees one, and saved models load and choose as before.
+- Instead, each throw and step writes one `_ladder` line into the game's protocol recording (`BrainTiers.note`), so
+  they can be found afterwards.
+- No `STYLE_ADDED_AS` entry is needed: both were added off and are still off.
+- Both come after the rules' emergencies. `BrainTiers.rules_now` works out what the rules of thumb would choose at
+  this moment without changing anything. The step is taken only where that choice is `fight`, `wait` or `berserk`,
+  and the throw only where it is `fight` or `wait`. qw orders them the same way: its tactical step comes after its
+  heal, teleport and flight and before its rage (`set_plan_emergency`, qw.lua 12594–12644), and its throw is in its
+  attack plans, after every emergency one (`set_plan_attack`, 11536–11553).
+
+- **`throw=1`**: pick missiles up and throw them when qw would.
+  - *Which missiles.* qw's `want_missile` (qw.lua 5503–5510) takes javelins, boomerangs and large rocks that are not
+    useless. An extra rc block, sent only with the switch on (`gear.THROW_RC`, as `gear.KIT_RC` is), adds an
+    autopickup function for those three. Explore's greedy pickup then also fetches the thrown ones back after a fight.
+    No large rock was ever thrown (0 in every run). The game probably marks them useless to a Minotaur; that is
+    inferred, not checked.
+  - *When* (`policy.throw_wanted`, from qw's `plan_throw` 11189–11201 and `get_throwing_target_func` 587–605):
+    - not raging, confused or held (`unable_to_throw` 15846–15856). The game refuses a throw in a rage.
+    - Hostiles in view and none adjacent. With one to hit in melee, qw's throw "prefers melee"
+      (`get_ranged_attack_target` 490–536).
+    - Then either a threat-3 hostile is in view: out of the mace's reach, the throw is its best attack
+      (`get_high_threat_target` 558–585, `monster_best_player_attack` 935–955).
+    - Or the threat in view is under qw's moderate level for the XL: webtiles' threat summed over the hostiles, as
+      qw's `assess_enemies` sums `minfo:threat()`, against 2 up to XL 7, rising to 5 at XL 10
+      (`have_moderate_threat` 8366–8369, `moderate_threat_level` 7921–7923). Against more, qw closes in or waits.
+      And no hostile in view attacks from range or with reach (monster table). qw walks up to one of those instead.
+  - *Where.* An rc Lua function, `ladder_throw`, bound to a macro key (`gear.THROW_KEY`), does what qw's
+    `throw_missile` does (11166–11187):
+    - It picks a hostile in view, not adjacent, whose shot is clear: the game's own beam path (`spells.path`) reaches
+      it before any other monster (`assess_ranged_position` 270–404).
+    - It prefers a threat-3 one, else the nearest.
+    - It fires with `crawl.do_targeted_command("CMD_FIRE", x, y, true)`, aimed at the target, so a javelin stops
+      there.
+    - With no clear shot it does nothing and no time passes. The throw is then tried again after `THROW_RETRY`
+      (2) turns, not `BLOCK_TURNS`.
+  - If the quiver doesn't hold one of these missiles, the bot first opens `Q` ("Quiver which action?") and picks the
+    line "Throw: … javelins", else boomerangs (`gear.quiver_line`).
+- **`step=k`**: a step out of a surround, qw's "outnumbered" step (`choose_tactical_step` 9941–10005, `step_reason`
+  9798–9875 with the case at 9862–9870, `assess_square_enemies` 9686–9735), in `policy.step_square`.
+  - Only with two or more hostiles adjacent, not raging (qw takes no tactical step in a rage), not confused.
+  - A square's count is the hostiles that could hit there next turn: those adjacent to it, plus those two away that
+    the monster table says are faster (qw's `a.ranged`).
+  - The step goes to the free adjacent square whose count is k or more below the count here: walkable, no monster,
+    no cloud, not a shut door, shallow water or a trap. Among those it takes the lowest count, then the square
+    nearest a hostile (qw's `step_improvement`).
+  - `step=1` is "fewer"; `step=2` would be qw's own cut of two.
+  - At most `STEP_MAX` (3) steps per fight; the count starts again once nothing is in view. So it cannot loop.
+
+**The prompts, seen in the real game** (job's `brain-v6i/probe.py`, `probe2.py`, `probe/throw.yaml`,
+`probe/throw.rc`; `laddertest`).
+- *Scenario games don't read the rc.* In a scenario game the macro key of the existing fence macro answered "Unknown
+  function in macro: 'ladder_fence_shops'" (the account's saved macro without the rc's Lua), a new macro was "Unknown
+  command.", and no autopickup function ran. So the rc parts were driven in a real seeded game on `laddertest`
+  instead: 500078, a block A dungeon whose first room has javelins.
+- Without the rc block, walking onto javelins and boomerangs only shows "You see here 6 javelins." With it,
+  autoexplore picked them up ("c - 3 javelins") and the game quivered them on its own.
+- `Q` opens a menu titled "Quiver which action? ([-] to clear)", tag `actions`. Its lines read "a - Throw: 6 javelins
+  (quivered)", "b - Throw: 3 boomerangs", then the abilities ("Abil: Berserk"). These are menu letters, not inventory
+  letters.
+- `f` with a hostile in view opens the targeting mode, which sends no `input_mode`. `Connection.act` would then wait
+  for ever (it did: the probe step timed out). That is why the throw goes through a Lua macro, as qw's does, and
+  never through the targeting keys.
+- The macro: "You throw a javelin. The javelin pierces through the hobgoblin. You kill the hobgoblin!", one turn. With
+  no clear target, nothing happens and the turn doesn't pass.
+
+**Play with the switches off is unchanged** (`same.py`).
+- First, the reference. Nine block A dungeons (500000–500008) replayed with no `--style` before any change (`v6i/A-pre`)
+  were identical to `v6h/A-kit` choice by choice. So `v6h/{A,C}-kit` are today's defaults and were used as the
+  reference, not replayed.
+- After the change, 500000–500008 with no `--style` (`v6i/A-off`) and 500009–500017 with `throw=0 step=0`
+  (`v6i/A-off0`): 18 of 18 identical to `v6h/A-kit` (the same deepest level, final turn, death or end, and the same
+  choices step by step, 296 to 1,739 per game).
+- Tests in `tests/test_brain.py`:
+  - `test_throw_and_step_are_off_by_default_and_off_plays_as_before`
+  - `test_throw_wanted_follows_qws_rule`
+  - `test_throw_reaches_brain_tiers_only_where_the_rules_would_walk_up`
+  - `test_throw_quivers_a_missile_if_none_is_then_presses_the_throw_key`
+  - `test_step_square_leaves_a_surround_for_fewer_attackers`
+  - `test_step_reaches_brain_tiers_where_the_rules_would_fight_and_stops_after_step_max`
+  - `test_throw_rc_is_sent_only_with_the_switch_on`
+  - `test_throw_and_step_are_styles_and_old_runs_still_match`
+  - `test_saved_models_still_load_and_choose_the_same_with_the_switches_on_or_off`, now with `throw=1 step=1` as
+    well
+  - and `test_kit_and_hand_add_no_action_and_change_no_input` still pins the action list.
+
+**How often each fired, against qw** (`tsstats.py`; ours from the game's messages, our protocol notes and the
+inventory replayed from the protocol; qw's from its logs, `qwtact.py`). A "fight" is defined as in the qw comparison:
+a run of moments with a hostile in view on one level, ended by 20 turns without one or by a level change, on D:3–7.
+A throw or step taken before the brain's first choice in a fight counts in that fight.
+
+| | `A-throw` | `C-throw` | `A-step` | `C-step` | qw (block A) |
+| --- | --- | --- | --- | --- | --- |
+| games with a throw | 121 of 200 | 109 of 200 | | | 148 of 200 |
+| throws (javelin / boomerang) | 5,470 (982 / 4,488) | 5,131 (923 / 4,208) | | | 33,360 (whole games) |
+| fights on D:3–7 with a throw | 955 of 4,120 (23%) | 820 of 4,011 (20%) | | | 2,066 of 6,650 (31%) |
+| steps | | | 2,206 | 2,226 | 3,746 "outnumbered" (whole games) |
+| fights on D:3–7 with a step | | | 442 of 3,715 (12%) | 442 of 3,926 (11%) | outnumbered 366 (6%); any tactical step 2,292 (34%) |
+
+- **Missiles carried on first arrival** (`A-throw` / `C-throw` / qw): D:2 12% / 7% / 14%, D:4 30% / 29% / 38%, D:6
+  51% / 41% / 55%, D:7 48% / 49% / 57%, D:9 53% / 61% / 68%. Close to qw's.
+- **Throws that hit.** About 56% of the throws are followed by "The javelin|boomerang hits|pierces through". Some 5%
+  are reported missing; the rest have messages the count doesn't parse. A kill message came back in the reply to the
+  throw key 1,037 times on A and 824 on C.
+- **qw's 34% is mostly not this step.** Of qw's 42,684 tactical steps, 24,957 were "stealth" (out of sight of a
+  sleeping monster) and 12,474 "hiding" (out of sight of a ranged one); 3,746 were "outnumbered" and 1,206 cloud or
+  fire. Our `step=1` fires in twice as many fights as qw's outnumbered step, because it asks for a cut of one, not
+  two.
+- **What followed a step** (A / C):
+  - hostiles adjacent: 2.12 / 2.13 before, 1.48 / 1.44 at the next choice;
+  - the next choice was a rage after 30% / 27% of steps;
+  - HP lost by the next choice: 1.6 per step;
+  - 77 of `A-step`'s 189 deaths and 62 of `C-step`'s 187 came within 20 turns of a step.
+- **The free hits.** "attacks as it pursues you" appeared 287 / 246 times in the defaults' games and 1,269 / 1,267 in
+  `step=1`'s: about 0.45 free hits per step. One of `A-step`'s early deaths (500088, D:1, turn 73) shows it: three
+  steps away from a quokka and a goblin, each followed by the pursuer's hit (16 → 5 HP), then a rage at 3 HP.
+
+**Tuning.**
+- **Method.** This tree, no model, epsilon 0, A (500000–500199) and C (540000–540199) only, 13:23–15:13 (`chain.sh`,
+  `jobs-tune.txt`, `jobs-combo.txt`). The arm order was A-throw, C-calm, A-step, C-step, A-calm, C-throw, then
+  C-tc, A-tc.
+- **Workers.** 9 workers asked and **all 9 played**: no run left an account out. The morgues written during this
+  section came from all nine accounts, `ladderbrain1` to `9`, 138–161 each.
+- **Analysis.** Each arm minus `v6h/{A,C}-kit` (today's defaults), paired by dungeon over games both finished and
+  neither stale nor off its seed (`arms.py`); 95% bootstrap over dungeons, 10,000 resamples. Description only: these
+  blocks are spent.
+- **Seed checks** (`verify.py`). Every game of the eight runs: no "Welcome back", no protocol without its seed, no
+  first step after turn 1, and a morgue on its seed for every finished game. Two games hung: 500010 in `A-step` and
+  500119 in `A-calm`.
+
+| arm (`--style`) | A: mean depth | C: mean depth | − defaults, A | − defaults, C | **− defaults, A + C** | deeper / same / shallower | died D:1–3 / 4–6 / 7+ (A + C) | deaths per 100 fights, A / C |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| defaults (`v6h/*-kit`) | 7.42 | 7.09 | | | | | 50 / 106 / 225 | 2.08 / 1.98 |
+| `throw=1` | 7.26 | 7.02 | −0.15 [−0.51, +0.20] | −0.07 [−0.42, +0.26] | **−0.12 [−0.37, +0.13]** (400) | 87 / 213 / 100 | 50 / 111 / 217 | 2.23 / 1.97 |
+| `step=1` | 6.89 | 6.98 | −0.52 [−1.10, +0.07] | −0.12 [−0.64, +0.42] | **−0.32 [−0.71, +0.07]** (399) | 143 / 90 / 166 | 70 / 111 / 195 | 2.50 / 2.27 |
+| `calm=1` | 7.67 | 7.00 | +0.24 [−0.30, +0.78] | −0.10 [−0.67, +0.47] | **+0.07 [−0.32, +0.47]** (399) | 156 / 96 / 147 | 73 / 102 / 201 | 1.54 / 1.74 |
+| `throw=1 calm=1` | 7.17 | 6.96 | −0.24 [−0.79, +0.32] | −0.13 [−0.68, +0.39] | **−0.18 [−0.57, +0.20]** (400) | 143 / 111 / 146 | 70 / 115 / 196 | 1.79 / 1.77 |
+
+- **The combination** was chosen after the four single arms were in. `step=1` was behind on its own and left out;
+  `throw=1` and `calm=1` were the two not behind. Against `calm=1` alone it is −0.28 [−0.56, +0.00] (A −0.53
+  [−0.93, −0.15], C −0.03). So throwing adds nothing on top of `calm=1` either.
+- **`throw=1` changes little.** 213 of 400 dungeons end at the same depth. Deaths per 100 fights are 2.08 → 2.23 on
+  A and 1.98 → 1.97 on C. Most throws are boomerangs (82%), whose damage is low. Our bot still walks up to every fight
+  it throws in: qw throws while it waits for the enemy to come (`hold`), and that was −0.39 on its own.
+- **`step=1` loses on A through early deaths** (D:1–3: 18 → 38). The free hits from stepping away fall hardest on a
+  character with 20–40 HP. On C it is level.
+- **`calm=1` with the kit.** Before the kit it lost on both blocks: −0.28 [−0.62, +0.07] (section of 2026-11-16,
+  morning). It now dies less on D:4–6 than the defaults (102 against 106) but more on D:1–3 (73 against 50). It
+  ends 0.2–0.5 XL higher (A 7.60 → 8.14, C 7.37 → 7.54) and has fewer deaths per fight (1.54 and 1.74, against 2.08 and 1.98), because it fights
+  more fights (5,405 against 4,175 on A). The two blocks disagree (+0.24 and −0.10), and the pooled interval is
+  centred near zero.
+
+**No fresh test.** The rule was to pre-register a test on 690600–691199 only for a configuration clearly ahead on
+A + C: pooled interval mostly above zero, both blocks positive. None qualifies. `calm=1`'s interval, +0.07 [−0.32,
++0.47], is centred near zero, and C is negative. So nothing was written as a pre-registration, and **seeds
+690600–691199 were not played: they are still unused.**
+
+**Summary of the section.**
+- Measured:
+  - every count, mean and interval above;
+  - the quiver menu, the targeting mode's missing `input_mode`, the Lua throw and the autopickup in the real game
+    (the probes);
+  - that play with the switches off is the same game, choice for choice, on 18 block A dungeons, and that today's
+    defaults reproduce `v6h/A-kit` on 9;
+  - that saved models load and choose the same with the switches on or off (unit test);
+  - that every tuning game was played on its seed;
+  - that all nine accounts played;
+  - the tests: `uv run pytest -q` 511 passed, 5 deselected; `uv run ruff check` clean.
+- Inferred:
+  - that `step=1` loses through the free hits on stepping away. The hits are measured, the early deaths are
+    measured, and one game shows the chain; that the hits cause the lost depth is not tested separately;
+  - that throwing does little because the bot walks up anyway and throws mostly boomerangs. This was not tested by a
+    variant.
+- Not done:
+  - `step=2` (qw's cut of two). It would pay the same free hits, so it wasn't played;
+  - qw's other step reasons (stealth, hiding, clouds, sticky fire);
+  - throwing at a threat-3 hostile with something else adjacent (qw does);
+  - throwing combined with `hold`;
+  - wands;
+  - changing any default.
+- Runs: `runs/brain/v6i/A-pre` (the reference check), `smoke-ts`, `A-off` and `A-off0` (the switches-off checks),
+  `{A,C}-{throw,step,calm,tc}` (tuning). The server's disk stayed at 52%.
+- Scripts in the job's `brain-v6i/` scratch directory:
+  - new: `probe2.py` (a probe on a real seeded game with an extra rc), `probe/throw.yaml`, `probe/throw.rc`,
+    `findmiss.py` (seeds with missiles early), `qwtact.py` (qw's throws and steps by reason, per fight, missiles on
+    arrival), `tsstats.py` (ours), `tail.py` (keys and messages at a game's end), `jobs-pre.txt`, `jobs-smoke.txt`,
+    `jobs-off.txt`, `jobs-tune.txt`, `jobs-combo.txt`;
+  - copies: `arms.py`, `seeds.py`, `verify.py`, `mindex.py`, `same.py`, `kitstats.py`, `probe.py` (now takes
+    `$EXTRA_RC`), `chain.sh` and `refresh.sh`.
+
 ## What carried over from s1-battle, and what couldn't
 
 | s1-battle | here |
