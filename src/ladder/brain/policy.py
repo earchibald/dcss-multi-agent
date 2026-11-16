@@ -81,6 +81,14 @@ class Style:
     avoid: float = 0.0        # k > 0 = before a fight, read teleportation instead of starting a rage when the hostiles
                               # in view have k times the character's maximum HP or more left between them (`foe_hp`),
                               # neither raging nor exhausted, no teleport coming (`avoid_rule`); 0 = off. Off by default.
+    escape: float = 0.0       # h > 0 = in a fight, exhausted after a rage (`-Berserk`, not raging) with HP at h times the
+                              # maximum or under, read teleportation, whatever the hostiles' HP (`escape_rule`); 0 = off.
+                              # Off by default.
+    unique: float = 0.0       # 1 = a unique the game rates extremely dangerous (threat 3) in view and not adjacent, the
+                              # character not raging: read teleportation, hold the rage while it is coming, and leave the
+                              # level once it has worked (`unique_rule`); 0 = off. Off by default.
+    calmfor: float = 0.0      # T > 0 = `calm` holds only for the first T turns of each visit to a level; after that a
+                              # rage ends the exploring there as it does without `calm`; 0 = no limit. Off by default.
 
     def weights(self) -> np.ndarray:
         return np.asarray([getattr(self, c) for c in COMPONENTS], dtype=np.float32)
@@ -303,9 +311,47 @@ def avoid_rule(obs: dict, k: float) -> bool:
     return foe_hp(obs) >= k * max(obs["hp_max"], 1)
 
 
+def escape_rule(obs: dict, h: float) -> bool:
+    """`Style.escape`: whether to read teleportation in a fight that is being lost while exhausted.
+
+    With h > 0: hostiles in view, exhausted after a rage (`-Berserk`, not raging: no second rage is possible), HP at
+    h times the maximum or under, and no teleport already coming (`Tele`). `teleport_rule` 3 reads in the same state
+    only when the hostiles' HP left is 1.5 times the character's HP now; in the `calm=1` games of 2026-11-16 the
+    character died with a known scroll unread in 14 of the 88 deaths on D:4-6 where the defaults got deeper, at 10-35%
+    HP against hostiles with (mostly) 0.8-1.3 times that left, and read it, if at all, a turn before dying. That the scroll can
+    be read is `available`'s part."""
+    status = obs.get("status") or []
+    if h <= 0 or not obs["n_hostiles"] or "Tele" in status or "Berserk" in status or "-Berserk" not in status:
+        return False
+    return obs["hp"] <= h * obs["hp_max"]
+
+
+UNIQUE_THREAT = 3         # webtiles' threat level (3: "extremely dangerous" for this character) that `Style.unique` heeds
+
+
+def dangerous_unique(obs: dict) -> bool:
+    """A unique the game rates extremely dangerous for this character (threat UNIQUE_THREAT) in view, not adjacent."""
+    return any(m.get("unique") and m["threat"] >= UNIQUE_THREAT and max(abs(m["dx"]), abs(m["dy"])) > 1
+               for m in obs["mons"])
+
+
+def unique_rule(obs: dict, on: float) -> bool:
+    """`Style.unique`: whether to read teleportation at the sight of a dangerous unique (`dangerous_unique`).
+
+    Not while raging (no scroll can be read) and not with a teleport already coming (`Tele`). In the `calm=1` games of
+    2026-11-16 a unique was in the fatal fight in 27 of the 88 deaths on D:4-6 where the defaults got deeper (13 of 61
+    the other way round), and after first sight of a threat-3 unique 22% of those characters died within 100 turns.
+    `baseline` holds the rage while the teleport is coming; `BrainTiers` leaves the level once the scroll is read."""
+    status = obs.get("status") or []
+    if not on or not obs["n_hostiles"] or "Tele" in status or "Berserk" in status:
+        return False
+    return dangerous_unique(obs)
+
+
 def baseline(obs: dict, avail: list[str], level_explored: bool, wiki: bool = False, teleport: int = 0,
              recover: int = 0, calm: bool = False, retreat: bool = False, rest_out: bool = False,
-             to_stairs: bool = False, assailed: str | None = None, avoid: float = 0.0) -> str:
+             to_stairs: bool = False, assailed: str | None = None, avoid: float = 0.0, escape: float = 0.0,
+             unique: float = 0.0) -> str:
     """Rules of thumb: the stub's behaviour, plus drinking a healing potion instead of giving up.
 
     `wiki` plays the variant that follows the DCSS wiki's strategy guides instead (`Style.wiki`).
@@ -321,7 +367,10 @@ def baseline(obs: dict, avail: list[str], level_explored: bool, wiki: bool = Fal
     `to_stairs` walks toward the stairs up before a fight.
     `assailed` (`BrainTiers.assailed`, `Style.unseen`) with nothing in view: BURNING walks toward the stairs up (or
     down), UNSEEN reads teleportation, else goes up the stairs; `avail` then from `available(..., assailed=...)`.
-    `avoid` (`Style.avoid`) reads teleportation before a rage when `avoid_rule` holds.
+    `avoid` (`Style.avoid`) reads teleportation before a rage when `avoid_rule` holds, `escape` (`Style.escape`) when
+    `escape_rule` does, `unique` (`Style.unique`) when `unique_rule` does; with `unique`, while that teleport is coming
+    and the unique is still in view and not adjacent, the rules keep away (toward the stairs up, else wait) instead of
+    raging.
     """
     if wiki:
         return baseline_wiki(obs, avail, level_explored)
@@ -335,7 +384,10 @@ def baseline(obs: dict, avail: list[str], level_explored: bool, wiki: bool = Fal
             away = (["quaff_heal"] if frac <= 0.5 else []) + ["flee_up"]
         else:
             away = ["flee_up"] if to_stairs else []
-        now = now or avoid_rule(obs, avoid)
+        now = now or avoid_rule(obs, avoid) or escape_rule(obs, escape) or unique_rule(obs, unique)
+        if unique and "Tele" in (obs.get("status") or []) and dangerous_unique(obs):
+            # the scroll is working: keep the unique at a distance until it does (a healing potion first at half HP)
+            away = away + (["quaff_heal"] if frac <= 0.5 else []) + ["flee_up", "wait"]
         order = cure + away + (["read_teleport"] if now else []) + (["berserk"] if rage and near else []) + \
                 (["quaff_heal"] if frac <= 0.5 else []) + (["read_teleport"] if crowded else []) + \
                 ["fight", "descend", "flee_up", "wait"]
@@ -423,6 +475,7 @@ class BrainTiers(StubTiers):
         self.stairs_done = False               # this fight has had its walk to the stairs (Style.stairs)
         self.unseen_hits = 0                   # falls in HP in a row with nothing in view (Style.unseen)
         self.prev_status: list[str] = []       # the status line at the choice before
+        self.calm_now = bool(self.style.calm)  # Style.calm holds at this choice (Style.calmfor can end it on a level)
 
     # --- choosing ------------------------------------------------------
 
@@ -450,8 +503,10 @@ class BrainTiers(StubTiers):
         blocked = {a for a, until in self.blocked.items() if state.turn < until}
         retreat, rest_out, to_stairs = self.fight_moves(state.level_seq, obs)
         assailed = self.assailed(obs)
+        # Style.calmfor: calm only for the first T turns of this visit to the level
+        self.calm_now = bool(self.style.calm) and (not self.style.calmfor or obs["level_turns"] < self.style.calmfor)
         avail = available(obs, self.level_explored, blocked, self.rest_stalled_at == (state.turn, state.hp),
-                          recover=bool(self.style.recover) or rest_out, calm=bool(self.style.calm), assailed=assailed)
+                          recover=bool(self.style.recover) or rest_out, calm=self.calm_now, assailed=assailed)
         if not avail and "wait" not in blocked and self.idle < IDLE_LIMIT:
             # Everything else went nowhere: let a turn pass. Now and then look again, since "partly
             # explored, can't reach some places" stops being true once a cloud of gas has cleared.
@@ -465,8 +520,9 @@ class BrainTiers(StubTiers):
         if not avail:
             raise Escalation("nothing the brain can do here" + (f" (tried: {', '.join(sorted(blocked))})" if blocked else ""))
         base = baseline(obs, avail, self.level_explored, wiki=bool(self.style.wiki), teleport=int(self.style.teleport),
-                        recover=int(self.style.recover), calm=bool(self.style.calm), retreat=retreat,
-                        rest_out=rest_out, to_stairs=to_stairs, assailed=assailed, avoid=self.style.avoid)
+                        recover=int(self.style.recover), calm=self.calm_now, retreat=retreat,
+                        rest_out=rest_out, to_stairs=to_stairs, assailed=assailed, avoid=self.style.avoid,
+                        escape=self.style.escape, unique=self.style.unique)
         choice, source, extra = base, "baseline", {}
         if self.fork_turn is not None and self.horizon and state.turn > self.fork_turn + self.horizon:
             raise Escalation(FORK_DONE)
@@ -490,6 +546,8 @@ class BrainTiers(StubTiers):
             source = "net"
         self.last = {"obs": obs, "avail": avail, "baseline": base, "action": choice, "source": source, **extra}
         self.choice = self.last_action = choice
+        if choice == "read_teleport" and unique_rule(obs, self.style.unique):
+            self.level_explored = True          # Style.unique: once away from it, leave rather than explore back into it
         self.choices += 1
         self.level_steps += 1
         if self.sink:
@@ -672,7 +730,7 @@ class BrainTiers(StubTiers):
             if self.choice != "wait":
                 self.idle = 0
             return
-        if self.style.calm and self.choice == "explore" and \
+        if self.calm_now and self.choice == "explore" and \
                 any(m["text"] == CALM_DOWN for m in state.messages[before.msg_index:]):
             return                              # refused for the rage, not for want of anywhere to go
         self.stalls[self.choice] = self.stalls.get(self.choice, 0) + 1

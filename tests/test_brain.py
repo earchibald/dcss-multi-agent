@@ -2206,6 +2206,139 @@ def test_avoid_and_retreat_3_are_styles_and_old_runs_still_match():
     assert Style.saved(old) == Style()
 
 
+# --- three opt-in switches against the deaths calm=1 adds on D:4-6 (Style.escape, .unique, .calmfor) -----------
+
+EXHAUSTED = ["-Berserk", "Slow"]
+
+
+def escape_obs(hp=12, status=EXHAUSTED, foes=(10,), tele=1, **over):
+    """A character at `hp` of 40 with hostiles of the given average HP in view, the first adjacent."""
+    mons = [{**mon(dx=1 + i, threat=2), "avghp": a, "mdam": 0} for i, a in enumerate(foes)]
+    return obs(**{"god": "Trog", "hp": hp, "hp_max": 40, "status": list(status), "n_hostiles": len(mons),
+                  "mons": mons, "inv": {**SCROLL, "heal": 1, "teleport": tele}, **over})
+
+
+def switch_rules(o, blocked=frozenset(), **kw):
+    return baseline(o, available(o, False, set(blocked), False), False, teleport=3, **kw)
+
+
+def test_escape_is_off_by_default_and_off_plays_as_before():
+    assert Style().escape == 0
+    o = escape_obs()
+    assert switch_rules(o) == switch_rules(o, escape=0) == "quaff_heal"     # 12 of 40: the potion, then fight on
+    assert not policy.escape_rule(o, 0)
+
+
+def test_escape_reads_teleportation_when_exhausted_and_low_whatever_the_foes():
+    # foes' HP 10 against HP 12: under teleport=3's 1.5x, so the rules drink and fight on; escape reads first
+    assert switch_rules(escape_obs(), escape=0.35) == "read_teleport"
+    assert switch_rules(escape_obs(hp=14), escape=0.35) == "read_teleport"       # 14 = 0.35 x 40
+    assert switch_rules(escape_obs(hp=15), escape=0.35) == "quaff_heal"          # above it: as before
+    assert switch_rules(escape_obs(status=["-Berserk"]), escape=0.35) == "read_teleport"   # no longer slowed
+    for st in ([], ["Berserk"], ["Slow"], EXHAUSTED + ["Tele"]):                      # can rage, raging, not after a rage, coming
+        assert not policy.escape_rule(escape_obs(status=st), 0.35), st
+    assert switch_rules(escape_obs(tele=0), escape=0.35) == "quaff_heal"          # no scroll
+    assert switch_rules(escape_obs(), blocked={"read_teleport"}, escape=0.35) == "quaff_heal"
+    assert not policy.escape_rule(obs(status=EXHAUSTED, hp=5, hp_max=40), 0.35)      # nothing in view
+
+
+def test_escape_reaches_the_rules_inside_brain_tiers():
+    seen = {}
+    for h in (0, 0.5):
+        state = make_state(["#########", "#..@....#", "#.......#", "#########"], depth=5, god="Trog")
+        state = with_inv(state, s0=item("scroll of teleportation", SCROLLS, 1, letter=ord("c")))
+        player(state, hp=10, hp_max=40, status=[{"light": "-Berserk"}, {"light": "Slow"}])
+        add_monster(state, (4, 1), 4, "orc")
+        tiers = BrainTiers(style=Style(escape=h), rng=random.Random(0))
+        seen[h] = tiers.next_action(state)
+    assert seen[0] != "read_teleport" and seen[0.5] == "read_teleport"
+
+
+def unique_obs(dx=4, threat=3, status=(), tele=1, **over):
+    mons = [{**mon("Edmund", dx=dx, threat=threat, unique=True), "avghp": 40, "mdam": 0}]
+    return obs(**{"god": "Trog", "hp": 40, "hp_max": 40, "status": list(status), "n_hostiles": 1, "mons": mons,
+                  "inv": {**SCROLL, "teleport": tele}, **over})
+
+
+def test_unique_is_off_by_default_and_off_plays_as_before():
+    assert Style().unique == 0
+    o = unique_obs(dx=2)
+    assert switch_rules(o) == switch_rules(o, unique=0) == "berserk"
+    assert not policy.unique_rule(o, 0)
+
+
+def test_unique_reads_teleportation_at_a_dangerous_unique_and_keeps_away_while_it_comes():
+    assert switch_rules(unique_obs(dx=2), unique=1) == "read_teleport"
+    assert switch_rules(unique_obs(dx=6), unique=1) == "read_teleport"           # as soon as it is seen
+    assert switch_rules(unique_obs(dx=6, status=EXHAUSTED), unique=1) == "read_teleport"
+    # not when adjacent (the rage is the answer then), not at threat 2, not a plain monster, not while raging
+    assert switch_rules(unique_obs(dx=1), unique=1) == "berserk"
+    assert switch_rules(unique_obs(dx=2, threat=2), unique=1) == "berserk"
+    plain = unique_obs(dx=2)
+    plain["mons"][0]["unique"] = False
+    assert switch_rules(plain, unique=1) == "berserk"
+    assert not policy.unique_rule(unique_obs(status=["Berserk"]), 1)
+    assert switch_rules(unique_obs(dx=2, tele=0), unique=1) == "berserk"          # no scroll: as before
+    # the teleport is coming: no rage while the unique is at a distance; toward the stairs up, else wait
+    coming = unique_obs(dx=2, status=["Tele"])
+    assert switch_rules(coming) == "berserk"
+    assert switch_rules(coming, unique=1) == "wait"
+    assert switch_rules(unique_obs(dx=2, status=["Tele"], dist_up=5), unique=1) == "flee_up"
+    assert switch_rules(unique_obs(dx=1, status=["Tele"]), unique=1) == "berserk"   # adjacent: rage after all
+
+
+def test_unique_reaches_the_rules_inside_brain_tiers_and_leaves_the_level_after_reading():
+    seen, left = {}, {}
+    for on in (0, 1):
+        state = make_state(["#########", "#..@....#", "#.......#", "#########"], depth=5, god="Trog")
+        state = with_inv(state, s0=item("scroll of teleportation", SCROLLS, 1, letter=ord("c")))
+        add_monster(state, (7, 1), 7, "Edmund", threat=3)
+        tiers = BrainTiers(style=Style(unique=on), rng=random.Random(0))
+        seen[on] = tiers.next_action(state)
+        left[on] = tiers.level_explored
+    assert seen[0] != "read_teleport" and seen[1] == "read_teleport"
+    assert not left[0] and left[1]
+
+
+def test_calmfor_limits_calm_to_the_first_turns_on_a_level():
+    assert Style().calmfor == 0
+    seen = {}
+    for calmfor, turns in ((0, 900), (400, 100), (400, 399), (400, 400), (400, 900)):
+        tiers = BrainTiers(style=Style(calm=1, calmfor=calmfor), rng=random.Random(0))
+        state = stairs_state()
+        state.player["status"] = [{"light": "Berserk"}]
+        tiers.level_turn = state.turn - turns
+        seen[(calmfor, turns)] = tiers.next_action(state)
+        assert tiers.calm_now == (seen[(calmfor, turns)] == "rest")
+    assert seen == {(0, 900): "rest", (400, 100): "rest", (400, 399): "rest", (400, 400): "explore",
+                    (400, 900): "explore"}
+    # after T a refusal for the rage counts toward setting explore aside, as without calm
+    tiers = BrainTiers(style=Style(calm=1, calmfor=400), rng=random.Random(0))
+    state = stairs_state()
+    state.player["status"] = [{"light": "Berserk"}]
+    tiers.level_turn = state.turn - 500
+    tiers.next_action(state)
+    tiers.choice = "explore"
+    _refuse_explore(tiers, state, CALM_DOWN)
+    _refuse_explore(tiers, state, CALM_DOWN)
+    assert "explore" in tiers.blocked
+    # calmfor without calm does nothing
+    tiers = BrainTiers(style=Style(calmfor=400), rng=random.Random(0))
+    state = stairs_state()
+    state.player["status"] = [{"light": "Berserk"}]
+    assert tiers.next_action(state) == "explore" and not tiers.calm_now
+
+
+def test_escape_unique_and_calmfor_are_styles_and_old_runs_still_match():
+    import argparse
+    from ladder.brain.cli import _style
+    assert _style(argparse.Namespace(style=["escape=0.35", "unique=1", "calmfor=400", "calm=1"])) == \
+        Style(escape=0.35, unique=1, calmfor=400, calm=1)
+    # a run saved before the three existed was played with them off, which is also their default
+    old = {k: v for k, v in Style().to_dict().items() if k not in ("escape", "unique", "calmfor")}
+    assert Style.saved(old) == Style()
+
+
 def test_evaluate_reuses_a_saved_run_only_when_its_style_matches(tmp_path, monkeypatch):
     import argparse
     from ladder.brain import cli

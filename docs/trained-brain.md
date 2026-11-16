@@ -2302,6 +2302,150 @@ pre-registered and **seeds 690000–690599 were not played; they are still unuse
   `mindex.py` (copies), and new: `cattrib.py`, `avoidafter.py`, `calmdiag.py`, `oddseeds.py`. Seeds spent: none;
   evaluation seeds replayed: A and C only.
 
+#### Why `calm=1` dies more on D:4–6, and three switches against it: none helps (2026-11-16, morning)
+
+`calm=1` explores twice as many levels to the end and arrives 0.3–0.6 XL higher from D:5, yet ends level with the
+defaults or below them (−0.28 [−0.62, +0.07] on A + C), because more characters die on D:4–6 (A 67 → 90, C 54 → 66).
+This section asks why, from the games already played, and tries a rule against each of the largest causes. **Result:
+the extra deaths come from the extra exploring itself: more fights, in parts of levels the defaults leave unvisited,
+more of them with uniques, each a little deadlier. Each of the three switches removes the deaths it aims at, and as
+many come back elsewhere on the same levels. None is ahead of the defaults or of `calm=1` alone, so no fresh test was
+played and seeds 690000–690599 are still unspent.** No default was changed.
+
+**Why: the games already played** (`runs/brain/v6e/{A,C}-{ref,calm}`, 399 paired dungeons, scripts in the job's
+`brain-v6f/`; "D:4–6" is the deepest level reached, as in `arms.py`, unless said otherwise).
+
+- *Not more fights, deadlier ones* (`fights.py`; band by the level the fight is on). On D:4–6 `calm=1` spends 14% (A)
+  and 41% (C) more turns but begins only 5–9% more fights (A 4,012 → 4,219, C 3,219 → 3,517), since much of the extra
+  time is rest. Deaths per 100 fights rise (A 1.67 → 2.16, C 1.62 → 1.85), and all of the rise is in fights begun
+  fresh (A 1.16 → 1.49, C 0.82 → 1.31). Fights begun exhausted are as many and as deadly as before. On D:7+ it is the
+  other way round: deaths per 100 fights fall (A 5.54 → 3.73, C 6.83 → 4.43), which is the XL paying off, too late.
+- *Uniques.* Fights on D:4–6 with a unique in view rise by half (A 156 → 225, C 125 → 184) at the same 8–10% death
+  rate, so about 17 more deaths (A 12 → 21, C 11 → 19). First sightings of a unique on D:4–6: A 182 → 243, C 143 → 190.
+- *Where.* The calm character spends turns 200–600 of a level on ground the defaults have left by then. Deaths on
+  D:4–6 after 400 turns on that level: A 7 → 19, C 5 → 20 (`budget.py`).
+- *Signs of danger don't predict the deaths* (`danger.py`). Fights on a level that has already shown a rage, a unique,
+  a threat-3 monster or HP under half are no deadlier than fights on one that hasn't. So "leave a level after a bad
+  sign" has nothing to work with. 96–97% of D:4–6 levels see a rage in both arms.
+
+**Categories.** The deaths where `calm=1` died on D:4–6 and the reference got deeper ("target", 88: 53 on A, 35 on C)
+against the reverse ("control", 61: the reference died there and `calm=1` got deeper). Each death is put in the first
+category that fits, over its fatal episode: the choices since the last `explore` with nothing in view on that level
+(`deaths.py`).
+
+| category of the fatal episode (first that applies) | target | control | target, killer never in the reference's view on that level or met after more turns there than the reference spent in all |
+| --- | --- | --- | --- |
+| exhausted at ≤ 35% HP with a known teleportation scroll readable, not read | 14 | 2 | 6 |
+| a unique in the fight | 24 | 12 | 12 |
+| threat-3 monster, or the foes' HP ≥ the character's maximum | 23 | 19 | 10 |
+| begun exhausted (`-Berserk`) | 18 | 19 | 8 |
+| begun raging or under 80% HP | 6 | 6 | 4 |
+| ordinary fight | 3 | 3 | 2 |
+| **all** | **88** | **61** | **42** (control 13) |
+
+- The excess (88 − 61 = 27) sits in two categories: the unread scroll (+12) and uniques (+12). Not in exhaustion
+  (begun exhausted, any category: 29 vs 22; and `calm=1 recover=2`, which rests it off, has 87 target deaths against
+  88). Not in HP at the start either: the median fatal episode begins at full HP in both.
+- A known teleportation scroll was held at the start of 30 target episodes against 9 control ones. Exploring finds
+  and identifies more scrolls, and the rules don't read them: `teleport=3` waits for foes' HP of 1.5× the character's
+  HP now, and these characters were exhausted at 10–35% against foes with mostly 0.8–1.3× that.
+- The killer was never in the reference's view on that level in 40 target deaths (control 13).
+- XL when the fatal episode began, against the reference's on arrival at that depth: +0.6 (control +0.0).
+- Read end to end (`tell.py`): 540134 (waits out a rage, explores on exhausted and slowed, meets an orc warrior with
+  two scrolls and a potion in the pack, reads at 8/60 HP and dies the same turn); 500069 (the same walk after a rage,
+  into Edmund at 26 steps from the stairs up, no scroll); 500187 (a gnoll and orc pack 400 turns into D:4, which the
+  reference left after 44 turns; nothing in the pack would have helped); 540067 (Jeremiah seen at 3 steps while
+  standing on the stairs up with a scroll in the pack; the rage runs out, and the character fights on exhausted for 20
+  turns, drinks both potions, and reads at 4 HP); 500003 (exhausted at 26/56 against two orc priests, scroll unread,
+  killed by their smiting); 540021 (reads at 23/74, the teleport works, and the character, still exhausted and slowed,
+  lands next to an iguana and dies there with two scrolls left). The categories hold in all six. 540021 also shows the
+  mechanism that defeats `escape` below.
+
+**Three opt-in switches** (`src/ladder/brain/policy.py`, `Style`; all off by default; no default changed; no
+`STYLE_ADDED_AS` entry, since none was flipped):
+
+- **`--style escape=h`** (`escape_rule`) targets the unread scroll. In a fight, exhausted after a rage (`-Berserk`,
+  not raging), at h × max HP or under, with no teleport coming: read teleportation whatever the foes' HP. It sits where
+  `teleport=3`'s read does (after a cure and a retreat, before the healing potion). Tuned at h = 0.5.
+- **`--style unique=1`** (`unique_rule`, `dangerous_unique`) targets uniques. A unique the game rates threat 3 in view,
+  not adjacent, the character not raging, no teleport coming: read teleportation. While that teleport is coming and
+  the unique is still in view and not adjacent, don't rage: drink the potion at half HP, else walk toward the stairs up,
+  else wait. Once the scroll is read, `BrainTiers` marks the level explored, so the rules head down rather than
+  explore back into it. Adjacent, or with no scroll, the rules play as before.
+- **`--style calmfor=T`** targets the late turns on a level. `calm` holds only for the first T turns of each visit to
+  a level (`obs["level_turns"]`). After that, a rage's "Calm down" refusals count toward setting `explore` aside again,
+  as without `calm`, so the next rage ends the exploring there. Tuned at T = 400.
+- Tests in `tests/test_brain.py`: `test_escape_is_off_by_default_and_off_plays_as_before`,
+  `..._reads_teleportation_when_exhausted_and_low_whatever_the_foes`, `test_escape_reaches_the_rules_inside_brain_tiers`,
+  `test_unique_is_off_by_default_and_off_plays_as_before`,
+  `..._reads_teleportation_at_a_dangerous_unique_and_keeps_away_while_it_comes`,
+  `..._reaches_the_rules_inside_brain_tiers_and_leaves_the_level_after_reading`,
+  `test_calmfor_limits_calm_to_the_first_turns_on_a_level`,
+  `test_escape_unique_and_calmfor_are_styles_and_old_runs_still_match`.
+
+**Tuning.** Each switch together with `calm=1`. Same method as the last section: this tree, no model, epsilon 0,
+`ladderbrain*` accounts (9 workers asked; `ladderbrain7` and `9` refuse the login, as in every v6e run, so 7 played),
+A (500000–500199) and C (540000–540199) only, 03:48–06:17 (`chain.sh`, `jobs-tune.txt`). Each arm is compared with
+the existing `v6e/{A,C}-ref` (the defaults) and `v6e/{A,C}-calm`, paired by dungeon over games both arms finished,
+neither stale nor off its seed. 95% bootstrap over dungeons, 10,000 resamples. Analysed after all six runs (`arms.py`).
+Description only: these blocks are spent.
+
+| arm (`--style`) | A: mean depth | C: mean depth | − defaults, A | − defaults, C | **− defaults, A + C** | **− `calm=1`, A + C** | died D:1–3 / 4–6 / 7+ (A + C) | levels left down (D:3+) explored |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| defaults (`v6e/*-ref`) | 6.99 | 6.27 | | | | | 64 / 121 / 196 | 41% / 42% |
+| `calm=1` (`v6e/*-calm`) | 6.49 | 6.24 | −0.50 [−1.00, +0.01] | −0.06 [−0.51, +0.40] | **−0.28 [−0.62, +0.07]** (399) | | 66 / 156 / 163 | 82% / 80% |
+| `calm=1 escape=0.5` | 6.43 | 6.21 | −0.56 [−1.09, −0.03] | −0.09 [−0.53, +0.36] | **−0.33 [−0.67, +0.02]** (399) | −0.05 [−0.19, +0.10] (400) | 65 / 151 / 167 | 80% / 81% |
+| `calm=1 unique=1` | 6.47 | 6.08 | −0.52 [−1.00, −0.04] | −0.19 [−0.64, +0.27] | **−0.36 [−0.69, −0.02]** (399) | −0.09 [−0.23, +0.05] (400) | 65 / 153 / 167 | 83% / 81% |
+| `calm=1 calmfor=400` | 6.21 | 6.28 | −0.78 [−1.30, −0.28] | +0.00 [−0.45, +0.45] | **−0.39 [−0.75, −0.05]** (398) | −0.12 [−0.40, +0.15] (399) | 77 / 138 / 169 | 64% / 66% |
+
+Dungeons paired in brackets. Out of the pairs: 540052, which hangs in the reference as it has in every C run, and
+500173 of `calmfor=400`, whose morgue (right seed, 125 turns, died on D:1 as in every arm) is stamped 6 s before the
+game's directory, outside `seeds.py`'s 5-second window, as two were last time. Every game of the six runs was checked on its seed (`verify.py`): no "Welcome back", no protocol
+without its seed, no first step after turn 1, none hung.
+
+**What each did** (`fires.py`, `uniq.py`, `deaths.py`, `calmdiag.py` on the new runs):
+
+- **`escape=0.5`** read in 54 games on A (80 reads) and 43 on C (64), where `teleport=3` would not have. Within 30
+  turns of its reads 16% died, against about 26% at the same moments under `calm=1` alone (`would.py`). The unread-scroll
+  category fell from 14 target deaths to 3, but target deaths stayed at 88: the same characters died a little later,
+  in the "threat-3 or big fight" category (23 → 30). 166–168 of 200 games end at the same depth as `calm=1`'s.
+- **`unique=1`** read in 59 games on A (101 reads) and 47 on C (80). Within 100 turns of a read, 5–8% died, against
+  14–16% at the same moments under `calm=1` alone. Deaths within 100 turns of first seeing a unique on D:4–6 fell
+  (A 45 → 37, C 29 → 27), but D:4–6 deaths overall did not (A 90 → 86, C 66 → 67), and the target set is 86 with
+  24 still in the unique category. The level is left after the read, but the exploring hardly falls (83% / 81%).
+- **`calmfor=400`** brings the exploring halfway back (64–66% of levels explored to the end) and D:4–6 deaths down
+  (156 → 138). But XL on arrival stays where `calm=1` has it (D:5 6.1, D:6 7.1). Depth is lower on A (−0.28 against
+  `calm=1`), level on C, and deaths on D:1–3 rise (66 → 77; that cap also applies there).
+
+**No fresh test.** The rule was to pre-register a test on 690000–690599 only for a configuration clearly ahead on A + C
+(pooled interval mostly above zero, both blocks positive). Every arm is below the defaults on A + C, with the best
+point estimate −0.33. So nothing was pre-registered and **seeds 690000–690599 were not played; they are still unused.**
+
+**Summary of the section.**
+
+- `calm=1`'s extra deaths on D:4–6 are the cost of the extra exploring: about the same number of fights, more of them
+  in places the defaults never go, half again as many with uniques, and a scroll in hand more often that the rules
+  don't read in time. The XL it buys pays off on D:7+ (fewer deaths per fight there), but by then too many have died.
+- Three rules that remove the deaths where they act (an unread scroll at low HP, a threat-3 unique, the late turns on
+  a level) don't change depth. The characters they save die soon after on the same levels. Against the defaults:
+  `calm=1 escape=0.5` −0.33 [−0.67, +0.02], `calm=1 unique=1` −0.36 [−0.69, −0.02], `calm=1 calmfor=400`
+  −0.39 [−0.75, −0.05]. Against `calm=1` alone all are within ±0.15.
+- **Measured**: every count and difference above; that every game was on its seed; the tests (`uv run pytest -q`: 486
+  passed, 5 deselected; `uv run ruff check`: clean).
+- **Inferred**: that the saved characters die later "because" they remain weak on a dangerous level without the scroll
+  (read from where the deaths moved, not forked); that the extra fights are in the part of each level the defaults skip
+  (from turns on the level and from killers the reference never saw, not from map coverage, which the step log doesn't
+  keep); that `calmfor`'s extra D:1–3 deaths are its doing rather than chance (11 games, not tested).
+- Not measured: forks at the rules' moments; other values of h or T; `escape` or `unique` without `calm` (by
+  `would.py`, `escape`'s moments are 113 and 94 fights on A and C under the defaults against 138 and 108 under `calm=1`;
+  `unique`'s 83 and 65 against 126 and 91).
+- Runs: `runs/brain/v6f/{A,C}-calm-{esc50,uniq,for400}`. Scripts in the job's `brain-v6f/` scratch directory: copies
+  of `arms.py` (main guarded so it can be imported), `seeds.py`, `verify.py`, `gather.py`, `flags.py`, `calmdiag.py`,
+  `cattrib.py`, `mindex.py`, `chain.sh`, `refresh.sh` (now lists the morgues with `find`, since the shell's argument
+  list overflowed); new: `load.py`, `fights.py`, `fightfeat.py`, `deaths.py`, `danger.py`, `budget.py`, `uniq.py`,
+  `tele.py`, `would.py`, `fires.py`, `tell.py`, `jobs-tune.txt`. Seeds spent: none; evaluation seeds replayed: A and C
+  only. The server's disk stayed at 52%.
+
 ## What carried over from s1-battle, and what couldn't
 
 | s1-battle | here |
@@ -2718,6 +2862,13 @@ In the order I would take them:
    `avoid=1.0` −0.20 [−0.38, −0.02]; section "The fights the rules start, tuned"). 690000–690599 are still unspent.
    Left from the list: `avoid` that holds the rage until the scroll takes effect (as built, the rules rage anyway and
    waste it); forks before any new fight rule; `teleport=3` at a lower ratio.*
+   *(2026-11-16, morning) Why `calm=1` dies more on D:4–6: the extra exploring meets more fights in places the defaults
+   never go, more of them with uniques, with a scroll in hand that the rules don't read. Three opt-in switches against
+   those causes (`escape=0.5`, `unique=1`, `calmfor=400`, each with `calm=1`) remove the deaths where they act, but as
+   many come back on the same levels. None is ahead (section "Why `calm=1` dies more on D:4–6"), and 690000–690599
+   are still unspent. What that suggests: a rescue is wasted while the character stays exhausted and alone on a
+   dangerous level, so a rule worth trying pairs the scroll with leaving the level (up the stairs once it lands).
+   Forks at those moments come first.*
 4. **Promote on more than 60 dungeons.** Differences under 0.3 depths can't be seen with 60; the same
    baseline replayed varies by 0.1. 200 evaluation dungeons would take about 15 minutes per model.
 5. **The remaining dead ends**: games that hang (1 in 20 with random choices in round 4, 1 in 40
