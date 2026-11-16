@@ -24,6 +24,9 @@ static_path = "/crawl/webserver/static"
 template_path = "/crawl/webserver/templates/"
 
 server_id = ""
+# No terminal recordings: nothing reads them, and self-play filled the 98 GB
+# data volume with 51 GB of them. Step logs, protocol logs and morgues are kept.
+enable_ttyrecs = False
 game_data_no_cache = True
 use_game_yaml = False
 
