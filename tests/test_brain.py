@@ -2118,6 +2118,94 @@ def test_retreat_and_stairs_switches_are_styles_and_old_runs_still_match():
     assert Style.saved(None) == Style(recover=0, retreat=0, teleport=0, unseen=0)
 
 
+def test_retreat_level_3_also_leaves_a_fight_met_while_exhausted():
+    spent = ["-Berserk", "Slow"]
+    # retreat=2: exhaustion alone, without a rage running out just now, does not mark the level
+    tiers = BrainTiers(style=Style(retreat=2), rng=random.Random(0))
+    assert tiers.fight_moves(1, obs(status=spent, **PAIR, **UP_KNOWN)) == (False, False, False)
+    # retreat=3: it does, with two in view and the stairs up close
+    tiers = BrainTiers(style=Style(retreat=3), rng=random.Random(0))
+    assert tiers.fight_moves(1, obs(status=spent, **PAIR, **UP_KNOWN)) == (True, True, False)
+    assert tiers.fight_moves(1, obs(status=["-Berserk"], **PAIR, **UP_KNOWN))[0]           # no longer slowed
+    for o in (obs(status=spent, n_hostiles=1, mons=[mon()], **UP_KNOWN),                    # one in view
+              obs(status=spent, **PAIR, god="Trog", dist_up=9),                              # stairs too far
+              obs(status=spent, **PAIR, god="Trog"),                                         # no stairs known
+              obs(status=["Slow"], **PAIR, **UP_KNOWN),                                      # slowed, not exhausted
+              obs(**PAIR, **UP_KNOWN)):                                                      # fresh
+        assert BrainTiers(style=Style(retreat=3), rng=random.Random(0)).fight_moves(1, o) == (False, False, False), o
+    # and still as level 2 when the rage runs out
+    tiers = BrainTiers(style=Style(retreat=3), rng=random.Random(0))
+    tiers.fight_moves(1, obs(status=["Berserk"], **PAIR, **UP_KNOWN))
+    assert tiers.fight_moves(1, obs(status=spent, **PAIR, **UP_KNOWN))[0]
+
+
+def avoid_obs(hp=40, foes=(30, 30), status=(), tele=1, **over):
+    """A fresh character at `hp` of 40 with unhurt hostiles of the given average HP in view, the first adjacent."""
+    mons = [{**mon(dx=1 + i, threat=2), "avghp": a, "mdam": 0} for i, a in enumerate(foes)]
+    return obs(**{"god": "Trog", "hp": hp, "hp_max": 40, "status": list(status), "n_hostiles": len(mons),
+                  "mons": mons, "inv": {**SCROLL, "teleport": tele}, **over})
+
+
+def avoid_rules(o, avoid, blocked=frozenset()):
+    return baseline(o, available(o, False, set(blocked), False), False, teleport=3, avoid=avoid)
+
+
+def test_avoid_is_off_by_default_and_off_plays_as_before():
+    assert Style().avoid == 0
+    o = avoid_obs()
+    assert avoid_rules(o, 0) == baseline(o, available(o, False, set(), False), False, teleport=3) == "berserk"
+    assert not policy.avoid_rule(o, 0)
+
+
+def test_avoid_reads_teleportation_instead_of_raging_against_k_times_max_hp():
+    # 60 HP of hostiles against a maximum of 40: 1.5x
+    assert avoid_rules(avoid_obs(), 1.5) == "read_teleport"
+    assert avoid_rules(avoid_obs(), 1.6) == "berserk"
+    assert avoid_rules(avoid_obs(hp=10), 1.5) == "read_teleport"           # against the maximum, not HP now
+    assert avoid_rules(avoid_obs(foes=(20, 20)), 1.5) == "berserk"         # 40 < 60
+    far = avoid_obs(mons=[{**mon(dx=5, threat=2), "avghp": 30, "mdam": 0}, {**mon(dx=6), "avghp": 30, "mdam": 0}])
+    assert avoid_rules(far, 0) == "fight" and avoid_rules(far, 1.5) == "read_teleport"   # before they arrive, too
+    # damage done to them counts (features.MDAM_LEFT: 3 is half left)
+    hurt = avoid_obs()
+    hurt["mons"][0]["mdam"] = 3
+    assert avoid_rules(hurt, 1.5) == "berserk"
+
+
+def test_avoid_keeps_to_fresh_characters_and_its_guards():
+    for st in (["Berserk"], ["-Berserk", "Slow"], ["-Berserk"], ["Tele"]):
+        assert not policy.avoid_rule(avoid_obs(status=st), 1.5), st              # exhausted: teleport_rule's part
+    for st in (["Berserk"], ["Tele"], ["Conf"]):
+        assert avoid_rules(avoid_obs(status=st), 1.5) != "read_teleport", st
+    assert avoid_rules(avoid_obs(tele=0), 1.5) == "berserk"                       # no scroll
+    assert avoid_rules(avoid_obs(), 1.5, blocked={"read_teleport"}) == "berserk"
+    # a teleport is coming: the rage the rules would have begun comes next
+    assert avoid_rules(avoid_obs(status=["Tele"]), 1.5) == "berserk"
+    # serious poison: the cure first
+    poisoned = avoid_obs(hp=30, poison_survival=1, inv={**SCROLL, "heal": 1, "curing": 1})
+    assert avoid_rules(poisoned, 1.5) == "quaff_heal"
+
+
+def test_avoid_reaches_the_rules_inside_brain_tiers():
+    seen = {}
+    for k in (0, 1.0):
+        state = make_state(["#########", "#..@....#", "#.......#", "#########"], depth=3, god="Trog")
+        state = with_inv(state, s0=item("scroll of teleportation", SCROLLS, 1, letter=ord("c")))
+        for x in range(4, 8):
+            add_monster(state, (x, 1), x, "orc warrior")
+        tiers = BrainTiers(style=Style(avoid=k), rng=random.Random(0))
+        seen[k] = tiers.next_action(state)
+    assert seen[0] != "read_teleport" and seen[1.0] == "read_teleport"
+
+
+def test_avoid_and_retreat_3_are_styles_and_old_runs_still_match():
+    import argparse
+    from ladder.brain.cli import _style
+    assert _style(argparse.Namespace(style=["avoid=1.5", "retreat=3"])) == Style(avoid=1.5, retreat=3)
+    # a run saved before `avoid` existed was played with it off, which is also its default
+    old = {k: v for k, v in Style().to_dict().items() if k != "avoid"}
+    assert Style.saved(old) == Style()
+
+
 def test_evaluate_reuses_a_saved_run_only_when_its_style_matches(tmp_path, monkeypatch):
     import argparse
     from ladder.brain import cli

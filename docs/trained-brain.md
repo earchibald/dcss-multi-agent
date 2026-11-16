@@ -7,6 +7,15 @@ runs in numpy in well under a millisecond. It is the same idea as the trained br
 
 ## Where it stands
 
+**2026-11-15, late night: no game can be played until the game server has disk space.** The Docker VM's disk is full
+(98 GB; 51 GB of it the self-play accounts' ttyrecs, which nothing reads), and every game since about 22:53 hangs at its
+start; this is also what hung the last section's forks (all in its final two minutes). Before that, the fights the rules
+start were counted on 998 games of today's defaults, and two opt-in switches were built for the largest pools:
+`--style avoid=k` (read teleportation instead of starting a rage against k times the character's maximum HP: at 1.5,
+346 rages in 212 games, 26% followed by death) and `--style retreat=3` (go up close stairs from a fight met while
+exhausted: 348 fights in 262 games, 26% died in them). Untested in play; no default changed. Section "The fights the rules
+start", below.
+
 **2026-11-15, night: stepping out of fire and away from what can't be seen passes a pre-registered fresh test.** A
 re-diagnosis of the current rules found that a game in seven (13%) ends within 30 turns of the character being hurt by
 something not in view, and the rules waiting in it: burning from a bombardier beetle's spray (DCSS refuses rest and
@@ -2113,6 +2122,90 @@ pairs remain. Outcome: deepest floor, on − off; 95% bootstrap over moments (on
   `jobs-*.txt` files; the copied morgues. Seeds spent: evaluation 680000–680599 (task 4); training 140000–140599 (task
   5); evaluation seeds replayed: A and C only.
 
+#### The fights the rules start: candidates counted, two switches, and a full server disk (2026-11-15, late night)
+
+**Stopped before any game: the game server's disk is full.** The Docker VM's disk (`/` and `/data` in
+`dcss-multi-agent-dcss-1`) is at 100% (98 GB of 98 GB). 51 GB of it is `/data/rcs/ttyrecs`, almost all the
+`ladderbrain*` self-play accounts' terminal recordings (2.6–6.3 GB each); `/data/qw` is 13 GB. Every game since about
+22:53 hangs: the worker waits forever in `_clear_save`'s `start_game`, and the parent records `hung` after 60 s. Nothing
+in the pipeline reads those ttyrecs (it reads the protocol logs kept beside each step log, and the morgues), but they
+are not this task's to delete, so no tuning game, fresh test or fork was played. Tasks 3–5 wait for space.
+
+**This also explains the 8% of forks that hung in the last section.** Of the 35 hung forks in
+`runs/brain/v6d/forks/un-rules`, 25 never made a game directory (they hung in `_clear_save`, as every game does now) and
+the other 10 all started at 22:53–22:54, the run's last two minutes; the one read ends with the key `<` (a level change,
+which writes the save) and nothing after. Before 22:53 no fork hung. So the hangs were the disk filling, not something
+about forks (inferred from the timing and the last key; the server's own log was not read).
+
+**Task 1: what each candidate would touch.** Source: the 998 finished games of today's defaults (`recover=1 retreat=2
+teleport=3 unseen=2`) on A and C (`runs/brain/v6d/{A,C}-u2b`) and on 680000–680599 (`Q{1,2,3}-u2`), none stale or off
+its seed; every choice read (`cand.py`, then `ana_a.py`, `ana_b.py`, `ana_c2.py`, `why_desc.py`, `stalls.py` in the job's
+`brain-v6e/`). "Died" is within 50 turns of the moment unless said otherwise. Mean depth 6.42; cause table as before:
+the rage running out first 37%, walked into the last fight spent 18%, died raging 17%, took the stairs spent 10%,
+melee without a rage 5%.
+
+| | candidate | moments | games touched | how they end now | verdict |
+| --- | --- | --- | --- | --- | --- |
+| a | finish exploring before the stairs down (`calm=1`, with or without `recover=2`; both exist) | 2,494 of 6,114 levels left down unexplored | 790 | see the table below | worth a re-check: the mechanism is clear and large, but the same switch was level under the older rules |
+| b | read teleportation instead of starting a rage, foes' HP ≥ 1.5× max, scroll held (`avoid=1.5`, new) | 346 rages | 212 | 26% died (all rages 6%) | **built**; the largest pool where a scroll is in hand |
+| b | the same at ≥ 1.0× max | 892 rages | 334 | 18% died | a tuning level of the same switch |
+| b | named uniques (qw's leave-the-level list) | Sigmund 178 rages, 12% died; Jeremiah 41, 32%; 3+ gnolls 602, 15% | | | not built: the foes' HP ratio already covers packs, and the uniques other than Jeremiah are no deadlier than an average large rage |
+| c | fights begun exhausted with 2+ hostiles and stairs up within 8 (`retreat=3`, new) | 348 fights | 262 | 26% died in the fight (fled in it: 13%) | **built** |
+| c | walk to the stairs before a big fresh fight (`stairs=1`, exists) | 1,119 fights with foes' HP ≥ max and stairs within 8 | | 14–16% died, no gradient with distance (on the stairs 14%, 9–20 steps 13%) | not re-tested: nothing says where the fight starts matters, and it was level before |
+| d | `teleport=3` at a lower ratio (1.0–1.5× current HP) | 259 spells of exhaustion, 103 with a scroll | about 100 | 16–20% died within 30 turns | not built: too few games to see (a read is worth about +0.3 where it fires) |
+| d | spent before the fight starts | 2,538 fights begun exhausted; 235 deaths (median 71% HP, 3 hostiles, foes' HP 0.91× max) | 741 | 9% died; 2+ hostiles 21% | covered by `retreat=3` (stairs) and `teleport=3` (outmatched) |
+| e | rest out exhaustion before exploring on (`recover=2`) | the fights begun exhausted came after `rest` 1,711 times (121 deaths), `descend` 299 (56), `flee_up` 292 (39), `explore` only 73 (6) | | | dropped: the character is already resting when the fight finds it |
+| f | drink the healing potion before raging at ≤ 50% HP | 88 rages | 76 | 18% died | dropped: too few |
+
+**(a) in detail.** The rules leave most levels from D:4 on before exploring them, spending half qw's turns per level and
+arriving 0.5–2.5 levels under qw from D:5 (qw: its five base runs, other dungeons, `brain-v5e/qw_pace.json`):
+
+| level left down | levels | explored to the end | turns there, median (qw) | XL on arrival below (qw) | died on the next level: after exploring / not |
+| --- | --- | --- | --- | --- | --- |
+| D:3 → 4 | 843 | 67% | 612 (856) | 4.6 (4.9) | 10% / 14% |
+| D:4 → 5 | 704 | 46% | 482 (941) | 5.9 (6.4) | 15% / 10% |
+| D:5 → 6 | 623 | 33% | 384 (998) | 6.9 (7.6) | 13% / 18% |
+| D:6 → 7 | 499 | 32% | 375 (987) | 7.6 (8.5) | 20% / 19% |
+| D:7 → 8 | 408 | 37% | 401 (954) | 8.3 (9.1) | 28% / 27% |
+| D:8 → 9 | 259 | 39% | 442 (995) | 8.9 (10.2) | 27% / 23% |
+| D:9 → 10 | 215 | 47% | 275 (1018) | 9.4 (11.3) | 14% / 30% |
+
+- Why: a rage that outlasts its fight makes DCSS refuse autoexplore ("Calm down first, please."), two refusals set
+  `explore` aside for 50 turns, and by the time it may be tried again the rules have rested and walked to the stairs.
+  On A + C, 4,376 of the 4,745 times explore was set aside it was during a rage. At the first step toward the stairs of
+  an unexplored departure (D:3 on, 1,311 on A, C and Q1), explore was not possible in 1,297, with nothing in view and,
+  in 1,114, no rage or exhaustion left.
+- Dying on the next level is not clearly lower after a full exploration (the two columns cross), so the case for
+  exploring rests on XL, which the earlier `calm=1` test (+1.0 XL, the same depth) did not turn into depth.
+
+**Task 2: two opt-in switches** (`src/ladder/brain/policy.py`; off by default; no default changed).
+
+- **`--style avoid=k`** (`Style.avoid`, `avoid_rule`): in a fight, neither raging nor exhausted, no teleport coming, with
+  the hostiles in view at `k` times the character's maximum HP or more (`foe_hp`), read teleportation before the rage.
+  It sits where `teleport=3`'s read does in the fight order (after a cure and a retreat), so the two never both apply.
+  The scroll takes a few turns to work; on the next choice `Tele` shows, the rule is quiet, and the rules rage as they
+  would have (a rage does not cancel a coming teleport: DCSS's `go_berserk` leaves `DUR_TELEPORT` alone).
+- **`--style retreat=3`** (`BrainTiers.fight_moves`): as `retreat=2`, and the level is also marked to be left whenever
+  two or more hostiles are in view while exhausted (`-Berserk`, not raging) with the stairs up within 8 steps, not only
+  at the choice the rage runs out. The rest (up the stairs, a potion first at half HP, rest off the exhaustion upstairs)
+  is `retreat`'s as before.
+- Tests in `tests/test_brain.py`: `test_retreat_level_3_also_leaves_a_fight_met_while_exhausted`,
+  `test_avoid_is_off_by_default_and_off_plays_as_before`, `..._reads_teleportation_instead_of_raging_against_k_times_max_hp`,
+  `..._keeps_to_fresh_characters_and_its_guards`, `..._reaches_the_rules_inside_brain_tiers`,
+  `test_avoid_and_retreat_3_are_styles_and_old_runs_still_match`.
+
+**Tasks 3–5: not done** (the disk). The tuning that was planned on A and C against the defaults replayed with this tree
+(`runs/brain/v6e/{A,C}-ref`): `avoid=1.5`, `avoid=1.0`, `retreat=3`, `calm=1`, `calm=1 recover=2`, then the best two
+together. Seeds 690000–690599 are unspent; no fork was played.
+
+- **Verified**: every count above (scripts in the job's `brain-v6e/`); that every game started since about 22:53 hangs in
+  `_clear_save` (a stack dump after 40 s, `diag_clear.py`) and that the container's disk is full (`df`, `du`); the hung
+  forks' start times (`forkhangs.py`); the tests (`uv run pytest`, `uv run ruff check`).
+- **Inferred**: that the full disk is what hangs `start_game` and the level change (not read in the server's log); that
+  the 10 forks that hung mid-game hung on the disk.
+- Runs: none. (An abandoned start of `A-ref`, 50 games all `hung` at once, left no files; its empty directory was
+  removed.) Seeds spent: none.
+
 ## What carried over from s1-battle, and what couldn't
 
 | s1-battle | here |
@@ -2519,6 +2612,12 @@ In the order I would take them:
    rages in 999 games, 29% followed by death), each as a fork kind first; (c) attack the square an unseen attacker hit
    from, as qw does (`plan_flail_at_invis`), which needs an action of its own; (d) `recover=2` (rest out exhaustion
    before exploring on) again under today's rules, since walking into a fight spent is still 18–20% of games.*
+   *(2026-11-15, late night) Blocked by a full disk on the game server (section "The fights the rules start"). First:
+   free space (the `ladderbrain*` ttyrecs under `/data/rcs/ttyrecs` are 51 GB and unread; deleting them is the owner's
+   call). Then, on A + C against the defaults replayed with this tree: `avoid=1.5`, `avoid=1.0`, `retreat=3`, `calm=1`
+   and `calm=1 recover=2` (the rage's "Calm down" is why most levels from D:4 on are left unexplored), the best two
+   together, and a pre-registered test on 690000–690599 only if one is ahead. (d) above is dropped: the fights met while
+   exhausted come after resting, not exploring.*
 4. **Promote on more than 60 dungeons.** Differences under 0.3 depths can't be seen with 60; the same
    baseline replayed varies by 0.1. 200 evaluation dungeons would take about 15 minutes per model.
 5. **The remaining dead ends**: games that hang (1 in 20 with random choices in round 4, 1 in 40

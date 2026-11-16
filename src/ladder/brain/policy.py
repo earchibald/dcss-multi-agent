@@ -68,7 +68,9 @@ class Style:
     retreat: float = 2.0      # 1 = when a rage runs out with RETREAT_LEFT or more hostiles in view and stairs up
                               # known, go up them (kept to on that level while `recovering`), then rest the
                               # exhaustion out before anything else; 2 = the same, only with the stairs up within
-                              # STAIRS_NEAR steps; 0 = off. 2 by default since 2026-11-15 (with recover=1).
+                              # STAIRS_NEAR steps; 3 = as 2, and also whenever RETREAT_LEFT or more hostiles are in
+                              # view while exhausted (`-Berserk`, not raging), not only as the rage runs out;
+                              # 0 = off. 2 by default since 2026-11-15 (with recover=1).
     stairs: float = 0.0       # 1 = before a fight bigger than one rage (`big_fight`), nothing adjacent and no rage
                               # on, walk to stairs up within STAIRS_NEAR steps first, once per fight. Off by default.
     unseen: float = 2.0       # hurt with nothing in view (`BrainTiers.assailed`): 1 = when burning (DCSS's sticky
@@ -76,6 +78,9 @@ class Style:
                               # waiting only burns; 2 = also when something unseen keeps hurting (UNSEEN_HITS falls in
                               # HP, not poison), read teleportation, else go up the stairs. 0 = off. 2 by default
                               # since 2026-11-15 (+0.17 [+0.04, +0.31] on 598 fresh dungeons).
+    avoid: float = 0.0        # k > 0 = before a fight, read teleportation instead of starting a rage when the hostiles
+                              # in view have k times the character's maximum HP or more left between them (`foe_hp`),
+                              # neither raging nor exhausted, no teleport coming (`avoid_rule`); 0 = off. Off by default.
 
     def weights(self) -> np.ndarray:
         return np.asarray([getattr(self, c) for c in COMPONENTS], dtype=np.float32)
@@ -282,9 +287,25 @@ def teleport_rule(obs: dict, level: int) -> tuple[bool, bool]:
     return spent, crowded
 
 
+def avoid_rule(obs: dict, k: float) -> bool:
+    """`Style.avoid`: whether to read teleportation instead of starting the fight (and the rage) in view.
+
+    With k > 0: hostiles in view with k times the character's maximum HP or more left between them (`foe_hp`, the
+    measure `big_fight` uses at k = 1), the character neither raging nor exhausted after a rage (`Berserk`,
+    `-Berserk`; exhausted is `teleport_rule`'s part), and no teleport already coming (`Tele`). In the current rules'
+    saved games, rages begun at 1.5 times the maximum or more were followed by death within 50 turns 32% of the time
+    (all rages: 6%). The scroll takes some turns to work, and a rage is still possible after reading, so the rules
+    rage on the next choice if they would have (a teleport isn't cancelled by a rage). That the scroll can be read is
+    `available`'s part."""
+    status = obs.get("status") or []
+    if k <= 0 or not obs["n_hostiles"] or "Tele" in status or any(x.startswith(("Berserk", "-Berserk")) for x in status):
+        return False
+    return foe_hp(obs) >= k * max(obs["hp_max"], 1)
+
+
 def baseline(obs: dict, avail: list[str], level_explored: bool, wiki: bool = False, teleport: int = 0,
              recover: int = 0, calm: bool = False, retreat: bool = False, rest_out: bool = False,
-             to_stairs: bool = False, assailed: str | None = None) -> str:
+             to_stairs: bool = False, assailed: str | None = None, avoid: float = 0.0) -> str:
     """Rules of thumb: the stub's behaviour, plus drinking a healing potion instead of giving up.
 
     `wiki` plays the variant that follows the DCSS wiki's strategy guides instead (`Style.wiki`).
@@ -300,6 +321,7 @@ def baseline(obs: dict, avail: list[str], level_explored: bool, wiki: bool = Fal
     `to_stairs` walks toward the stairs up before a fight.
     `assailed` (`BrainTiers.assailed`, `Style.unseen`) with nothing in view: BURNING walks toward the stairs up (or
     down), UNSEEN reads teleportation, else goes up the stairs; `avail` then from `available(..., assailed=...)`.
+    `avoid` (`Style.avoid`) reads teleportation before a rage when `avoid_rule` holds.
     """
     if wiki:
         return baseline_wiki(obs, avail, level_explored)
@@ -313,6 +335,7 @@ def baseline(obs: dict, avail: list[str], level_explored: bool, wiki: bool = Fal
             away = (["quaff_heal"] if frac <= 0.5 else []) + ["flee_up"]
         else:
             away = ["flee_up"] if to_stairs else []
+        now = now or avoid_rule(obs, avoid)
         order = cure + away + (["read_teleport"] if now else []) + (["berserk"] if rage and near else []) + \
                 (["quaff_heal"] if frac <= 0.5 else []) + (["read_teleport"] if crowded else []) + \
                 ["fight", "descend", "flee_up", "wait"]
@@ -443,7 +466,7 @@ class BrainTiers(StubTiers):
             raise Escalation("nothing the brain can do here" + (f" (tried: {', '.join(sorted(blocked))})" if blocked else ""))
         base = baseline(obs, avail, self.level_explored, wiki=bool(self.style.wiki), teleport=int(self.style.teleport),
                         recover=int(self.style.recover), calm=bool(self.style.calm), retreat=retreat,
-                        rest_out=rest_out, to_stairs=to_stairs, assailed=assailed)
+                        rest_out=rest_out, to_stairs=to_stairs, assailed=assailed, avoid=self.style.avoid)
         choice, source, extra = base, "baseline", {}
         if self.fork_turn is not None and self.horizon and state.turn > self.fork_turn + self.horizon:
             raise Escalation(FORK_DONE)
@@ -482,7 +505,8 @@ class BrainTiers(StubTiers):
 
         `Style.retreat`: a rage that has just run out (raging at the last choice, not now) with RETREAT_LEFT or
         more hostiles in view and stairs up known (at level 2, within STAIRS_NEAR steps: a slowed walk further
-        than that lost more than it saved on block A) marks this level as one to leave. While still `recovering`,
+        than that lost more than it saved on block A) marks this level as one to leave; at level 3 so does any
+        choice with RETREAT_LEFT or more in view while exhausted (`-Berserk`), with the stairs as close. While still `recovering`,
         head up the stairs there whenever something is in view (`retreat`), and with nothing in view, on any
         level, rest before going on (`rest_out`).
         `Style.stairs`: with a `big_fight` in view, no rage or exhaustion on and nothing adjacent, walk toward
@@ -492,7 +516,10 @@ class BrainTiers(StubTiers):
         retreat = to_stairs = False
         if self.style.retreat:
             reach = STAIRS_NEAR if self.style.retreat >= 2 else 10 ** 9
-            if was and not self.was_raging and obs["n_hostiles"] >= RETREAT_LEFT and \
+            ran_out = was and not self.was_raging
+            # level 3: met while exhausted, too (a fight that finds the character resting off a rage)
+            spent = self.style.retreat >= 3 and not self.was_raging and "-Berserk" in (obs.get("status") or [])
+            if (ran_out or spent) and obs["n_hostiles"] >= RETREAT_LEFT and \
                     (obs["on_up"] or 0 <= obs["dist_up"] <= reach):
                 self.retreat_from = level_seq
             if self.retreat_from is not None and not recovering(obs):
