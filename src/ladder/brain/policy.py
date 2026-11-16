@@ -71,10 +71,11 @@ class Style:
                               # STAIRS_NEAR steps; 0 = off. 2 by default since 2026-11-15 (with recover=1).
     stairs: float = 0.0       # 1 = before a fight bigger than one rage (`big_fight`), nothing adjacent and no rage
                               # on, walk to stairs up within STAIRS_NEAR steps first, once per fight. Off by default.
-    unseen: float = 0.0       # hurt with nothing in view (`BrainTiers.assailed`): 1 = when burning (DCSS's sticky
+    unseen: float = 2.0       # hurt with nothing in view (`BrainTiers.assailed`): 1 = when burning (DCSS's sticky
                               # flame, `Fire`), walk toward the stairs, since every step shakes some of it off and
                               # waiting only burns; 2 = also when something unseen keeps hurting (UNSEEN_HITS falls in
-                              # HP, not poison), read teleportation, else go up the stairs. 0 = off, the default.
+                              # HP, not poison), read teleportation, else go up the stairs. 0 = off. 2 by default
+                              # since 2026-11-15 (+0.17 [+0.04, +0.31] on 598 fresh dungeons).
 
     def weights(self) -> np.ndarray:
         return np.asarray([getattr(self, c) for c in COMPONENTS], dtype=np.float32)
@@ -95,7 +96,7 @@ class Style:
 
 # Style keys whose default has changed since they were added, with the value they were added at: a run
 # saved before the key existed was played with this value.
-STYLE_ADDED_AS = {"recover": 0.0, "retreat": 0.0, "teleport": 0.0}
+STYLE_ADDED_AS = {"recover": 0.0, "retreat": 0.0, "teleport": 0.0, "unseen": 0.0}
 
 
 SERIOUS_POISON = 65       # % of current HP the poison will take: the game's "seriously poisoned" (status.cc)

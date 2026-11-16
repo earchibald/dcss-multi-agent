@@ -2115,7 +2115,7 @@ def test_retreat_and_stairs_switches_are_styles_and_old_runs_still_match():
     assert Style.saved(old) != Style()
     # one saved with recover but before retreat existed
     assert Style.saved({**old, "recover": 1.0}) == Style(recover=1, retreat=0)
-    assert Style.saved(None) == Style(recover=0, retreat=0, teleport=0)
+    assert Style.saved(None) == Style(recover=0, retreat=0, teleport=0, unseen=0)
 
 
 def test_evaluate_reuses_a_saved_run_only_when_its_style_matches(tmp_path, monkeypatch):
@@ -2266,9 +2266,11 @@ def test_baseline_cures_serious_poison_before_raging():
 TELE1 = {"heal": 0, "unknown_potions": 0, "unknown_scrolls": 0, "teleport": 1}
 
 
-def test_unseen_is_off_by_default_and_off_plays_as_before():
-    assert Style().unseen == 0
-    tiers = BrainTiers(rng=random.Random(0))
+def test_unseen_is_2_by_default_and_off_plays_as_before():
+    assert Style().unseen == 2
+    old = {k: v for k, v in Style().to_dict().items() if k != "unseen"}      # a run saved before the switch
+    assert Style.saved(old) == Style(unseen=0) and Style.saved(old) != Style()
+    tiers = BrainTiers(style=Style(unseen=0), rng=random.Random(0))
     assert tiers.assailed(obs(status=["Fire"], hp=10, hp_delta=-0.1, dist_up=4)) is None
     assert tiers.assailed(obs(hp=8, hp_delta=-0.1, dist_up=4)) is None
     assert tiers.assailed(obs(hp=8, hp_delta=-0.1, dist_up=4)) is None
