@@ -2446,6 +2446,352 @@ point estimate −0.33. So nothing was pre-registered and **seeds 690000–69059
   `tele.py`, `would.py`, `fires.py`, `tell.py`, `jobs-tune.txt`. Seeds spent: none; evaluation seeds replayed: A and C
   only. The server's disk stayed at 52%.
 
+#### What qw does differently on the same dungeons, and two of its habits as switches: neither helps (2026-11-16, day)
+
+Seven hand-written rules in a row failed, so this section stops guessing and asks a narrower question: **on the same
+dungeons, what does qw do on D:3–7 that our rules don't?** qw played block A (500000–500199) on the `zk` build with
+its tuned Minotaur settings (`runs/qw/zk-heldout-200`, 2026-11-12). The same seed gives the same dungeon, so the two
+bots' games can be compared level by level. **Result: the largest measured differences are in how qw fights: it
+rages in a quarter as many fights, and late (median 67% HP, against our 100%), and it waits for an enemy to come
+in 45% of its fights where our rules walk up to it in 92%. Both habits can be expressed with our actions, so both
+were built as opt-in switches and tuned on A and C. Both lose depth: raging at 70% HP −0.68 [−1.07, −0.31], at
+90% HP −0.48 [−0.90, −0.07], waiting −0.39 [−0.75, −0.01]. So qw's habits don't carry over one at a time.** What
+keeps qw alive seems to be the combination: more armour, a shield, thrown weapons, stepping out of a surround, and
+Trog's Hand. Our bot has no actions for any of these. No default changed; no fresh test; seeds 690000–690599 are still
+unspent.
+
+**Data.** qw: `runs/qw/zk-heldout-200`, 200 games. Each game has a state line (`QWS`) and a plan (`QWACT`) for every
+decision qw makes, plus its morgue (199 of them; one game ran into the 3,600 s limit). qw's
+morgue notes also log its own item use ("WEARING", "READING", "STAIRDANCE"). Our bot:
+`runs/brain/v6e/A-ref` (the defaults) and `v6e/A-calm` (`calm=1`), with step logs and morgues. These really are the
+same dungeons. Both characters start with 19 HP, AC 2 and EV 11 and meet the same endoplasm on turn 8 of 500000. On
+500005 both find the altar of Trog on D:2, and Sigmund and Tus Rium's shop on D:3. qw's other block, 600000–600599
+(`held6-*`), was never played by our bot, so it can't be paired and isn't used. Scripts are in the job's `brain-v6g/`
+scratch directory. "Fight" means the same for both bots: a run of choices with a hostile in view on one level,
+ended by 20 turns with none or by a level change (`fights2.py`). It includes the lulls inside a fight.
+
+**Survival per level** (`cmp.py`; the Dungeon level each death happened on; all 200 dungeons):
+
+| level | qw: reached / died there | defaults | `calm=1` |
+| --- | --- | --- | --- |
+| D:2 | 198 / 21 (11%) | 198 / 12 (6%) | 197 / 12 (6%) |
+| D:3 | 176 / 8 (5%) | 180 / 7 (4%) | 176 / 10 (6%) |
+| D:4 | 167 / 13 (8%) | 172 / 16 (9%) | 167 / 28 (17%) |
+| D:5 | 154 / 9 (6%) | 152 / 21 (14%) | 137 / 28 (20%) |
+| D:6 | 145 / 10 (7%) | 133 / 30 (23%) | 110 / 35 (32%) |
+| D:7 | 136 / 11 (8%) | 101 / 23 (23%) | 75 / 13 (17%) |
+
+qw's deepest Dungeon level is 9.22 against the defaults' 6.97: +2.26 [+1.49, +3.02], paired. qw dies *more* on D:2
+and about as often on D:3–4. The gap opens on D:5–7, where its death rate per level stays at 6–8% while ours rises to
+14–23%. The defaults died on D:4–6 in 67 dungeons. qw got deeper in 49 of them, died earlier in 14 and died on the same
+level in 3. For `calm=1`'s 91 the counts are 63, 18 and 9.
+
+**On arrival at each level** (`cmp.py`; means over the dungeons where all three bots reached the level; qw / defaults /
+`calm=1`):
+
+| level (dungeons) | XL | max HP | AC | SH | heal wounds held | curing held | teleportation held | piety (stars) |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| D:4 (133) | 4.9 / 4.5 / 4.6 | 45 / 44 / 45 | 9.2 / 8.2 / 8.4 | 1.2 / 0.4 / 0.4 | 0.5 / 0.2 / 0.2 | 1.0 / 0.6 / 0.7 | 0.7 / 0.5 / 0.6 | 2.1 / 1.9 / 1.9 |
+| D:5 (89) | 6.3 / 5.8 / 6.1 | 55 / 53 / 55 | 10.6 / 9.5 / 10.0 | 1.6 / 0.4 / 0.6 | 0.6 / 0.2 / 0.3 | 1.3 / 0.7 / 0.9 | 1.0 / 0.7 / 0.8 | 2.5 / 2.0 / 2.0 |
+| D:6 (61) | 7.3 / 6.7 / 7.1 | 64 / 59 / 62 | 12.4 / 10.4 / 11.0 | 1.7 / 0.1 / 0.4 | 1.0 / 0.3 / 0.4 | 1.8 / 0.8 / 1.0 | 1.3 / 0.7 / 1.0 | 2.8 / 2.0 / 2.1 |
+| D:7 (37) | 8.3 / 7.3 / 7.8 | 73 / 64 / 69 | 14.4 / 10.8 / 12.1 | 1.9 / 0.3 / 0.2 | 1.1 / 0.2 / 0.3 | 2.3 / 0.9 / 1.3 | 1.8 / 0.9 / 1.4 | 3.1 / 1.9 / 2.1 |
+
+- EV is the same for all three (8–9). qw always arrives at full HP and never raging, exhausted or slowed. Our bot
+  arrives in one of those states 6–10% of the time on D:4–7.
+- `calm=1` spends about as many turns per level as qw (median from first arrival on D:k to first arrival on D:k+1,
+  over dungeons all three passed: D:4 862 / 496 / 836, D:5 896 / 527 / 844, D:6 976 / 320 / 764). So it isn't
+  a matter of time spent: on D:4 `calm=1` dies at twice qw's rate after the same number of turns.
+
+**How each bot fights on D:3–7** (`fights2.py`, `rage.py`; a fight counts toward a row if the action happened at least
+once in it):
+
+| | qw | defaults | `calm=1` |
+| --- | --- | --- | --- |
+| fights | 6,650 | 4,049 | 4,720 |
+| fatal (per 100 fights) | 51 (0.77) | 97 (2.40) | 114 (2.42) |
+| started a rage | 938 (14%) | 2,255 (56%) | 2,568 (54%) |
+| HP at the first rage, median | 67% (78% of rages at ≤ 70%) | 100% (96% above 70%) | 100% |
+| begun exhausted after an earlier rage | 42 (0.6%), 2 fatal | 172 (4.2%), 13 fatal | 144 (3.1%), 12 fatal |
+| waited for an enemy to come (`melee_wait_for_enemy`; ours `wait`) | 3,010 (45%) | 89 (2%) | 73 (2%) |
+| walked up to an enemy | 2,460 (37%) | 3,719 (92%) | 4,319 (92%) |
+| a tactical step (out of a surround, a cloud, sight of a ranged enemy) | 2,292 (34%) | no action | no action |
+| threw a javelin or boomerang | 2,066 (31%) | no action | no action |
+| fled toward the stairs up | 576 (8.7%) | 141 (3.5%) | 168 (3.6%) |
+| left the level upward after the fight | 278 (4.2%) | 47 (1.2%) | 56 (1.2%) |
+| zapped a wand | 165 (2.5%) | no action | no action |
+| Trog's Hand / Brothers in Arms | 35 / 10 | no action | no action |
+| haste / curing, cancellation or resistance | 129 / 63 | no action | no action |
+| healing potion / teleportation read | 27 / 44 | 95 / 44 | 117 / 69 |
+| two or more enemies adjacent at some point | 1,377 (21%) | 1,015 (25%) | 1,156 (24%) |
+
+- **qw rages late and rarely.** Its fights without a rage: 5,712, of which 6 were fatal (0.1%). Our rules don't
+  rage in only 1,794 fights, mostly small ones. Above 70% HP qw raged at 11–18% of its decisions when the enemies
+  within two squares had its maximum HP or more between them (by the monster table), and at 0.2–1.2% otherwise
+  (`qwrage.py`).
+- **After a fight qw rests to full HP and waits out the exhaustion.** Every one of its 4,465 first explores after a
+  fight is at full HP and not recovering. Ours: 92% at full, and 7.1% raging, exhausted or slowed.
+- **Stairs.** qw went up a level 634 times on D:2–8, in 155 games, 338 of them with enemies in view. Ours: 72 times in
+  47 games (`calm=1` 74 in 49). In its morgue notes qw stairdanced 308 times by D:7.
+
+**Uniques and killers on D:3–7** (`uniq2.py`, `hand.py`; from each bot's morgue notes: "Encountered", "Killed",
+"Slain by").
+
+- **Uniques: qw meets more and dies to fewer.** It met 517 and killed 467 (90%); 7 killed it. The defaults met 308,
+  killed 260 (84%) and died to 13. `calm=1` met 366, killed 313 (86%) and died to 24. qw doesn't avoid uniques: it
+  meets more of them and kills them.
+- **The same unique on the same dungeon.** Of the defaults' 13 deaths to a unique, qw killed that unique 9 times on
+  the same dungeon. For `calm=1` it was 17 of 24 (Edmund 5 deaths of 25 met, against qw's 31 killed of 31; Maggie 3
+  of 9 against qw's 22 of 24, none fatal).
+- **Killers on D:3–7 the parse could name.** qw (31): gnoll 7, orc 3, orc wizard 3, Jeremiah 3. Defaults (66 of 97):
+  wight 10, gnoll 7, orc 6. `calm=1` (81 of 114): gnoll 12, wight 8, Edmund 5.
+- **Trog's Hand monsters.** In the deaths on D:4–6, the fatal fight had in view a monster on qw's Trog's Hand list
+  (`hand_monsters`: Grinder, orc wizards and sorcerers, ogre mages…) in 21 of the defaults' 67, 24 of `calm=1`'s 91
+  and 7 of qw's 32. It had a wight in 11, 10 and 2.
+
+**Items on D:1–7.**
+
+- **qw (its morgue notes, 200 games).** It put on armour or jewellery 1,176 times:
+  - body armour about 420;
+  - rings 283 and amulets 64;
+  - shields 115 (orb, buckler, kite, tower);
+  - cloaks 77, gloves and boots 166.
+- It also wielded a better weapon 279 times. It read enchantment scrolls onto its gear 293 times, branded a weapon
+  63 times and read acquirement 33 times. It bought 218 things in shops. By D:4 38% of its characters carried
+  javelins or boomerangs, and by D:6 55%.
+- **The defaults.** They chose `wear` 507 times and `wield` 151 times (choices, not items). They never wear
+  jewellery: `gear.py` ranks none, and has no tower shield.
+- An enchant, brand or acquirement scroll read as unknown has its prompt cancelled and the scroll wasted
+  (`ITEM_PROMPTS`). A known one is never read.
+- Shops are fenced off (`fence_shops`).
+
+**qw's rules for these, in its own source** (the deployed `runs/qw/build-zk/qw.lua`, with upstream
+`runs/qw/src/source/` and the tuned overrides in `runs/qw/combo1-lua/MiBe_mace.lua`).
+
+- **Rage.** `want_to_berserk` (qw.lua 12339–12362) plus the `zerk_hp70` override fires on any of:
+  - HP ≤ 70% with an enemy within two that it has a melee path to (`check_berserkable_enemies`);
+  - a scary enemy (threat ≥ 3) within two whose best answer is melee;
+  - threat within two at or above `high_threat_level()` (7925–7927: 2 at XL ≤ 7, 7 from XL 10).
+
+  It is last in the emergency cascade (`set_plan_emergency`, 12594–12644).
+- **Waiting.** `plan_melee_wait_for_enemy` (11209–11270, plans-attack.lua:193–254) runs after melee. It waits while
+  an enemy can't be hit yet, has a path to the character, has no more reach than the character and is further away
+  than its own reach (`player_can_wait_for_melee`, 7796–7805). It stops and moves in when a ranged enemy is in view,
+  and after 10 waits in a row. It holds whatever square it stands on: qw has no corridor logic for a melee character.
+- **Tactical steps.** `choose_tactical_step` (9941–10005, move-tactics.lua:259–323) never runs while raging. Its
+  reasons:
+  - out of fire or a cloud;
+  - away from a ranged enemy, "hiding";
+  - out of sight of sleeping monsters, "stealth";
+  - "outnumbered": two or more adjacent, and the step cuts adjacent plus ranged enemies by two.
+- **Throwing.** `plan_throw` (11189–11201) throws at a threat-3 enemy when that cuts its threat most, otherwise at any
+  target in line of sight when nothing can be hit in melee. qw picks up javelins, boomerangs and large rocks
+  (`want_missile`, 5503–5510).
+- **Fleeing and stairdancing.**
+  - `want_to_flee` (8701–8760, move-flee.lua:55–114) never flees with a melee enemy within two. It flees only along
+    a route no pursuer can catch.
+  - `want_to_stairdance_up` (14688–14741) goes up from the stairs when it wants to flee. It also goes up to fight the
+    adjacent followers alone.
+- **Resting.** `should_rest` and `reason_to_rest` (14311–14376) rest to full HP and through berserk cooldown and
+  slowness, before any exploring or stairs.
+- **Trog's Hand.** `want_to_trogs_hand` (12321–12330) fires at a `hand_monsters` enemy in view (8065–8095), at
+  piety ≥ 2.
+- **Equipment.**
+  - `upgrade_equipment` (13431–13444) and the heavy-armour valuation (`armour_base_value`, 2068–2178).
+  - `SHIELD_CRAZY` makes it always wear a shield.
+  - `use_good_consumables` (13685–13725) reads enchant, brand and acquirement scrolls.
+
+**Ranked differences**, by how many of our D:4–6 deaths each touches (the fatal fight, `deaths2.py`; defaults 67,
+`calm=1` 91, qw 32 for comparison). "Touches" is an upper bound: the difference was present in that death, not
+shown to have caused it.
+
+| rank | difference | count | D:4–6 deaths touched: defaults / `calm=1` (qw) | measured or inferred | our actions can express it? |
+| --- | --- | --- | --- | --- | --- |
+| 1 | raging at full HP at the first threat-2 enemy within two, not at 70% HP | rage in 56% vs 14% of fights; median HP 100% vs 67%; fights begun exhausted 4.2% vs 0.6% | first rage above 70% HP in 54 / 72 (7); begun exhausted 8 / 10 (0) | measured | yes: built as `rage` |
+| 2 | walking up to an enemy instead of waiting for it | walked in 92% vs 37% of fights, waited 2% vs 45% | walked up to a non-ranged enemy in 49 / 61 (11) | measured | yes: built as `hold` |
+| 3 | fighting surrounded instead of stepping out | 2+ adjacent in 25% vs 21% of fights; qw stepped tactically in 34% | 2+ adjacent in 54 / 65 (23); 3+ in 34 / 37 (16) | measured (the step's effect inferred) | no: needs a step to a chosen square |
+| 4 | less armour, no shield, no jewellery, enchant scrolls wasted, no shops | AC −1.0 at D:4 to −3.6 at D:7; SH 1.2–1.9 vs 0.1–0.4; 0 vs 347 rings and amulets, 0 vs 293 enchantments by D:7 | every death (inferred: a lower AC makes every fight costlier) | measured gap, inferred effect | partly: `wear` exists, but jewellery, enchant prompts and buying don't |
+| 5 | no ranged attack | qw threw in 31% of fights, 55% carry missiles by D:6 | a ranged enemy in view in 48 / 74 (23) | measured gap, inferred effect | no: needs `throw` |
+| 6 | no Trog's Hand | 35 qw fights on D:3–7 | a Hand monster in view in 21 / 24 (7) | measured gap, inferred effect | no: needs `trogs_hand` |
+| 7 | fewer trips up the stairs, no stairdance | 634 vs 72 trips up on D:2–8 | stairs up within 8 at the start in 29 / 27 (4); went up in it 6 / 16 | measured | partly: `flee_up` exists; `retreat=3` and `stairs=1` were level |
+| 8 | exploring on before full HP and before the exhaustion ends | 0% vs 7.1% of explores after a fight while recovering | begun exhausted 8 / 10 (0) | measured | yes, and tried: `recover=2`, `calm=1` were level or behind |
+| 9 | the healing potion drunk at half HP, not at a quarter | drunk in 95 vs 27 fights; held at D:6 0.3 vs 1.0 | heal wounds held at the start of 4 / 11 (14) | measured | yes, untested; qw's own heal thresholds were within noise (`docs/qw-teacher.md`) |
+
+**Two opt-in switches** (`src/ladder/brain/policy.py`, `Style`; both off by default; no default changed, no
+`STYLE_ADDED_AS` entry).
+
+- **`--style rage=h`** (`late_rage`). The rules start a rage only with a hostile within two squares and one of:
+  - HP at h × max or under (and always at half, as before);
+  - the hostiles within two have the character's maximum HP or more left between them (`foe_hp` of those alone,
+    which `foe_hp` now accepts);
+  - one of them is threat 3.
+
+  It no longer rages at the first threat-2 monster, or at three small ones, within two.
+- **`--style hold=k`** (`hold_ground`, `BrainTiers.holds`). The rules wait (`s`) instead of walking up when all of
+  these hold:
+  - hostiles are in view;
+  - every one is three or more squares away (`HOLD_FROM`);
+  - none attacks from range or with reach by the monster table;
+  - one is awake, not unaware or fleeing, and able to move.
+
+  It allows up to k waits in a row, then one step toward them, and it may wait again, as qw's `wait_count` does.
+  The rage and the potion still come first.
+- Tests in `tests/test_brain.py`:
+  - `test_rage_and_hold_are_off_by_default_and_off_plays_as_before`
+  - `test_rage_waits_for_hp_to_fall_or_the_fight_up_close_to_be_big`
+  - `test_hold_waits_for_awake_melee_hostiles_to_come`
+  - `test_hold_caps_the_waits_in_a_row_inside_brain_tiers`
+  - `test_rage_and_hold_are_styles_and_old_runs_still_match`
+
+**`hold` was built twice.** The first version waited with nothing *adjacent*, as qw does. On A it lost 1.86 levels.
+Gnolls carry spears and halberds and hit from two squares, and nothing in view says which ones carry a polearm (qw
+reads the monster's actual reach). 68 of that run's deaths had "hits you from afar" in the last messages, against 16
+under the defaults. The second version waits only while every hostile is three or more away (`HOLD_FROM`): 14 such
+deaths. Both are in the table.
+
+**Tuning.**
+
+- **Method.** The same as the last two sections: this tree, no model, epsilon 0, 9 workers asked (7 played; see
+  below), A and C only, 06:46–09:07 (`chain.sh`, `jobs-tune.txt`, `jobs-hold2.txt`).
+- **Reference.** Each arm is paired against `v6e/{A,C}-ref` (the defaults) by dungeon, over games both finished
+  and neither stale nor off its seed. 95% bootstrap over dungeons, 10,000 resamples (`arms.py`). Description only:
+  these blocks are spent.
+- **The planned arms changed after `rage=0.7` came in.** The plan was `rage=0.7`, `hold=10`, the two together and
+  `rage=0.5`. The combination and `rage=0.5` (a still later rage) were replaced by `rage=0.9` (a rage after the first
+  hits). That change was made before any `hold` result was in.
+
+| arm (`--style`) | A: mean depth | C: mean depth | − defaults, A | − defaults, C | **− defaults, A + C** | deeper / same / shallower | died D:1–3 / 4–6 / 7+ (A + C) |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| defaults (`v6e/*-ref`) | 6.99 | 6.27 | | | | | 64 / 121 / 196 |
+| `rage=0.7` | 6.11 | 5.82 | −0.90 [−1.47, −0.38] | −0.46 [−0.99, +0.08] | **−0.68 [−1.07, −0.31]** (398) | 122 / 95 / 181 | 85 / 144 / 152 |
+| `rage=0.9` | 6.12 | 6.17 | −0.86 [−1.47, −0.24] | −0.09 [−0.66, +0.47] | **−0.48 [−0.90, −0.07]** (397) | 146 / 74 / 177 | 93 / 122 / 168 |
+| `hold=10`, waiting at two | 5.13 | 4.70 | −1.86 [−2.41, −1.32] | −1.58 [−2.06, −1.11] | **−1.72 [−2.09, −1.36]** (398) | 87 / 83 / 228 | 141 / 154 / 87 |
+| `hold=10`, from three (`HOLD_FROM`) | 6.58 | 5.89 | −0.39 [−0.94, +0.16] | −0.38 [−0.87, +0.10] | **−0.39 [−0.75, −0.01]** (397) | 135 / 105 / 157 | 73 / 134 / 171 |
+
+- **Dungeons left out of the pairs.**
+  - 540052 hangs in the reference, as in every C reference run. It didn't hang in any of this section's C runs.
+  - Hung here: 500124 (`rage=0.7`, which also ran 500155 to the choice limit), 500010 (`rage=0.9`) and 500039 (the
+    first `hold`).
+  - Three games of 41–150 turns have no morgue within `seeds.py`'s 5-second window, as short games have had before:
+    540091 (`rage=0.9`), 500059 and 540103 (the second `hold`).
+- **Seed checks** (`verify.py`). Every game: no "Welcome back", no protocol without its seed, no first step after
+  turn 1.
+
+**What each one did** (`acts.py`, fights on D:3–7, A then C):
+
+- **`rage=0.7`.**
+  - Rages in 24% and 26% of fights, at a median 68% HP, against 56%.
+  - Fewer fights begun exhausted: 1.9% and 2.5%, against 4.2% and 4.4%.
+  - Arrives higher: XL on D:7 8.2 and 7.9, against 7.5 and 7.5.
+  - But deaths per 100 fights rise (2.51 and 3.03, against 2.40 and 2.53), and deaths on D:1–3 rise from 64 to 85.
+    A low-level character that waits until it is hurt dies before the rage comes.
+- **`rage=0.9`.** It rages in 46–48% of fights, at 86% HP: the same fights, a few hits later. It loses on A (deaths
+  on D:1–3 22 → 45) and is level on C.
+- **`hold`.**
+  - The second version waits in 68% of fights on A, about as often as qw (whose 45% counts its waits differently).
+  - Deaths per 100 fights: 2.85 against 2.40.
+  - XL on arrival is no higher.
+- **Why they lose (inferred).** Each is one part of a style whose other parts our bot lacks. qw can let a fight come
+  to it and go without a rage because it has 1–4 more AC, a shield, a thrown weapon for the approach, a step out of
+  a surround, and Trog's Hand for casters. Its own tuning found that raging *sooner* than its upstream 50% gained +1.0
+  levels (`docs/qw-teacher.md`, `zerk_hp70`). Our rules already rage sooner than qw.
+
+**No fresh test.** The rule was to pre-register a test on 690000–690599 only for a configuration clearly ahead on
+A + C: pooled interval mostly above zero, both blocks positive. Every arm is behind the defaults, all four with the
+pooled interval wholly below zero. So nothing was pre-registered and **seeds 690000–690599 were not played;
+they are still unused.**
+
+**What would need a new action** (a new entry in `features.ACTIONS`, so a change to the model's contract: see
+"Changing the contract"). In the order of the ranking above:
+
+- **`step_out`, a tactical step (rank 3).**
+  - Game command: one move key (`ladder.travel.DIRECTIONS`).
+  - Choice of square: the adjacent floor square, not raging, where the fewest hostiles would be adjacent or have a
+    clear shot, ties to the square nearer the enemy. This is qw's `assess_square`.
+  - State: `state.cells` (walls, monsters and their positions) has all of it.
+  - Fires when two or more are adjacent and a square cuts that by two, or to leave a cloud.
+- **Jewellery, enchantment and shops (rank 4).**
+  - `P` (put on) with a ranking of rings and amulets in `gear.py`. Leave unknown ones and teleportation alone. The
+    menu text gives the item's name.
+  - Answer the enchant, brand or acquirement prompt with the body armour's or weapon's letter, instead of
+    `cancel_prompt` (`perform`). A known enchant scroll then becomes worth reading at a safe moment.
+  - A tower shield and the other missing bases in `gear.ARMOURS`.
+  - Buying would need the shop menu (`state` has no shop stock) and is the largest of these.
+- **`throw` (rank 5).**
+  - Game commands: `Q` then the missile's letter (quiver), then `f`, which fires at the nearest target, confirmed
+    with `f` or `.`.
+  - State: missiles in the inventory (base type missile: javelin, boomerang, large rock), monster positions (there).
+  - Line of fire is the game's to refuse.
+  - The rc's autopickup must take javelins and boomerangs and pick them back up after a fight. qw's autopickup does
+    that while exploring.
+- **`trogs_hand` (rank 6).**
+  - Game command: `a`, then the letter the ability menu gives Trog's Hand (the menu text names it).
+  - State: piety ≥ 2 (`obs["piety"]` is there), and no `Regen` status already on.
+  - Fires on qw's `hand_monsters` names in view.
+  - Brothers in Arms the same way at piety ≥ 4. On D:3–7 qw used it in only 10 fights.
+
+**The two accounts that refuse login** (read-only; no secret was read or printed, and no account was changed).
+
+- **Cause.** The webtiles server hashes passwords with its default `crypt_algorithm = "broken"`:
+  - The setting is in `webtiles/config.py:83` in the container, and `webserver/config.py` doesn't override it.
+  - `userdb.py:317–326` then uses *the password itself* as the DES salt.
+  - DES salt characters must be in `[./0-9A-Za-z]`.
+  - Our passwords come from `secrets.token_urlsafe(24)` (`src/ladder/keychain.py:28`). They can contain `-` and
+    `_`.
+  - When such a character falls in the salt, `crypt()` returns the failure token `*0`, which is stored as the hash.
+    At login `crypt(pw, "*0")` gives something else, so the login fails every time.
+- **Evidence.**
+  - Every v6e/v6f run log (21 runs) and all 8 v6g runs leave both accounts out: "Could not log in or register
+    'ladderbrain7' (and '9'): Failed to login".
+  - The server log of 2026-11-10 shows 7, 8, 9, 10, 11 and 12 all registered within 30 ms, and only 7 and 9 have
+    failed ever since. So the "registered at the same instant" explanation in "What it found on the way" is wrong.
+  - Their rows exist with flags 0, so they are not banned.
+  - A Keychain item exists for all of 1–9 (checked for existence only).
+  - The container's `crypt` was tested with made-up passwords: `-b…`, `a_…` and `ab-…` give `*0`, while `Ab-…` and
+    `ab_…` don't.
+  - About 5% of `token_urlsafe` passwords are bad this way.
+  - The earlier note's "two-character password hash" fits `*0`.
+- **Measured and inferred.** The mechanism and the code paths are measured. That these two passwords begin badly is
+  inferred, since checking it would mean reading the secret.
+- **Fix, for a person to run.**
+  1. Delete the two rows (`delete from dglusers where username in ('ladderbrain7','ladderbrain9')` in
+     `/data/webserver/passwd.db3`) and their Keychain items (`security delete-generic-password -s dcss-ladder -a
+     dcss-account/ladderbrain7`, and the same for 9). The next run re-registers them.
+  2. To stop it recurring, make `get_or_create_dcss_password` generate salt-safe passwords, such as
+     `secrets.token_hex(16)`.
+  3. Optionally, set `crypt_algorithm = "6"` on the server, which affects new registrations only.
+
+**Summary of the section.**
+
+- On the same 200 dungeons qw reaches 2.3 levels deeper. Its death rate per level stays at 6–8% through D:7, while
+  ours climbs to 14–23% from D:5.
+- On arrival qw has more AC, a shield, more healing and teleportation, and somewhat more XL.
+- In a fight it rages late and rarely, waits for the enemy, throws, steps out of surrounds, flees more, and uses
+  Trog's Hand.
+- It meets more uniques than our bot does and kills 90% of them.
+- The two habits our actions can express both lose when taken alone: `rage=0.7` −0.68 [−1.07, −0.31], `rage=0.9`
+  −0.48 [−0.90, −0.07], `hold=10` −0.39 [−0.75, −0.01] (and −1.72 when it waited at two squares). The rest need
+  new actions: a tactical step, putting on jewellery and answering enchant prompts, throwing, and Trog's Hand.
+- **Measured**:
+  - every count and difference above;
+  - that the dungeons are the same (start, first monster, altars, shops, uniques by level);
+  - every tuning game on its seed;
+  - the login mechanism in the server's code and with test passwords;
+  - the tests: `uv run pytest -q` 491 passed, 5 deselected; `uv run ruff check` clean.
+- **Inferred**:
+  - that the D:4–6 deaths "touched" by each difference were caused by it (they are upper bounds);
+  - that qw's lower death rate comes from the combination of kit and fight moves, and not from rage timing or
+    waiting alone (read from the tuning, not tested by adding the missing actions);
+  - that the 7 and 9 passwords begin with a bad salt.
+- **Not done**: any of the new actions; a `hold` that also steps in at two against known polearm users; `rage`
+  restricted to deeper levels.
+- **Runs**: `runs/brain/v6g/{A,C}-{rage70,rage90,hold10,hold10b}`. Seeds spent: none; evaluation seeds replayed: A
+  and C only. The server's disk stayed at 52%.
+- **Scripts** in the job's `brain-v6g/` scratch directory:
+  - new: `load2.py` (qw's state logs and the brain's step logs in one shape), `cmp.py`, `fights2.py`, `rage.py`,
+    `qwrage.py`, `uniq2.py`, `deaths2.py`, `misc.py`, `hand.py`, `acts.py`, `jobs-tune.txt`, `jobs-hold2.txt`;
+  - copies: `arms.py`, `seeds.py`, `verify.py`, `mindex.py`, `chain.sh` (now prints the server's disk after each
+    run) and `refresh.sh`.
+
 ## What carried over from s1-battle, and what couldn't
 
 | s1-battle | here |

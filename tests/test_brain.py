@@ -2339,6 +2339,75 @@ def test_escape_unique_and_calmfor_are_styles_and_old_runs_still_match():
     assert Style.saved(old) == Style()
 
 
+def rage_obs(hp=40, foes=((1, 2, 10),), **over):
+    """A character at `hp` of 40, not raging, with hostiles given as (distance, threat, average HP), all awake."""
+    mons = [{**mon("orc", dx=d, threat=t), "avghp": a, "mdam": 0, "beh": 0} for d, t, a in foes]
+    return obs(**{"god": "Trog", "hp": hp, "hp_max": 40, "n_hostiles": len(mons), "mons": mons,
+                  "inv": {**SCROLL, "heal": 1, "teleport": 0}, **over})
+
+
+def test_rage_and_hold_are_off_by_default_and_off_plays_as_before():
+    assert Style().rage == 0 and Style().hold == 0
+    o = rage_obs()                                       # one threat-2 orc adjacent, full HP: the rules rage at once
+    assert switch_rules(o) == switch_rules(o, rage=0, hold=False) == "berserk"
+    far = rage_obs(foes=((4, 1, 10),))
+    assert switch_rules(far) == switch_rules(far, rage=0, hold=False) == "fight"
+
+
+def test_rage_waits_for_hp_to_fall_or_the_fight_up_close_to_be_big():
+    assert switch_rules(rage_obs(), rage=0.7) == "fight"                         # threat 2, full HP: no rage yet
+    assert switch_rules(rage_obs(hp=28), rage=0.7) == "berserk"                  # 28 = 0.7 x 40
+    assert switch_rules(rage_obs(hp=29), rage=0.7) == "fight"
+    assert switch_rules(rage_obs(hp=20), rage=0.3) == "berserk"                  # half HP, as the rules always had it
+    assert switch_rules(rage_obs(foes=((2, 3, 10),)), rage=0.7) == "berserk"     # threat 3 within two
+    assert switch_rules(rage_obs(foes=((1, 1, 25), (2, 1, 20))), rage=0.7) == "berserk"   # 45 HP within two >= 40
+    assert switch_rules(rage_obs(foes=((1, 1, 10), (2, 1, 10), (2, 1, 10))), rage=0.7) == "fight"   # three small
+    # only what is within two counts, and nothing within two means no rage at any HP
+    assert switch_rules(rage_obs(foes=((1, 1, 10), (5, 1, 40))), rage=0.7) == "fight"
+    assert switch_rules(rage_obs(hp=10, foes=((4, 1, 10),)), rage=0.7) == "quaff_heal"
+    assert policy.late_rage(rage_obs(hp=28), [], 0.7)                            # the HP test itself needs no one near
+
+
+def test_hold_waits_for_awake_melee_hostiles_to_come():
+    o = rage_obs(foes=((3, 1, 10),))
+    assert policy.hold_ground(o)
+    assert switch_rules(o, hold=True) == "wait" and switch_rules(o) == "fight"
+    assert not policy.hold_ground(rage_obs(foes=((1, 1, 10), (3, 1, 10))))      # something adjacent: fight it
+    assert not policy.hold_ground(rage_obs(foes=((2, 1, 10),)))                 # at two a polearm reaches: go in
+    assert switch_rules(rage_obs(foes=((1, 1, 10),)), hold=True) == "fight"      # `wait` isn't possible then
+    asleep = rage_obs(foes=((3, 1, 10),))
+    asleep["mons"][0]["beh"] = 1
+    assert not policy.hold_ground(asleep)                                        # it won't come
+    archer = rage_obs(foes=((3, 1, 10),))
+    archer["mons"].append({**mon("centaur", dx=5), "avghp": 22, "mdam": 0, "beh": 0})
+    archer["n_hostiles"] = 2
+    assert not policy.hold_ground(archer)                                        # shot at while waiting: go in
+    # the rage and the potion still come first
+    assert switch_rules(rage_obs(hp=15, foes=((2, 1, 10),)), hold=True, rage=0.7) == "berserk"
+
+
+def test_hold_caps_the_waits_in_a_row_inside_brain_tiers():
+    seen = {}
+    for k in (0, 2):
+        state = make_state(["#########", "#@......#", "#.......#", "#########"], hp=40, hp_max=40, depth=5, god="Trog")
+        add_monster(state, (5, 1), 5, "orc")
+        tiers = BrainTiers(style=Style(hold=k), rng=random.Random(0))
+        seen[k] = []
+        for _ in range(4):
+            tiers.next_action(state)
+            seen[k].append(tiers.choice)
+    assert seen[0] == ["fight"] * 4
+    assert seen[2] == ["wait", "wait", "fight", "wait"]          # k waits, a step toward it, then waiting again
+
+
+def test_rage_and_hold_are_styles_and_old_runs_still_match():
+    import argparse
+    from ladder.brain.cli import _style
+    assert _style(argparse.Namespace(style=["rage=0.7", "hold=10"])) == Style(rage=0.7, hold=10)
+    old = {k: v for k, v in Style().to_dict().items() if k not in ("rage", "hold")}
+    assert Style.saved(old) == Style()
+
+
 def test_evaluate_reuses_a_saved_run_only_when_its_style_matches(tmp_path, monkeypatch):
     import argparse
     from ladder.brain import cli

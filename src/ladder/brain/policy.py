@@ -89,6 +89,14 @@ class Style:
                               # level once it has worked (`unique_rule`); 0 = off. Off by default.
     calmfor: float = 0.0      # T > 0 = `calm` holds only for the first T turns of each visit to a level; after that a
                               # rage ends the exploring there as it does without `calm`; 0 = no limit. Off by default.
+    rage: float = 0.0         # h > 0 = start a rage later, as qw does (`late_rage`): with a hostile within two squares,
+                              # only at h times the maximum HP or under, or when the hostiles within two have the
+                              # character's maximum HP or more left between them, or one of them is threat 3; not at
+                              # the first threat-2 monster or three small ones within two. 0 = off. Off by default.
+    hold: float = 0.0         # k > 0 = with hostiles in view and none within two squares, none known to attack from range or with
+                              # reach, and one of them awake and coming (`hold_ground`): wait for them, up to k waits
+                              # in a row, as qw's `plan_melee_wait_for_enemy` does, instead of walking to them.
+                              # 0 = off. Off by default.
 
     def weights(self) -> np.ndarray:
         return np.asarray([getattr(self, c) for c in COMPONENTS], dtype=np.float32)
@@ -193,11 +201,11 @@ STAIRS_NEAR = 8           # steps to the stairs up that `Style.stairs` walks bef
                           # 2 walks after a rage
 
 
-def foe_hp(obs: dict) -> float:
-    """The HP the hostiles in view have left between them, estimated: each one's average HP (the game's
-    `avghp`, else the monster table's) times the share its damage level leaves (`features.MDAM_LEFT`)."""
+def foe_hp(obs: dict, mons: list[dict] | None = None) -> float:
+    """The HP the hostiles in view (or just `mons`) have left between them, estimated: each one's average HP (the
+    game's `avghp`, else the monster table's) times the share its damage level leaves (`features.MDAM_LEFT`)."""
     total = 0.0
-    for m in obs["mons"]:
+    for m in obs["mons"] if mons is None else mons:
         avg = m.get("avghp")
         if not avg:
             k = monsters.lookup(m["name"])
@@ -348,10 +356,51 @@ def unique_rule(obs: dict, on: float) -> bool:
     return dangerous_unique(obs)
 
 
+def late_rage(obs: dict, near: list[dict], h: float) -> bool:
+    """`Style.rage`: whether to start a rage now, the hostiles within two squares being `near` (not empty).
+
+    qw's rule as this project's qw plays it (`want_to_berserk` with the tuned `zerk_hp70`, runs/qw/combo1-lua/
+    MiBe_mace.lua): at 70% HP or under with an enemy within two that can reach it, or when the threat within two is
+    high. Here: HP at h times the maximum or under (and always at half, as the rules have it); or the hostiles within
+    two have the character's maximum HP or more left between them (`foe_hp` of those alone: on block A qw raged at
+    11-18% of its choices above 70% HP in that state, against 0.2-1% otherwise); or one of them is threat 3
+    (qw's "scary" enemy). On block A's levels D:3-7 qw raged in 14% of its fights, at a median 67% HP, the rules in
+    56%, at a median 100% HP, and 4.2% of the rules' fights began exhausted (qw: 0.6%)."""
+    frac = obs["hp"] / max(obs["hp_max"], 1)
+    return frac <= max(h, 0.5) or any(m["threat"] >= 3 for m in near) or \
+        foe_hp(obs, near) >= max(obs["hp_max"], 1)
+
+
+AWAKE = 0                 # `beh` of a monster that is awake and neither unaware, fleeing nor helpless (features.BEHAVIOUR)
+HOLD_FROM = 3             # `hold_ground` waits only while every hostile is this many squares away or more: a monster
+                          # with a polearm hits from two, and nothing in view says which ones carry one (the first
+                          # `hold=10` on block A, waiting at two, had 68 deaths with "hits you from afar" in the last
+                          # messages against the defaults' 16)
+
+
+def hold_ground(obs: dict) -> bool:
+    """`Style.hold`: whether waiting would let the hostiles in view come to the character, as qw's
+    `plan_melee_wait_for_enemy` waits for an enemy that can reach it but not yet hit it (`player_can_wait_for_melee`).
+
+    Hostiles in view, none within HOLD_FROM - 1 squares; none that the monster table (`monsters.lookup`) says attacks from range or with
+    reach (qw moves in on a ranged enemy rather than be shot while waiting); and at least one awake (`beh` AWAKE: not
+    asleep, unaware, fleeing or helpless) and able to move (table speed above 0), since nothing else will come.
+    `BrainTiers` caps the waits in a row."""
+    if not obs["n_hostiles"] or any(max(abs(m["dx"]), abs(m["dy"])) < HOLD_FROM for m in obs["mons"]):
+        return False
+    coming = False
+    for m in obs["mons"]:
+        k = monsters.lookup(m["name"])
+        if k and ({"ranged", "reach"} & set(k["kinds"])):
+            return False
+        coming = coming or (m.get("beh", AWAKE) == AWAKE and (k is None or k["speed"] > 0))
+    return coming
+
+
 def baseline(obs: dict, avail: list[str], level_explored: bool, wiki: bool = False, teleport: int = 0,
              recover: int = 0, calm: bool = False, retreat: bool = False, rest_out: bool = False,
              to_stairs: bool = False, assailed: str | None = None, avoid: float = 0.0, escape: float = 0.0,
-             unique: float = 0.0) -> str:
+             unique: float = 0.0, rage: float = 0.0, hold: bool = False) -> str:
     """Rules of thumb: the stub's behaviour, plus drinking a healing potion instead of giving up.
 
     `wiki` plays the variant that follows the DCSS wiki's strategy guides instead (`Style.wiki`).
@@ -371,6 +420,9 @@ def baseline(obs: dict, avail: list[str], level_explored: bool, wiki: bool = Fal
     `escape_rule` does, `unique` (`Style.unique`) when `unique_rule` does; with `unique`, while that teleport is coming
     and the unique is still in view and not adjacent, the rules keep away (toward the stairs up, else wait) instead of
     raging.
+    `rage` (`Style.rage`) starts a rage only when `late_rage` holds, not at the first threat-2 monster within two.
+    `hold` (`BrainTiers` from `Style.hold` and `hold_ground`) waits for the hostiles in view to come instead of
+    walking to them.
     """
     if wiki:
         return baseline_wiki(obs, avail, level_explored)
@@ -378,7 +430,10 @@ def baseline(obs: dict, avail: list[str], level_explored: bool, wiki: bool = Fal
     cure = ["quaff_heal"] if needs_cure(obs) else []      # serious poison: curing first, before any rage
     if obs["n_hostiles"]:
         near = [m for m in obs["mons"] if max(abs(m["dx"]), abs(m["dy"])) <= 2]
-        rage = frac <= 0.5 or any(m["threat"] >= 2 for m in near) or len(near) >= 3
+        if rage > 0:
+            go = bool(near) and late_rage(obs, near, rage)
+        else:
+            go = frac <= 0.5 or any(m["threat"] >= 2 for m in near) or len(near) >= 3
         now, crowded = teleport_rule(obs, teleport)
         if retreat:
             away = (["quaff_heal"] if frac <= 0.5 else []) + ["flee_up"]
@@ -388,9 +443,9 @@ def baseline(obs: dict, avail: list[str], level_explored: bool, wiki: bool = Fal
         if unique and "Tele" in (obs.get("status") or []) and dangerous_unique(obs):
             # the scroll is working: keep the unique at a distance until it does (a healing potion first at half HP)
             away = away + (["quaff_heal"] if frac <= 0.5 else []) + ["flee_up", "wait"]
-        order = cure + away + (["read_teleport"] if now else []) + (["berserk"] if rage and near else []) + \
+        order = cure + away + (["read_teleport"] if now else []) + (["berserk"] if go and near else []) + \
                 (["quaff_heal"] if frac <= 0.5 else []) + (["read_teleport"] if crowded else []) + \
-                ["fight", "descend", "flee_up", "wait"]
+                (["wait"] if hold else []) + ["fight", "descend", "flee_up", "wait"]
     else:
         onward = ["descend"] if level_explored else ["explore"]
         if rest_out and recovering(obs):
@@ -476,6 +531,7 @@ class BrainTiers(StubTiers):
         self.unseen_hits = 0                   # falls in HP in a row with nothing in view (Style.unseen)
         self.prev_status: list[str] = []       # the status line at the choice before
         self.calm_now = bool(self.style.calm)  # Style.calm holds at this choice (Style.calmfor can end it on a level)
+        self.holds = 0                         # waits in a row for the hostiles to come (Style.hold)
 
     # --- choosing ------------------------------------------------------
 
@@ -519,10 +575,13 @@ class BrainTiers(StubTiers):
             raise Escalation(f"{self.level_steps} choices on this level without leaving it")
         if not avail:
             raise Escalation("nothing the brain can do here" + (f" (tried: {', '.join(sorted(blocked))})" if blocked else ""))
+        # Style.hold: up to k waits in a row for the hostiles to come; any other choice starts the count again, so
+        # after k waits the rules take one step toward them and may wait again, as qw's wait_count does
+        hold = bool(self.style.hold) and self.holds < self.style.hold and hold_ground(obs)
         base = baseline(obs, avail, self.level_explored, wiki=bool(self.style.wiki), teleport=int(self.style.teleport),
                         recover=int(self.style.recover), calm=self.calm_now, retreat=retreat,
                         rest_out=rest_out, to_stairs=to_stairs, assailed=assailed, avoid=self.style.avoid,
-                        escape=self.style.escape, unique=self.style.unique)
+                        escape=self.style.escape, unique=self.style.unique, rage=self.style.rage, hold=hold)
         choice, source, extra = base, "baseline", {}
         if self.fork_turn is not None and self.horizon and state.turn > self.fork_turn + self.horizon:
             raise Escalation(FORK_DONE)
@@ -546,6 +605,7 @@ class BrainTiers(StubTiers):
             source = "net"
         self.last = {"obs": obs, "avail": avail, "baseline": base, "action": choice, "source": source, **extra}
         self.choice = self.last_action = choice
+        self.holds = self.holds + 1 if hold and choice == "wait" else 0
         if choice == "read_teleport" and unique_rule(obs, self.style.unique):
             self.level_explored = True          # Style.unique: once away from it, leave rather than explore back into it
         self.choices += 1
