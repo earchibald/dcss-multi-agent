@@ -7,6 +7,18 @@ runs in numpy in well under a millisecond. It is the same idea as the trained br
 
 ## Where it stands
 
+**2026-11-15, night: stepping out of fire and away from what can't be seen passes a pre-registered fresh test.** A
+re-diagnosis of the current rules found that a game in seven (13%) ends within 30 turns of the character being hurt by
+something not in view, and the rules waiting in it: burning from a bombardier beetle's spray (DCSS refuses rest and
+explore while on fire, and every step shakes some of it off) or hit by an invisible orc wizard or unseen horror (with
+nothing in view, the scroll and the stairs were not even possible). `--style unseen=2` walks toward the stairs while
+burning, and when HP falls at two choices running with nothing in view, reads teleportation or goes up the stairs. It
+is **+0.17 [+0.04, +0.31]** deeper than the default rules on 598 fresh dungeons (seeds 680000–680599; +0.24 [+0.07,
++0.41] on the tuning blocks). It is off by default; making it a default is the orchestrator's call (as a default it would need
+`STYLE_ADDED_AS["unseen"] = 0`, so saved runs keep reading as played without it). Paired forks on training seeds,
+switch on against off from the first moment it acts, show the fire part paying (+0.75 [+0.08, +1.46]) and leave the
+unseen-hit part unproven on its own (−0.04 [−0.48, +0.37]). Section "Hurt by what it can't see", below.
+
 **2026-11-15, evening: the model's teleport habit, written as a one-threshold rule, passes a pre-registered fresh test
 and plays as well as the model.** `--style teleport=3` (read teleportation when exhausted after a rage and the
 hostiles in view have at least 1.5 times the character's current HP left between them) is **+0.24 [+0.16, +0.34]**
@@ -1842,6 +1854,265 @@ pairs). Outcome: deepest floor of the read fork − the fight fork; 95% bootstra
   `verify.py`, `refresh.sh`, `mindex.py`, `offline.py`, `overrides.py`. Seeds spent: evaluation 670000–670599 (task 4);
   training 130000–130599; evaluation seeds replayed: A and C only.
 
+#### Hurt by what it can't see: burning and invisible attackers (2026-11-15, night)
+
+**Task 1: where the current rules lose games.** Source: the 999 finished games of the rules with `teleport=3` (today's
+defaults: `recover=1 retreat=2 teleport=3`) on A, C and the fresh 670000–670599 (`runs/brain/v6c/{A,C}-rules-t3`,
+`P{1,2,3}-t3`; none stale or off its seed, 1 hung left out), each death's morgue matched by seed and turn count (954
+of 954). Cause table as in "Where the rules of thumb lose games" (one cause per game, first that applies; the bound is
+the same back-of-envelope ceiling). Scripts `gather.py`, `causes.py`, `diag.py` in the job's `brain-v6d/`.
+
+| cause | games | share | D:1–3 / 4–6 / 7+ | mean depth | arrived below qw's median XL | known teleport held at death | healing potion held at death | bound if avoided |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| raged in the last fight, the rage ran out before the fight did | 320 | 32.0% | 56 / 106 / 158 | 6.47 | 222 | 65 | 10 | +1.00 |
+| walked into the last fight already spent | 203 | 20.3% | 35 / 83 / 85 | 6.16 | 125 | 49 | 7 | +0.65 |
+| died still raging | 174 | 17.4% | 56 / 52 / 66 | 6.03 | 112 | 53 | 59 | +0.58 |
+| took the stairs raging or spent, died within 50 turns | 106 | 10.6% | 9 / 48 / 49 | 6.71 | 70 | 16 | 2 | +0.32 |
+| killed in melee, never raged | 84 | 8.4% | 17 / 26 / 41 | 7.01 | 60 | 26 | 3 | +0.25 |
+| poisoned; from range or a spell; autofight refused | 32; 23; 12 | 6.7% | | | | | | +0.22 |
+| *not a death*: nothing possible; 1,500 choices on one level | 33; 12 | 4.5% | | | | | | +0.18 |
+
+Against the night of 2026-11-14 (plain rules): taking the stairs spent fell from 25% to 11% of games (`recover`), and
+the rage running out is now the largest cause (29% → 32%). New at the top of the killers: **unseen horror** (21 of
+the 84 "never raged" deaths) and **bombardier beetle** (39 deaths, 26 of them "walked in spent").
+
+The state in the last fight ("the last fight" is the run of choices on the death level since nothing was last in view;
+HP as a share of the maximum):
+
+| cause | fresh / raging / spent at its start | HP at its start (median) | hostiles at most (median) | foes' HP ≥ own max at its start | killer in view at some point | stairs up within 8 at its start | at death, held and known: healing / teleport / unknown scroll |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| all deaths (954) | 58% / 7% / 35% | 100% | 4 | 16% | 82% | 37% | 11% / 24% / 11% |
+| rage ran out first | 97% / 0% / 3% | 100% | 6 | 21% | 98% | 32% | 5% / 20% / 10% |
+| walked in spent | 0 / 0 / 100% | 55% | 1 | 2% | **61%** | 39% | 4% / 24% / 10% |
+| died raging | 90% / 2% / 9% | 100% | 6 | 28% | 98% | 37% | **34%** / 30% / 13% |
+| took the stairs spent | 2% / 1% / 97% | 32% | 3 | 24% | 78% | 55% | 3% / 15% / 12% |
+| never raged | 51% / 48% / 1% | 81% | 1 | 4% | **54%** | 30% | 6% / 31% / 11% |
+
+- **What the rules chose in the last 30 choices** (all deaths): fight 56%, descend 11%, wait 9%, explore 9%, rest 7%,
+  flee_up 3%, berserk 3%, quaff_heal 1%, read_teleport 1%. In the deaths walked into spent, wait was 14% and rest 11%;
+  in the never-raged ones wait 21% and explore 19%.
+- **No unknown potion was held at any death** (the rules drink them out of combat); an unknown scroll at 11%. A known
+  healing potion was held at 11% of deaths, and in 107 deaths (11%) the character was raging at or under half HP with
+  one in the pack, which a rage forbids drinking. But rages begun at or under half HP with a potion held are few (67 of
+  15,105 rages; 21% followed by death within 50 turns), so drinking before the rage would touch little.
+- **When the rage ran out mid-fight** (361 deaths): HP 51% median, 2 hostiles left, their HP left 1.43× the
+  character's (just under `teleport=3`'s 1.5); a teleport scroll held in 29%, a healing potion in 32%, stairs up within
+  8 in 27%.
+- **Rages begun against more than the character has**: foes' HP left ≥ 1.5× its maximum at the rage, 790 rages, 29%
+  followed by death within 50 turns (all rages: 6%); with a teleport scroll held, 341 and 23%.
+
+**The new finding: a death in seven follows damage from something not in view, and the rules wait in it.** In 147 of
+the 954 deaths (poison aside) the killer was never among the hostiles the brain saw in the last fight
+(`active_hostiles`), and in 133 games (13.3%) the
+character died within 30 turns of HP falling at two or more choices running with nothing in view (not poisoned, not
+the HP a rage's end takes). The game's messages say what it is (protocol logs):
+
+| hurt with nothing in view, then dead within 30 turns | games | share | mean depth | what the rules chose from the first hit (nothing in view) | killers |
+| --- | --- | --- | --- | --- | --- |
+| burning (`Fire`: DCSS's sticky flame) | 34 | 3.4% | 4.32 | wait 79%, descend 13%, explore 4% | bombardier beetle 26 |
+| something invisible, or out of reach | 99 | 9.9% | 6.76 | wait 55%, explore 18%, descend 14%, rest 12% | orc wizard 32, unseen horror 24, Sigmund 16, vampire 7 |
+
+- **Burning.** A bombardier beetle's spray sets the character on fire (`Fire`, "The liquid fire burns you!"). While it
+  burns DCSS refuses rest and explore ("You are on fire!", `i_feel_safe`), so after two refusals both are set aside and
+  `wait` is all that is left: it stands in the fire until it dies. Every step taken shakes six turns of the fire off
+  (`shake_off_sticky_flame`); qw's movement planner steps to put it out ("sticky fire").
+- **Invisible.** "Something hits you", "You hear some strange, mumbled words. A magic dart appears from out of thin
+  air!": orc wizards turn invisible, unseen horrors always are, and a Minotaur can't see invisible. With nothing in view
+  `read_teleport` and `flee_up` are not possible at all, rest and explore are refused, and the rules wait: in game
+  500177 it waited out its death on D:3 one step from the stairs up, holding two scrolls of teleportation. qw attacks
+  the square it was hit from (`plan_flail_at_invis`).
+- Over whole games (not only deaths), spells of HP falling at two or more choices with nothing in view: 764 not
+  burning (318 games, 23% followed by death within 30 turns) and 124 burning (107 games, 29%); with a single fall, 3%.
+
+**Against qw** (its five base runs, 988 games, other dungeons; `qwcmp.py`). XL on first arrival is still a level under
+qw's from D:5, and the rules' chance of dying on a level climbs from 13% on D:4 to 40% on D:9 where qw's stays at 6–10%:
+
+| depth | rules: arriving | XL | died there | qw: arriving | XL | died there |
+| --- | --- | --- | --- | --- | --- | --- |
+| D:3 | 872 | 3.3 | 11% | 860 | 3.6 | 10% |
+| D:4 | 776 | 4.5 | 13% | 776 | 4.9 | 8% |
+| D:5 | 659 | 5.7 | 16% | 705 | 6.4 | 8% |
+| D:6 | 548 | 6.7 | 25% | 648 | 7.6 | 6% |
+| D:7 | 418 | 7.4 | 23% | 606 | 8.5 | 9% |
+| D:8 | 322 | 8.1 | 31% | 556 | 9.1 | 10% |
+| D:9 | 221 | 8.7 | 40% | 446 | 10.2 | 8% |
+
+Killed by, per 1,000 games (rules, qw): unseen horror 25, 1; bombardier beetle 39, 5; orc wizard 78, 31; killer bee
+43, 13; wight 33, 7; gnoll 93, 91; ogre 41, 26. The three the rules can't see or put out are 142 against 37 per 1,000:
+about a tenth of all games.
+
+**The largest remaining mechanisms, by share of games, each with a candidate change:**
+
+| | mechanism | share of games | candidate rule change |
+| --- | --- | --- | --- |
+| 1 | a rage runs out with the fight still on | 32% | read teleportation at a lower `foe_hp` ratio than 1.5 (the forks put a read at +0.18 [−0.17, +0.55] where `teleport=3` doesn't read: unproven); none of the earlier levers is left untried |
+| 2 | died raging, against more than one rage can finish | 17% | read teleportation instead of raging when the foes' HP left is at least 1.5× the character's maximum and a scroll is held (341 such rages, 23% followed by death); needs forks first |
+| 3 | hurt by something not in view and waiting in it: invisible attackers and sticky flame | 13% (of deaths within 30 turns), more of the "walked in spent" and "never raged" rows | **`unseen`**: when burning with nothing in view, walk toward the stairs; when HP keeps falling with nothing in view, read teleportation, else go up the stairs (implemented below) |
+| 4 | walked into the last fight spent (overlaps 3: 69 of its 203) | 20% | rest out the exhaustion before exploring on (`recover=2`, level before; untested with today's rules) |
+| 5 | raging at under half HP with a healing potion that the rage forbids | 11% of deaths | drink before raging at under half HP: touches only 67 rages in 999 games, not worth a test |
+
+Chosen for task 2: mechanism 3. It is the one where the rules do something plainly wrong (waiting while burning or
+being hit), the change is two lines in `available` and `baseline` and a counter, and it touches only the moments it is
+for.
+
+**Task 2: `--style unseen=1|2`** (`src/ladder/brain/policy.py`: `Style.unseen`, `BrainTiers.assailed`, `BURNING`,
+`UNSEEN`, `UNSEEN_HITS = 2`, and the `assailed` arguments of `available` and `baseline`; tests in
+`tests/test_brain.py`, block "the opt-in rule for being hurt with nothing in view"). Off by default; no default
+changed.
+
+- `assailed` is worked out at every choice. With a hostile in view it is nothing (and the count below starts again).
+  With nothing in view: BURNING when `Fire` shows (level 1 and up); UNSEEN (level 2) when the HP fraction has fallen at
+  2 choices running (a choice where it stayed put doesn't break the run, one where it rose does, and so does a new
+  level or a choice while burning), not counting a fall while poisoned or at the choice a rage ended.
+- What it changes: with nothing in view, `flee_up` becomes possible (a step toward the stairs up, or up them; never
+  out of the dungeon from D:1), and when UNSEEN, `read_teleport` too (not while `Tele` shows). The rules then choose,
+  before anything else but a cure: BURNING, `flee_up`, else `descend` (toward the stairs down); UNSEEN,
+  `read_teleport`, else `flee_up`. Otherwise as before.
+- Checked in the games: with the switch on, "You shake off some of the fire as you move" and "You shake off the liquid
+  fire" appear 205 times in block A's protocols against 158 without; 118 of the 119 block-A games where the switch never
+  acted are the same game as without it (134 of 136 on C).
+- One fix made during tuning: in the first round (`A-u2`, `C-u2`) the fire's own damage counted toward UNSEEN, so a
+  character whose fire had just gone out walked on to the stairs. Now a choice while burning ends the run. The rerun
+  (`A-u2b`, `C-u2b`, this tree) is −0.01 [−0.10, +0.09] against the first round: the same.
+
+**Task 3: tuning on A (500000–500199) and C (540000–540199)**, against the default rules with `teleport=3`
+(`runs/brain/v6c/{A,C}-rules-t3`; a replay of block A with this tree and the switch off, `runs/brain/v6d/A-rules`, is
++0.01 [+0.00, +0.01] against it, 199 of 200 the same). Paired by dungeon over games both finished and neither stale nor
+off their seed (`arms.py`); 95% bootstrap, 10,000 resamples. Description only: these blocks are spent.
+
+| arm | A: mean depth | C: mean depth | XL (A, C) | − rules, A | − rules, C | **− rules, A + C** | deeper / same / shallower |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| rules (`teleport=3`, the defaults) | 6.63 | 6.17 | 7.08, 6.57 | | | | |
+| `unseen=1` (burning only) | 6.87 | 6.24 | 7.25, 6.66 | +0.23 [+0.06, +0.43] | +0.07 [−0.08, +0.22] | +0.15 [+0.04, +0.28] | 39 / 343 / 17 |
+| `unseen=2`, first round | 7.02 | 6.26 | 7.37, 6.71 | +0.39 [+0.11, +0.68] | +0.09 [−0.14, +0.32] | +0.24 [+0.06, +0.42] | 71 / 291 / 37 |
+| **`unseen=2`** (with the fix) | **7.00** | **6.27** | 7.37, 6.73 | +0.36 [+0.10, +0.64] | +0.11 [−0.12, +0.33] | **+0.24 [+0.07, +0.41]** | 71 / 295 / 33 |
+
+| comparison, A + C | difference | 95% interval | deeper / same / shallower |
+| --- | --- | --- | --- |
+| `unseen=2` − `unseen=1` | +0.08 | [−0.05, +0.22] | 40 / 339 / 20 |
+| `unseen=2` − its first round | −0.01 | [−0.10, +0.09] | 15 / 370 / 14 |
+
+- **Where it acts** (`unseen=2`, A + C): in 144 of 399 games; 180 steps out of fire, 348 walks toward the stairs with
+  something unseen hitting, 63 teleport reads. Split by game (`uattrib.py`): games where it only stepped out of fire,
+  47, +0.91 each; games where it acted on unseen hits, 97, +0.56 each (46 deeper, 28 same, 23 shallower); the 255 where
+  it never acted, −0.01 each.
+- **Deaths** (A + C; the cause table's rules; `unseen2.py` counts deaths within 30 turns of HP falling twice with
+  nothing in view): burning 14 → 4 with either level; something unseen 40 → 41 with `unseen=1` and 27 with `unseen=2`
+  (its first round; the counts in this bullet and the protocol count above are from that round).
+  Deaths walked into spent 84 → 70, never raged 34 → 24; the rage running out rises 131 → 145, as saved characters
+  meet their next fight.
+- Burning alone is worth about two thirds of the gain and is the surer part (its interval is narrower); the unseen
+  part adds +0.08, not separable from zero on 399 dungeons.
+
+**Pre-registered (written at 20:55, after the tuning runs on A and C and before any game on seeds 680000–680599).**
+Configuration: this working tree's code, the rules of thumb (default style: `recover=1 retreat=2 teleport=3`) with
+`--style unseen=2`, no model, no random choices. Baseline: the same code with no model and the default style (the rules
+alone; `unseen` 0). Dungeons: seeds 680000–680599 (600, never used before: no morgue, step log or results file has
+them), played as three blocks of 200 (680000, 680200, 680400), each block by both arms one run after the other, the arm
+that goes first alternating by block (configuration first on 680000 and 680400, baseline first on 680200); 12 workers
+asked, the accounts that log in play (those that fail are not repaired). Analysis: paired by dungeon over games both
+finished (not hung, crashed or an error) and neither stale nor off its seed (stale: its first step is after turn 1; off
+its seed: no morgue on that custom seed with the game's turn count); 95% bootstrap over dungeons, 10,000 resamples
+(`brain-v6d/arms.py`); analysed once, after all 1,200 games are played, with no early stopping. **Pass: the
+interval's lower end is above zero.** Reported alongside, outside the pass rule: each block's difference, mean depth,
+XL, deaths by depth band, what the switch did, and the burning and unseen deaths. Chosen because it is the furthest
+ahead of the rules on A + C (+0.24 [+0.07, +0.41]); `unseen=1` (+0.15) is not tested. Style defaults are not changed
+whatever the result.
+
+**Task 4: result on 680000–680599: passes.** Rules + `unseen=2` is **+0.17 [+0.04, +0.31]** deeper than the rules
+alone, on 598 of 600 dungeons (two dungeons left out for a hung game, none stale or off its seed). Analysed once, after
+all 1,200 games (20:56–21:58). Every game's seed checked three ways (`verify.py`: protocol greeting, first step,
+morgue).
+
+| fresh blocks | arm (order played) | finished (hung) | mean depth | XL | turns | died on D:1–3 / 4–6 / 7+ |
+| --- | --- | --- | --- | --- | --- | --- |
+| Q1 (680000–) | rules + `unseen=2` (1st) | 200 (0) | 6.26 | 6.77 | 3456 | 39 / 64 / 84 |
+| | rules alone (2nd) | 200 (0) | 6.06 | 6.63 | 3246 | 40 / 73 / 75 |
+| Q2 (680200–) | rules alone (1st) | 199 (1) | 6.22 | 6.72 | 3269 | 33 / 66 / 88 |
+| | rules + `unseen=2` (2nd) | 199 (1) | 6.38 | 6.92 | 3528 | 33 / 67 / 91 |
+| Q3 (680400–) | rules + `unseen=2` (1st) | 200 (0) | 6.18 | 6.83 | 3424 | 34 / 66 / 92 |
+| | rules alone (2nd) | 199 (1) | 6.01 | 6.69 | 3315 | 37 / 68 / 85 |
+
+| rules + `unseen=2` − rules alone | dungeons | difference | 95% interval | deeper / same / shallower |
+| --- | --- | --- | --- | --- |
+| Q1 | 200 | +0.20 | [−0.01, +0.41] | 31 / 151 / 18 |
+| Q2 | 199 | +0.16 | [−0.07, +0.39] | 23 / 157 / 19 |
+| Q3 | 199 | +0.16 | [−0.11, +0.44] | 24 / 152 / 23 |
+| **Q1–Q3 (the pre-registered test)** | 598 | **+0.17** | **[+0.04, +0.31]** | 78 / 460 / 60 |
+
+- **Passes the pre-registered rule**: the lower end is +0.04. No block clears zero on its own; all three are ahead by
+  about the same amount, whichever arm played first.
+- **What the switch did** (`uattrib.py`): it acted in 223 of 599 games: 219 steps out of fire, 783 walks toward the
+  stairs with something unseen hitting, 97 teleport reads. 372 of the 376 games where it never acted are the same game
+  as without it.
+- **Where the gain is, by game:** games where it acted on unseen hits, 170, +0.67 each (62 deeper / 66 same / 42
+  shallower), all of the difference and more; games where it only stepped out of fire, 52, −0.29 each (14 / 20 / 18).
+  On the tuning blocks the split was the other way round (fire +0.91, unseen +0.56 a game). A game-level split after a
+  game has parted is noisy (one death more or less moves it), so neither part is shown on its own; the pass is for the
+  two together.
+- **Deaths** (cause table's rules, `unseen2.py`): deaths within 30 turns of HP falling twice with nothing in view,
+  burning 18 → 6, something unseen 59 → 44 (of 598 and 599 games); deaths in the last 10 choices while burning 27 → 15.
+  By cause: walked into the last fight spent 114 → 107, never raged 34 → 29; the rage running out 213 → 223 and died
+  raging 93 → 100, as the saved characters meet their next fight.
+
+**Task 5: forks with the switch on and off from the first moment it acts** (`forks.plan(kind="unseen")`, `ladder brain
+forks --kind unseen`; a fork job may now carry style keys of its own, `"style"` in `selfplay._play`; test
+`test_plan_unseen_forks_the_first_moment_on_and_off`). Source: 599 games of rules + `unseen=2` on new training seeds
+140000–140599 (`runs/brain/v6d/src-{0,1,2}`, 1 hung; mean depth 6.23–6.29). Moment: in each game, the first choice with
+nothing in view and either burning or the switch's walk or read; up to there the game is the plain rules' game. Each
+was forked "on" (the recorded action, played on with `unseen=2`) and "off" (the choices before it replayed, then played
+on by the rules with `unseen=0`), both to the end: 218 moments, 436 forks (`runs/brain/v6d/forks/un-rules`; 22:29–23:00).
+35 forks hung, 17 "on" and 18 "off", far more than whole games do (cause not looked into); 1 left the recorded game; 198
+pairs remain. Outcome: deepest floor, on − off; 95% bootstrap over moments (one per game), 10,000 resamples (`ufork.py`).
+
+| moments | pairs | depth: on − off | 95% interval | deeper / same / shallower | died within 30 turns: on − off |
+| --- | --- | --- | --- | --- | --- |
+| all | 198 | +0.29 | [−0.10, +0.68] | 73 / 75 / 50 | −9 points |
+| burning | 83 | **+0.75** | **[+0.08, +1.46]** | 40 / 20 / 23 | −16 points |
+| hit by something unseen | 115 | −0.04 | [−0.48, +0.37] | 33 / 55 / 27 | −3 points |
+| ... the "on" fork went for the stairs | 157 (both kinds) | +0.48 | [+0.06, +0.91] | 59 / 61 / 37 | −11 points |
+| ... the "on" fork read teleportation | 39 | −0.46 | [−1.38, +0.41] | 13 / 14 / 12 | 0 |
+| unseen, HP at most half | 19 | +0.42 | [−0.32, +1.32] | 4 / 12 / 3 | −21 points |
+| unseen, HP over half | 96 | −0.14 | [−0.62, +0.33] | 29 / 43 / 24 | 0 |
+
+- **Stepping out of fire is shown to pay from the moment it first acts** (+0.75 [+0.08, +1.46], 16 points fewer deaths
+  within 30 turns). The unseen-hit part is not shown either way at its first moment (−0.04, wide); its reads look worse
+  than its walks to the stairs, on 39 pairs. This disagrees with the by-game split of the fresh test (where the unseen
+  games carried the gain); both splits are noisy and the fresh pass is for the two together.
+- These measure the switch from its first act to the end of the game, not one choice: with the switch on it acts
+  again at every later moment, so a one-choice fork would change little.
+
+**Summary of the section.**
+
+- Task 1: the largest remaining mechanisms are the rage running out mid-fight (32% of games), walking into the last
+  fight spent (20%), dying raging against more than one rage can finish (17%), and, newly found, **being hurt by
+  something not in view while the rules wait (13% of games die within 30 turns of it)**: sticky flame from bombardier
+  beetles, and invisible orc wizards and unseen horrors. The rules die to those three killers at 142 per 1,000 games,
+  qw at 37.
+- Task 2: `--style unseen=1|2`, off by default, with tests.
+- Task 3: on A + C, `unseen=2` is +0.24 [+0.07, +0.41] and `unseen=1` (fire only) +0.15 [+0.04, +0.28] against the
+  default rules.
+- Task 4: pre-registered on 680000–680599 and **passes, +0.17 [+0.04, +0.31]** (598 dungeons).
+- Task 5: a fork kind `unseen`; on 198 paired forks from the first moment the switch acts, stepping out of fire is
+  +0.75 [+0.08, +1.46], the unseen-hit part −0.04 [−0.48, +0.37].
+- **Verified**: every number in this section (scripts below); every fresh game on its seed three ways (`verify.py`), no
+  stale or off-seed game in the six fresh runs, 3 hung; that games where the switch never acted are the rules' games
+  (118 of 119 and 134 of 136 on A and C, 372 of 376 fresh); that the steps put the fire out (DCSS's own messages, more
+  of them with the switch); that rest and explore are refused while burning (`i_feel_safe` in the DCSS source, and the
+  refused choices in the step logs); the replay of block A with the switch off (199 of 200 the same); the tests (`uv run
+  pytest`, `uv run ruff check`).
+- **Inferred**: that the HP lost with nothing in view comes from invisible or out-of-reach attackers (read in the
+  protocol messages of the games looked at, "Something hits you" and spells "from out of thin air", not counted over
+  all of them); which part of the switch carries the gain (the by-game splits and the forks disagree); qw's comparison,
+  which is on other dungeons; why 8% of the forks hung.
+- Runs: `runs/brain/v6d/{A,C}-u1`, `{A,C}-u2`, `{A,C}-u2b`, `A-rules` (tuning and replay check), `Q{1,2,3}-{u2,rules}`
+  (fresh), `src-{0,1,2}` and `forks/un-rules` (task 5). Scripts in the job's `brain-v6d/` scratch directory: `gather.py`,
+  `flags.py`, `causes.py`, `diag.py`, `show.py`, `unseen.py`, `unseen2.py`, `assailed.py`, `fire.py`, `rages.py`,
+  `pmsgs.py`, `qwcmp.py` (task 1); `arms.py`, `seeds.py`, `verify.py`, `mindex.py`, `refresh.sh`, `uattrib.py`,
+  `ushow.py`, `percause.sh`, `percause3.sh` (tuning and the test); `ufork.py`, `after.sh` (forks); `chain.sh` and the
+  `jobs-*.txt` files; the copied morgues. Seeds spent: evaluation 680000–680599 (task 4); training 140000–140599 (task
+  5); evaluation seeds replayed: A and C only.
+
 ## What carried over from s1-battle, and what couldn't
 
 | s1-battle | here |
@@ -2092,11 +2363,11 @@ have sight fields and 24,346 (3.0%) are marked missing. Evaluation dungeons and 
 | `src/ladder/brain/reobserve.py` | rebuilds `sight` fields for old step logs from their protocol logs |
 | `src/ladder/brain/net.py` | model file format, numpy forward pass, parity check, `Ensemble` and `load_model` |
 | `src/ladder/brain/gear.py` | ranks weapons and armour, and says which piece in the pack is better than the one in use |
-| `src/ladder/brain/policy.py` | `available`, `baseline`, `baseline_wiki`, `teleport_rule`, `recovering`, `foe_hp`, `big_fight`, `Style`, and `BrainTiers` (with `fight_moves` for the opt-in fight rules), which sits in Reflex where `StubTiers` did |
+| `src/ladder/brain/policy.py` | `available`, `baseline`, `baseline_wiki`, `teleport_rule`, `recovering`, `foe_hp`, `big_fight`, `Style`, and `BrainTiers` (with `fight_moves` for the opt-in fight rules and `assailed` for `Style.unseen`), which sits in Reflex where `StubTiers` did |
 | `docs/wiki-strategy.md` | the DCSS wiki's strategy guides, sorted by what the brain would need to use each piece of advice |
 | `src/ladder/brain/steplog.py` | `steps.jsonl` writer shared by self-play, `spike` and the cockpit |
 | `src/ladder/brain/selfplay.py` | parallel games, one process each, with a watchdog for hung reads |
-| `src/ladder/brain/forks.py` | picks the moments to fork and writes the replay scripts (`kind="stairs"`: explore vs descend; `kind="teleport"`: read teleportation vs fight, exhausted and outnumbered) |
+| `src/ladder/brain/forks.py` | picks the moments to fork and writes the replay scripts (`kind="stairs"`: explore vs descend; `kind="teleport"`: read teleportation vs fight, exhausted and outnumbered; `kind="unseen"`: `Style.unseen` on vs off from the first moment it acts) |
 | `src/ladder/brain/humanplay.py` | a person's recorded game to a step log |
 | `src/ladder/brain/corpus.py` | step logs to labelled training rows |
 | `src/ladder/brain/train.py` | PyTorch training and export |
@@ -2240,6 +2511,14 @@ In the order I would take them:
    300 model reads not after a rage, at median 64% HP with a threat-2+ monster in view, and lone strong monsters;
    forks there before any rule; (d) whether the healing potion or the scroll comes first when both are held (the model
    prefers the potion there); (e) (b) of the afternoon list, `berserk → fight`, still untested.*
+   *(2026-11-15, night) `teleport=3` is a default. A re-diagnosis found a game in seven ending after damage from
+   something not in view (fire, invisible attackers) while the rules waited; `unseen=2` passes on 680000–680599 (+0.17
+   [+0.04, +0.31]). Next, cheapest first: (a) decide whether `unseen=2` becomes a default (`STYLE_ADDED_AS["unseen"] =
+   0` with it); (b) the rage that runs out mid-fight is now 32–37% of games: read teleportation at a lower `foe_hp`
+   ratio, or instead of raging when the foes' HP left is 1.5× the character's maximum and a scroll is held (790 such
+   rages in 999 games, 29% followed by death), each as a fork kind first; (c) attack the square an unseen attacker hit
+   from, as qw does (`plan_flail_at_invis`), which needs an action of its own; (d) `recover=2` (rest out exhaustion
+   before exploring on) again under today's rules, since walking into a fight spent is still 18–20% of games.*
 4. **Promote on more than 60 dungeons.** Differences under 0.3 depths can't be seen with 60; the same
    baseline replayed varies by 0.1. 200 evaluation dungeons would take about 15 minutes per model.
 5. **The remaining dead ends**: games that hang (1 in 20 with random choices in round 4, 1 in 40

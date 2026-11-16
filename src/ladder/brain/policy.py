@@ -71,6 +71,10 @@ class Style:
                               # STAIRS_NEAR steps; 0 = off. 2 by default since 2026-11-15 (with recover=1).
     stairs: float = 0.0       # 1 = before a fight bigger than one rage (`big_fight`), nothing adjacent and no rage
                               # on, walk to stairs up within STAIRS_NEAR steps first, once per fight. Off by default.
+    unseen: float = 0.0       # hurt with nothing in view (`BrainTiers.assailed`): 1 = when burning (DCSS's sticky
+                              # flame, `Fire`), walk toward the stairs, since every step shakes some of it off and
+                              # waiting only burns; 2 = also when something unseen keeps hurting (UNSEEN_HITS falls in
+                              # HP, not poison), read teleportation, else go up the stairs. 0 = off, the default.
 
     def weights(self) -> np.ndarray:
         return np.asarray([getattr(self, c) for c in COMPONENTS], dtype=np.float32)
@@ -195,14 +199,20 @@ def big_fight(obs: dict) -> bool:
     return obs["n_hostiles"] > 0 and foe_hp(obs) >= max(obs["hp_max"], 1)
 
 
+BURNING, UNSEEN = "burning", "unseen"     # what `BrainTiers.assailed` reports
+UNSEEN_HITS = 2           # falls in HP with nothing in view, in a row, that count as something unseen attacking
+
+
 def available(obs: dict, level_explored: bool, blocked: set[str], rest_stalled: bool, recover: bool = False,
-              calm: bool = False) -> list[str]:
+              calm: bool = False, assailed: str | None = None) -> list[str]:
     """The actions that can be carried out right now, in ACTIONS order.
 
     `recover` (`Style.recover`): `rest` is also possible at full HP while `recovering`, and a rest that left HP
     where it was doesn't rule it out then (HP is full; the rest was for the time).
     `calm` (`Style.calm`): while `raging`, `explore` is not possible (DCSS would refuse it) and `rest` is, in
     the same way as for `recover`, so the rage can be waited out.
+    `assailed` (`Style.unseen`, from `BrainTiers.assailed`): hurt with nothing in view. `flee_up` is then possible
+    without a hostile in view (a step toward the stairs up, or up them), and when UNSEEN, `read_teleport` too.
     """
     inv, hostiles = obs["inv"], obs["n_hostiles"] > 0
     adjacent = any(max(abs(m["dx"]), abs(m["dy"])) <= 1 for m in obs["mons"])
@@ -214,19 +224,21 @@ def available(obs: dict, level_explored: bool, blocked: set[str], rest_stalled: 
     can_read = calm and not any(x.startswith(("silenced", "Conf")) for x in status)
     # curing can be drunk at full HP while poisoned or confused; heal wounds can't
     ailing = inv.get("curing", 0) > 0 and _has(obs, "Pois", "Conf")
+    unseen = not hostiles and assailed in (BURNING, UNSEEN)
     can = {
         "explore": not hostiles and not level_explored and not waiting_calm,
         "fight": hostiles,
         "rest": not hostiles and (hurt or obs["mp"] < obs["mp_max"] or waiting_out) and (not rest_stalled or waiting_out),
         "descend": obs["on_down"] or obs["dist_down"] >= 0,
         # the stairs up from D:1 leave the dungeon
-        "flee_up": hostiles and (obs["on_up"] or obs["dist_up"] >= 0)
+        "flee_up": (hostiles or unseen) and (obs["on_up"] or obs["dist_up"] >= 0)
                    and not (obs["place"] in ("", "Dungeon") and obs["depth"] <= 1),
         "quaff_heal": inv["heal"] > 0 and (hurt or ailing) and calm,
         "quaff_unknown": inv["unknown_potions"] > 0 and calm,
         "read_unknown": inv["unknown_scrolls"] > 0 and can_read,
         # not while a teleport is already coming (`Tele`): a second scroll cancels it ("You feel strangely stable")
-        "read_teleport": inv["teleport"] > 0 and hostiles and can_read and "Tele" not in status,
+        "read_teleport": inv["teleport"] > 0 and (hostiles or (unseen and assailed == UNSEEN)) and can_read
+                         and "Tele" not in status,
         "wait": hostiles and not adjacent,
         # Trog's Berserk: refused while berserk or exhausted, which the no-progress block then handles.
         # Never with poison that would kill once the rage is over: the rage would block the cure.
@@ -271,7 +283,7 @@ def teleport_rule(obs: dict, level: int) -> tuple[bool, bool]:
 
 def baseline(obs: dict, avail: list[str], level_explored: bool, wiki: bool = False, teleport: int = 0,
              recover: int = 0, calm: bool = False, retreat: bool = False, rest_out: bool = False,
-             to_stairs: bool = False) -> str:
+             to_stairs: bool = False, assailed: str | None = None) -> str:
     """Rules of thumb: the stub's behaviour, plus drinking a healing potion instead of giving up.
 
     `wiki` plays the variant that follows the DCSS wiki's strategy guides instead (`Style.wiki`).
@@ -285,6 +297,8 @@ def baseline(obs: dict, avail: list[str], level_explored: bool, wiki: bool = Fal
     `retreat` heads up the stairs with hostiles in view (after a healing potion at half HP); `rest_out` rests
     with nothing in view before going on, as `recover` 2 does (`avail` then from `available(..., recover=True)`);
     `to_stairs` walks toward the stairs up before a fight.
+    `assailed` (`BrainTiers.assailed`, `Style.unseen`) with nothing in view: BURNING walks toward the stairs up (or
+    down), UNSEEN reads teleportation, else goes up the stairs; `avail` then from `available(..., assailed=...)`.
     """
     if wiki:
         return baseline_wiki(obs, avail, level_explored)
@@ -309,7 +323,9 @@ def baseline(obs: dict, avail: list[str], level_explored: bool, wiki: bool = Fal
             onward = ["rest"] + onward              # arrive, or explore on, able to rage and at full speed
         elif calm and raging(obs) and not level_explored:
             onward = ["rest"] + onward              # explore is refused until the rage is over
-        order = cure + ["wield", "wear"] + (["rest"] if frac < 0.8 else ["read_unknown", "quaff_unknown"]) + \
+        # hurt by what can't be seen: rest and explore are refused ("You are on fire!"), and waiting only burns
+        away = {BURNING: ["flee_up", "descend"], UNSEEN: ["read_teleport", "flee_up"]}.get(assailed, [])
+        order = cure + away + ["wield", "wear"] + (["rest"] if frac < 0.8 else ["read_unknown", "quaff_unknown"]) + \
                 onward + ["rest", "descend", "explore"]
     return next((a for a in order if a in avail), avail[0])
 
@@ -381,6 +397,8 @@ class BrainTiers(StubTiers):
         self.was_raging = False                # `raging` at the choice before (Style.retreat)
         self.retreat_from: int | None = None   # level_seq of the level being left after a rage ran out
         self.stairs_done = False               # this fight has had its walk to the stairs (Style.stairs)
+        self.unseen_hits = 0                   # falls in HP in a row with nothing in view (Style.unseen)
+        self.prev_status: list[str] = []       # the status line at the choice before
 
     # --- choosing ------------------------------------------------------
 
@@ -407,8 +425,9 @@ class BrainTiers(StubTiers):
         self.prev_frac = frac
         blocked = {a for a, until in self.blocked.items() if state.turn < until}
         retreat, rest_out, to_stairs = self.fight_moves(state.level_seq, obs)
+        assailed = self.assailed(obs)
         avail = available(obs, self.level_explored, blocked, self.rest_stalled_at == (state.turn, state.hp),
-                          recover=bool(self.style.recover) or rest_out, calm=bool(self.style.calm))
+                          recover=bool(self.style.recover) or rest_out, calm=bool(self.style.calm), assailed=assailed)
         if not avail and "wait" not in blocked and self.idle < IDLE_LIMIT:
             # Everything else went nowhere: let a turn pass. Now and then look again, since "partly
             # explored, can't reach some places" stops being true once a cloud of gas has cleared.
@@ -423,7 +442,7 @@ class BrainTiers(StubTiers):
             raise Escalation("nothing the brain can do here" + (f" (tried: {', '.join(sorted(blocked))})" if blocked else ""))
         base = baseline(obs, avail, self.level_explored, wiki=bool(self.style.wiki), teleport=int(self.style.teleport),
                         recover=int(self.style.recover), calm=bool(self.style.calm), retreat=retreat,
-                        rest_out=rest_out, to_stairs=to_stairs)
+                        rest_out=rest_out, to_stairs=to_stairs, assailed=assailed)
         choice, source, extra = base, "baseline", {}
         if self.fork_turn is not None and self.horizon and state.turn > self.fork_turn + self.horizon:
             raise Escalation(FORK_DONE)
@@ -486,6 +505,32 @@ class BrainTiers(StubTiers):
                 self.stairs_done = True
             to_stairs = not self.stairs_done and big_fight(obs) and 0 < obs["dist_up"] <= STAIRS_NEAR
         return retreat, self.retreat_from is not None, to_stairs
+
+    def assailed(self, obs: dict) -> str | None:
+        """`Style.unseen`: BURNING or UNSEEN when hurt with nothing in view, else None.
+
+        BURNING (level 1 and up): DCSS's sticky flame (`Fire`) is on, nothing in view. It burns every turn until it
+        runs out, each step taken shakes six turns of it off (`shake_off_sticky_flame`), and while it burns the game
+        refuses to rest or explore ("You are on fire!"), so the rules were left to wait in it.
+        UNSEEN (level 2): the HP fraction has fallen at UNSEEN_HITS choices in a row with nothing in view (a choice
+        where it stayed put doesn't break the run, one where it rose does), not poisoned, not burning (a choice while
+        burning ends the run) and not the choice a rage ended at (the HP lost there is the rage's). Something invisible, or a hostile out of reach that `active_hostiles`
+        leaves out, is hitting the character; rest and explore are refused, and the rules waited.
+        """
+        status = obs.get("status") or []
+        prev, self.prev_status = self.prev_status, list(status)
+        if not self.style.unseen or obs["n_hostiles"]:
+            self.unseen_hits = 0
+            return None
+        if "Fire" in status:
+            self.unseen_hits = 0                # the fire's own damage is not something unseen
+            return BURNING
+        rage_end = "Berserk" in prev and "Berserk" not in status
+        if obs["hp_delta"] < 0 and not _has(obs, "Pois") and not rage_end:
+            self.unseen_hits += 1
+        elif obs["hp_delta"] > 0:
+            self.unseen_hits = 0
+        return UNSEEN if self.style.unseen >= 2 and self.unseen_hits >= UNSEEN_HITS else None
 
     def prefer(self, obs: dict, avail: list[str], base: str) -> tuple[str, dict]:
         """The network's pick among `avail`, kept to the baseline unless it is `margin` better."""
@@ -583,6 +628,7 @@ class BrainTiers(StubTiers):
             self.blocked.clear()
             self.stalls.clear()
             self.idle = 0
+            self.unseen_hits = 0
             self.level_steps, self.level_turn = 0, state.turn
         try:
             super().observe(action, before, state, interrupts)

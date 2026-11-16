@@ -22,6 +22,15 @@ forked action replaces the other one wherever the rules would choose it.
 view, where a scroll of teleportation can be read and `fight` is possible: one moment, at random, from each
 spell of exhaustion. Each is forked twice, to `read_teleport` and to `fight`, both played on by the same
 policy, so the pair is a paired estimate of what reading there is worth against fighting on.
+
+`kind="unseen"` needs games played with `--style unseen=1` or more, and picks, once per game, the first moment
+that switch (`policy.BrainTiers.assailed`) can have acted at: nothing in view and either burning (`Fire`) or
+going up the stairs or reading teleportation, which without a hostile in view only the switch allows. Up to
+there the game is the one the rules without the switch would have played. Each moment is forked twice: "on"
+takes the recorded action and plays on with the forks' own style (the switch on), "off" replays only the choices
+before it and plays on from there with the switch off (`"style": {"unseen": 0}` in the job), so the pair compares
+the switch with the plain rules from the moment it first acts, to the end of the game. (In the "off" fork the
+last replayed choice, the one before the moment, is the step marked `fork`.)
 """
 
 from __future__ import annotations
@@ -31,7 +40,8 @@ import random
 from .corpus import HOLDOUT_SEED, read_games
 
 LATE_WINDOW = 40          # choices before the end of a game that count as "late"
-KINDS = ("any", "stairs", "teleport")
+KINDS = ("any", "stairs", "teleport", "unseen")
+UNSEEN_MOVES = ("flee_up", "read_teleport")    # what only `Style.unseen` chooses with nothing in view
 STAIRS = ("explore", "descend")
 TELEPORT = ("read_teleport", "fight")
 TELEPORT_CROWD = 2        # hostiles in view that make an exhausted moment outnumbered, for kind="teleport"
@@ -59,6 +69,11 @@ def _teleport_moment(s: dict) -> bool:
     return _exhausted(s) and s["obs"].get("n_hostiles", 0) >= TELEPORT_CROWD and all(a in s["avail"] for a in TELEPORT)
 
 
+def _unseen_moment(s: dict) -> bool:
+    o = s["obs"]
+    return not o.get("n_hostiles") and ("Fire" in (o.get("status") or []) or s["action"] in UNSEEN_MOVES)
+
+
 def plan(roots: list, points: int, *, alternatives: int = 3, horizon: int = 0, late_share: float = 0.7,
          seed: int = 0, kind: str = "any") -> list[dict]:
     """Jobs for selfplay.run: up to `points` moments, each forked once per alternative action.
@@ -67,6 +82,7 @@ def plan(roots: list, points: int, *, alternatives: int = 3, horizon: int = 0, l
     forked both ways with `commit` (`alternatives` and `late_share` don't apply).
     `kind="teleport"`: up to `points` exhausted-and-outnumbered moments (`_teleport_moment`), one per spell of
     exhaustion, each forked to `read_teleport` and to `fight` (`alternatives` and `late_share` don't apply).
+    `kind="unseen"`: up to `points` games' first `_unseen_moment`, each forked "on" and "off" (module docstring).
     """
     if kind not in KINDS:
         raise ValueError(f"no fork kind {kind!r} (have: {', '.join(KINDS)})")
@@ -76,6 +92,8 @@ def plan(roots: list, points: int, *, alternatives: int = 3, horizon: int = 0, l
         return _plan_stairs(games, points, horizon, rng)
     if kind == "teleport":
         return _plan_teleport(games, points, horizon, rng)
+    if kind == "unseen":
+        return _plan_unseen(games, points, horizon, rng)
     candidates = []
     for g in games:
         n = len(g["steps"])
@@ -116,6 +134,24 @@ def _plan_stairs(games: list[dict], points: int, horizon: int, rng: random.Rando
         for alt in STAIRS:
             jobs.append({"seed": step["game"], "id": f"{step['game']}-{i + 1}-{alt}", "script": prefix + [alt],
                          "horizon": horizon, "commit": True})
+    return jobs
+
+
+def _plan_unseen(games: list[dict], points: int, horizon: int, rng: random.Random) -> list[dict]:
+    moments = []
+    for g in games:
+        i = next((k for k, s in enumerate(g["steps"]) if _unseen_moment(s)), None)
+        if i:                                   # not at the first choice: the "off" fork needs a choice to replay
+            moments.append((g, i))
+    rng.shuffle(moments)
+    jobs = []
+    for g, i in moments[:points]:
+        step = g["steps"][i]
+        prefix = [s["action"] for s in g["steps"][:i]]
+        jobs.append({"seed": step["game"], "id": f"{step['game']}-{i + 1}-on", "script": prefix + [step["action"]],
+                     "horizon": horizon})
+        jobs.append({"seed": step["game"], "id": f"{step['game']}-{i + 1}-off", "script": prefix, "horizon": horizon,
+                     "style": {"unseen": 0.0}})
     return jobs
 
 

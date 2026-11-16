@@ -66,7 +66,9 @@ def _play(job: dict, cfg: dict, log, beat) -> dict:
     raw = log.dir / f"game{seed}.protocol.jsonl"       # plain while playing, so a killed game's is readable
     record = raw.open("w", buffering=1)                # line by line: a killed game keeps its last lines
     net = load_model(cfg["model"]) if cfg["model"] else None
-    tiers = steps.attach(BrainTiers(net, Style(**cfg["style"]), cfg["epsilon"], random.Random(seed * 7919 + 1),
+    # a fork job may set style keys of its own (forks.py, kind="unseen": the "off" fork)
+    style = Style(**{**cfg["style"], **job.get("style", {})})
+    tiers = steps.attach(BrainTiers(net, style, cfg["epsilon"], random.Random(seed * 7919 + 1),
                                     job.get("script"), job.get("horizon", 0), job.get("commit", False)), game_id)
 
     class Recorder(Hooks):
@@ -209,7 +211,8 @@ def run(name: str, seeds: list, *, workers: int = 4, model: str | None = None, e
            "server": server or DEFAULT_URL, "species": species, "background": background, "weapon": weapon,
            "max_steps": max_steps, "max_turns": max_turns}
     ctx = mp.get_context("spawn")
-    # a job is a seed, or a dict with "seed" and, for a fork, "id", "script", "horizon" and maybe "commit"
+    # a job is a seed, or a dict with "seed" and, for a fork, "id", "script", "horizon" and maybe "commit" and
+    # "style" (keys that override the run's style for that game)
     todo = [s if isinstance(s, dict) else {"seed": s} for s in seeds]
     procs: dict[int, tuple] = {}                               # slot -> (process, seed, its pipe)
     seen: dict[int, float] = {}

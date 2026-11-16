@@ -1448,6 +1448,41 @@ def test_plan_teleport_forks_read_and_fight_once_per_spell(tmp_path):
     assert plan([root], 10, kind="teleport", seed=1) == plan([root], 10, kind="teleport", seed=1)
 
 
+def record_unseen_game(directory, game, first):
+    """A seeded game of 8 steps, nothing in view but at step 3 (`flee_up` there is an ordinary retreat); `first`
+    is (step, status, action) for the first moment `Style.unseen` could have acted at, later steps alike."""
+    directory.mkdir(parents=True, exist_ok=True)
+    with (directory / "steps.jsonl").open("a") as f:
+        for i in range(1, 9):
+            st, act = [], "explore"
+            if i == 3:
+                o = point(5 * i, 20, n_hostiles=1, mons=[mon()])
+                act = "flee_up"
+            else:
+                if first and i >= first[0]:
+                    st, act = first[1], first[2]
+                o = point(5 * i, 20, status=st)
+            f.write(json.dumps({"game": game, "step": i, **step(o, act, ["explore", "rest", "flee_up"])}) + "\n")
+        f.write(json.dumps({"type": "end", "game": game, "died": True, "turn": 45}) + "\n")
+
+
+def test_plan_unseen_forks_the_first_moment_on_and_off(tmp_path):
+    from ladder.brain.forks import plan
+    root = tmp_path / "runs"
+    record_unseen_game(root / "a", 7, (5, [], "flee_up"))           # going up with nothing in view
+    record_unseen_game(root / "b", 8, (6, ["Fire"], "rest"))        # burning, whatever was chosen
+    record_unseen_game(root / "c", 9, None)                         # nothing to fork: a retreat in view only
+    record_unseen_game(root / "eval", 500_009, (5, [], "read_teleport"))
+    jobs = plan([root], 10, kind="unseen", seed=1)
+    by = {j["id"]: j for j in jobs}
+    assert set(by) == {"7-5-on", "7-5-off", "8-6-on", "8-6-off"}
+    assert by["7-5-on"]["script"] == ["explore", "explore", "flee_up", "explore", "flee_up"]
+    assert by["7-5-off"]["script"] == ["explore", "explore", "flee_up", "explore"]
+    assert by["7-5-off"]["style"] == {"unseen": 0.0} and "style" not in by["7-5-on"]
+    assert by["8-6-on"]["script"][-1] == "rest"
+    assert len(plan([root], 1, kind="unseen", seed=1)) == 2
+
+
 def test_a_committed_descend_fork_keeps_descending_on_that_level_only():
     state = stairs_state()
     tiers = BrainTiers(rng=random.Random(0), script=["descend"], commit=True)
@@ -2224,3 +2259,98 @@ def test_baseline_cures_serious_poison_before_raging():
     lethal = {**o, "poison_survival": 0}
     avail = available(lethal, False, set(), False)
     assert "berserk" not in avail and baseline(lethal, avail, False) == "quaff_heal"
+
+
+# --- the opt-in rule for being hurt with nothing in view (Style.unseen, BrainTiers.assailed) -----------
+
+TELE1 = {"heal": 0, "unknown_potions": 0, "unknown_scrolls": 0, "teleport": 1}
+
+
+def test_unseen_is_off_by_default_and_off_plays_as_before():
+    assert Style().unseen == 0
+    tiers = BrainTiers(rng=random.Random(0))
+    assert tiers.assailed(obs(status=["Fire"], hp=10, hp_delta=-0.1, dist_up=4)) is None
+    assert tiers.assailed(obs(hp=8, hp_delta=-0.1, dist_up=4)) is None
+    assert tiers.assailed(obs(hp=8, hp_delta=-0.1, dist_up=4)) is None
+    # without the flag nothing changes: no flee_up or read_teleport with nothing in view
+    o = obs(status=["Fire"], hp=10, dist_up=4, inv=TELE1)
+    avail = available(o, False, set(), False)
+    assert "flee_up" not in avail and "read_teleport" not in avail
+    assert baseline(o, avail, False) == "rest"
+
+
+def test_burning_walks_toward_the_stairs_at_level_1():
+    tiers = BrainTiers(style=Style(unseen=1), rng=random.Random(0))
+    o = obs(status=["Fire"], hp=10, hp_delta=-0.1, dist_up=4, inv=TELE1)
+    assert tiers.assailed(o) == policy.BURNING
+    avail = available(o, False, set(), False, assailed=policy.BURNING)
+    assert "flee_up" in avail and "read_teleport" not in avail
+    assert baseline(o, avail, False, assailed=policy.BURNING) == "flee_up"
+    # no stairs up known: toward the stairs down instead; neither known: as before
+    down = obs(status=["Fire"], hp=10, dist_down=3)
+    assert baseline(down, available(down, False, set(), False, assailed=policy.BURNING), False,
+                    assailed=policy.BURNING) == "descend"
+    none = obs(status=["Fire"], hp=10)
+    assert baseline(none, available(none, False, set(), False, assailed=policy.BURNING), False,
+                    assailed=policy.BURNING) == "rest"
+    # not on D:1, whose stairs up leave the dungeon
+    d1 = obs(status=["Fire"], hp=10, depth=1, dist_up=2)
+    assert "flee_up" not in available(d1, False, set(), False, assailed=policy.BURNING)
+    # with something in view the fight goes on as before
+    assert tiers.assailed(obs(status=["Fire"], hp=10, dist_up=4, n_hostiles=1, mons=[mon(dx=3)])) is None
+    # level 1 doesn't act on unseen hits
+    tiers = BrainTiers(style=Style(unseen=1), rng=random.Random(0))
+    for _ in range(3):
+        assert tiers.assailed(obs(hp=8, hp_delta=-0.1, dist_up=4)) is None
+
+
+def test_unseen_hits_read_teleportation_then_go_up_at_level_2():
+    tiers = BrainTiers(style=Style(unseen=2), rng=random.Random(0))
+    hit = obs(hp=12, hp_delta=-0.1, dist_up=6, inv=TELE1)
+    assert tiers.assailed(hit) is None                        # one fall in HP is not enough
+    assert tiers.assailed({**hit, "hp_delta": 0.0}) is None    # a choice with no change doesn't break the run
+    assert tiers.assailed(hit) == policy.UNSEEN
+    avail = available(hit, False, set(), False, assailed=policy.UNSEEN)
+    assert "read_teleport" in avail and "flee_up" in avail
+    assert baseline(hit, avail, False, assailed=policy.UNSEEN) == "read_teleport"
+    # a teleport already coming, or no scroll: up the stairs
+    coming = {**hit, "status": ["Tele"]}
+    assert baseline(coming, available(coming, False, set(), False, assailed=policy.UNSEEN), False,
+                    assailed=policy.UNSEEN) == "flee_up"
+    # burning comes first: a step, not a scroll
+    assert tiers.assailed({**hit, "status": ["Fire"]}) == policy.BURNING
+
+
+def test_unseen_hits_reset_and_leave_out_poison_and_the_end_of_a_rage():
+    def fresh():
+        return BrainTiers(style=Style(unseen=2), rng=random.Random(0))
+    hit = obs(hp=12, hp_delta=-0.1, dist_up=6)
+    # HP rising breaks the run
+    t = fresh()
+    t.assailed(hit)
+    t.assailed({**hit, "hp_delta": 0.05})
+    assert t.assailed(hit) is None
+    # something in view breaks it
+    t = fresh()
+    t.assailed(hit)
+    t.assailed({**hit, "n_hostiles": 1, "mons": [mon()]})
+    assert t.assailed(hit) is None
+    # nor does the fire's own damage: once it is out, the run starts again
+    t = fresh()
+    fire = {**hit, "status": ["Fire"]}
+    assert t.assailed(fire) == policy.BURNING
+    assert t.assailed(fire) == policy.BURNING
+    assert t.assailed(hit) is None
+    assert t.assailed(hit) == policy.UNSEEN
+    # poison doesn't count
+    t = fresh()
+    pois = {**hit, "status": ["Pois"]}
+    t.assailed(pois)
+    assert t.assailed(pois) is None
+    # nor the HP a rage takes with it as it ends
+    t = fresh()
+    t.assailed({**hit, "status": ["Berserk"], "hp_delta": 0.0})
+    t.assailed({**hit, "status": ["-Berserk", "Slow"]})
+    assert t.assailed({**hit, "status": ["-Berserk", "Slow"], "hp_delta": 0.0}) is None
+    assert t.assailed({**hit, "status": ["-Berserk", "Slow"]}) is None       # the first hit after it
+    assert t.assailed({**hit, "status": ["-Berserk", "Slow"]}) == policy.UNSEEN
