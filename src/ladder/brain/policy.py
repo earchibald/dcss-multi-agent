@@ -27,6 +27,7 @@ from .net import Ensemble, TrainedNet
 # What a scroll can stop on (conn.classify_error's names). Anything else that comes up after using an
 # item, such as the level-up stat prompt when the potion's turn killed something, is Reflex's to answer.
 ITEM_PROMPTS = {"blink", "identify", "enchant_weapon", "enchant_item", "brand_weapon", "acquirement", "menu"}
+ENCHANT_PROMPTS = {"enchant_weapon", "enchant_item", "brand_weapon"}   # what `Style.kit` answers instead of cancelling
 REPLAY_DIVERGED, FORK_DONE = "replay diverged", "fork horizon reached"
 LEVEL_STEP_LIMIT = 1500   # choices on one level before the brain calls itself stuck
 IDLE_LIMIT = 60           # waits in a row, with nothing else possible, before it does the same
@@ -97,6 +98,13 @@ class Style:
                               # reach, and one of them awake and coming (`hold_ground`): wait for them, up to k waits
                               # in a row, as qw's `plan_melee_wait_for_enemy` does, instead of walking to them.
                               # 0 = off. Off by default.
+    kit: float = 0.0          # 1 = with nothing in view and no rage on, put on the rings and amulets worth wearing (by qw's
+                              # valuation, `gear.JEWEL_VALUES`), read known enchant armour, enchant weapon and brand weapon
+                              # scrolls, answer those scrolls' prompts with the armour or weapon in use instead of cancelling
+                              # them, and rank and pick up the tower shield (`gear.KIT_ARMOURS`). Automatic steps taken
+                              # before the brain's choice (`BrainTiers.auto_step`), not actions. 0 = off. Off by default.
+    hand: float = 0.0         # 1 = invoke Trog's Hand when a monster on qw's `hand_monsters` list is in view (`hand_wanted`),
+                              # as an automatic step before the brain's choice. 0 = off. Off by default.
 
     def weights(self) -> np.ndarray:
         return np.asarray([getattr(self, c) for c in COMPONENTS], dtype=np.float32)
@@ -397,6 +405,55 @@ def hold_ground(obs: dict) -> bool:
     return coming
 
 
+# qw's `hand_monsters` (runs/qw/build-zk/qw.lua 8064-8095): Trog's Hand while one of these is in view and the
+# character's XL is under the number (`monster_in_list`). Names as the game gives them, compared without case.
+HAND_MONSTERS = {
+    "grinder": 10, "orc sorcerer": 17, "wizard": 17,
+    **dict.fromkeys(("ogre mage", "rupert", "xtahua", "aizul", "erolcha", "louise", "lich", "ancient lich",
+                     "dread lich", "kirke", "golden eye", "deep elf sorcerer", "deep elf demonologist", "sphinx",
+                     "great orb of eyes", "vault sentinel", "the enchantress", "satyr", "fenstrider witch",
+                     "vampire knight", "siren", "merfolk avatar"), 100),
+}
+HAND_PIETY = 2            # piety rank (stars) Trog's Hand needs (qw's `can_trogs_hand`)
+
+
+def hand_wanted(god: str, piety: int, xl: int, status: list[str], names: list[str], hp_frac: float,
+                heal_held: bool) -> bool:
+    """`Style.hand`: whether to invoke Trog's Hand now, as qw's `want_to_trogs_hand` with `can_trogs_hand` does.
+
+    Trog, piety rank HAND_PIETY or more, able to invoke (not raging, confused or silenced: qw's `can_invoke`), not
+    already regenerating from it (the status line's "Regen Will++") and no teleport coming (`Tele`), and a monster on
+    HAND_MONSTERS in view while the character's XL is under its number. qw drinks heal wounds before the Hand when hurt
+    (`plan_heal_wounds` comes first in its emergency cascade), so not at half HP or under with a healing potion held."""
+    if god != "Trog" or piety < HAND_PIETY:
+        return False
+    if any(x == "Berserk" or x.startswith(("Conf", "silenced", "Regen", "Tele")) for x in status):
+        return False
+    if hp_frac <= 0.5 and heal_held:
+        return False
+    return any(xl < HAND_MONSTERS.get(n.lower(), 0) for n in names)
+
+
+KIT_SCROLLS = ("enchant armour", "enchant weapon", "brand weapon")
+
+
+def kit_scroll(state: GameState) -> str | None:
+    """`Style.kit`: the letter of a known enchant armour, enchant weapon or brand weapon scroll worth reading now, else
+    None. A weapon scroll only with a ranked weapon in hand (`gear.weapon`), and brand weapon only onto one without a
+    brand (a new brand replaces the old at random)."""
+    inv = state.player.get("inv") or {}
+    wielded = inv.get(str(state.player.get("weapon_index", -1)))
+    ranked = bool(wielded and gear.weapon(wielded))
+    for item in inv.values():
+        name = item.get("name", "")
+        if item.get("base_type") != gear.SCROLLS or (item.get("quantity", 1) or 0) <= 0 or "{unknown}" in name:
+            continue
+        if "enchant armour" in name or (ranked and "enchant weapon" in name) or \
+                (ranked and "brand weapon" in name and " of " not in wielded.get("name", "")):
+            return chr(item.get("letter", ord("a")))
+    return None
+
+
 def baseline(obs: dict, avail: list[str], level_explored: bool, wiki: bool = False, teleport: int = 0,
              recover: int = 0, calm: bool = False, retreat: bool = False, rest_out: bool = False,
              to_stairs: bool = False, assailed: str | None = None, avoid: float = 0.0, escape: float = 0.0,
@@ -532,11 +589,15 @@ class BrainTiers(StubTiers):
         self.prev_status: list[str] = []       # the status line at the choice before
         self.calm_now = bool(self.style.calm)  # Style.calm holds at this choice (Style.calmfor can end it on a level)
         self.holds = 0                         # waits in a row for the hostiles to come (Style.hold)
+        self.auto: str | None = None           # the automatic step just taken (Style.kit, Style.hand), if any
+        self.auto_blocked: dict[str, int] = {}  # automatic step -> the turn it may be tried again after going nowhere
+        self.jewels: set[str] = set()          # letters of the rings and amulets on (Style.kit), as the P menu shows
+        self.kit_counts: dict[str, int] = {}   # what the automatic steps did, for the end of game record
 
     # --- choosing ------------------------------------------------------
 
     def next_action(self, state: GameState) -> str:
-        self.last = self.choice = None
+        self.last = self.choice = self.auto = None
         hostiles = self.active_hostiles(state)
         if not hostiles:
             self.approach = False
@@ -548,11 +609,14 @@ class BrainTiers(StubTiers):
             # Before explore can walk into one (see crawlrc.txt). The brain has no action that buys,
             # so unlike StubTiers it never visits a shop: stepping onto a fenced square asks "really?".
             return "fence_shops"
+        if (auto := self.auto_step(state, hostiles)):
+            self.auto = auto                   # not a choice: no step log line, nothing the model sees
+            return auto
         frac = state.hp / state.hp_max
         if self.worn is None:                  # joining a game part-way: found out by trying
             self.worn = gear.initial_worn(state) if state.turn <= 1 else {}
         obs = observe(state, hostiles, {
-            "worn": self.worn,
+            "worn": self.worn, "kit": bool(self.style.kit),
             "level_explored": self.level_explored, "level_steps": self.level_steps, "level_turn": self.level_turn,
             "hp_delta": 0.0 if self.prev_frac is None else frac - self.prev_frac, "last_action": self.last_action})
         self.prev_frac = frac
@@ -617,6 +681,41 @@ class BrainTiers(StubTiers):
         if choice == "descend":
             return "descend" if obs["on_down"] else "travel"
         return choice
+
+    def auto_step(self, state: GameState, hostiles: list) -> str | None:
+        """An automatic step to take before the brain chooses, as `fence_shops` is, or None. Only with `Style.hand` or
+        `Style.kit` on; none changes the observation, the actions or the step log, so a saved model plays as before.
+        - "trogs_hand" (`hand`): when `hand_wanted` holds.
+        - "read_kit" (`kit`): nothing in view, no rage, able to read: a known enchant or brand scroll (`kit_scroll`).
+        - "put_on" (`kit`): nothing in view, no rage: a ring or amulet to put on or take off (`gear.jewellery_choice`).
+        A step that used no game time is not tried again for BLOCK_TURNS turns (`observe`)."""
+        if not (self.style.kit or self.style.hand):
+            return None
+        status = state.statuses
+
+        def ok(step: str) -> bool:
+            return state.turn >= self.auto_blocked.get(step, 0)
+
+        if self.style.hand and hostiles and ok("trogs_hand"):
+            if hand_wanted(state.player.get("god") or "", state.player.get("piety_rank", 0) or 0,
+                           state.player.get("xl", 1) or 1, status, [m.name for m in hostiles],
+                           state.hp / max(state.hp_max, 1), inventory(state)["heal"] > 0):
+                return "trogs_hand"
+        if self.style.kit and not hostiles and "Berserk" not in status:
+            readable = not any(x.startswith(("silenced", "Conf")) for x in status)
+            if readable and ok("read_kit") and kit_scroll(state):
+                return "read_kit"
+            if ok("put_on") and gear.jewellery_choice(self.jewel_pieces(state)):
+                return "put_on"
+        return None
+
+    def jewel_pieces(self, state: GameState) -> list[tuple[str, dict, bool]]:
+        """(letter, item, worn) for each ring or amulet in the pack, worn as last seen (`self.jewels`)."""
+        return [(chr(it.get("letter", 0)), it, chr(it.get("letter", 0)) in self.jewels)
+                for it in (state.player.get("inv") or {}).values() if it.get("base_type") == gear.JEWELLERY]
+
+    def count(self, what: str) -> None:
+        self.kit_counts[what] = self.kit_counts.get(what, 0) + 1
 
     def fight_moves(self, level_seq: int, obs: dict) -> tuple[bool, bool, bool]:
         """What the opt-in fight rules want now, for `baseline`: (retreat, rest_out, to_stairs).
@@ -711,6 +810,8 @@ class BrainTiers(StubTiers):
             if kind not in letters:
                 return ActResult()
             result = self.through_menu(conn, verb, letters[kind])
+            if self.style.kit and result.blocking in ENCHANT_PROMPTS:
+                return self.answer_enchant(conn, result)
             if result.blocking in ITEM_PROMPTS:
                 # The scroll wants a target or an item (blinking, identify, enchant...). There is no
                 # action for that yet: cancel, and say yes to "really abort and waste the scroll?",
@@ -721,11 +822,28 @@ class BrainTiers(StubTiers):
             return result
         if action == "fence_shops":
             return conn.act(FENCE_KEY)
-        if action in ("wield", "wear"):
-            letter = gear.upgrades(state, self.worn or {})[action]
+        if action == "read_kit":
+            letter = kit_scroll(state)
             if not letter:
                 return ActResult()
-            piece = gear.kind_of(state, letter)
+            result = self.through_menu(conn, "r", letter)
+            if result.blocking in ENCHANT_PROMPTS:
+                return self.answer_enchant(conn, result)
+            if result.blocking in ITEM_PROMPTS:
+                after = cancel_prompt(conn)
+                after.messages = result.messages + after.messages
+                return after
+            return result
+        if action == "put_on":
+            return self.put_on(conn, state)
+        if action == "trogs_hand":
+            return self.trogs_hand(conn)
+        if action in ("wield", "wear"):
+            kit = bool(self.style.kit)
+            letter = gear.upgrades(state, self.worn or {}, kit=kit)[action]
+            if not letter:
+                return ActResult()
+            piece = gear.kind_of(state, letter, kit=kit)
             result = self.through_menu(conn, "w" if action == "wield" else "W", letter)
             if result.blocking:
                 # Something came into view part-way ("Keep equipping yourself?", a yes/no menu that
@@ -752,6 +870,73 @@ class BrainTiers(StubTiers):
             return conn.act(key) if key else ActResult()
         return None
 
+    def answer_enchant(self, conn, result: ActResult) -> ActResult:
+        """`Style.kit`: answer an enchant armour, enchant weapon or brand weapon scroll's item menu with the armour or
+        weapon in use (`gear.enchant_target`) instead of cancelling it; cancel when nothing in it fits."""
+        target = gear.enchant_target(result.blocking, gear.worn_from_menu(result.messages))
+        if target is None:
+            after = cancel_prompt(conn)
+        else:
+            after = conn.act(target, through_menu=True)
+            if after.blocking in ITEM_PROMPTS | {"yesno"}:
+                more = cancel_prompt(conn)                   # anything more it asks: no
+                more.messages = after.messages + more.messages
+                after = more
+            else:
+                self.count("enchant_" + result.blocking)
+        after.messages = result.messages + after.messages
+        return after
+
+    def put_on(self, conn, state: GameState) -> ActResult:
+        """`Style.kit`: open the `P` menu, take what is worn from it (its "(worn)" marks), and press the letter
+        `gear.jewellery_choice` gives for that: a piece put on, or a worn one taken off for a better one next time.
+        A multi-turn change that something interrupts ("Spend multiple turns changing equipment while enemies are
+        nearby?") is answered no, as `wear` does; Esc when the menu shows nothing to change."""
+        behind = conn.catch_up()
+        if behind.blocking:
+            return behind
+        opened = conn.act("P")
+        opened.messages = behind.messages + opened.messages
+        if opened.blocking != "menu":
+            return opened
+        self.jewels = {letter for letter, _, on in gear.worn_from_menu(opened.messages) if on}
+        letter = gear.jewellery_choice(self.jewel_pieces(state))
+        if letter is None:
+            after = conn.act("key_esc", through_menu=True)
+            after.messages = opened.messages + after.messages
+            return after
+        result = conn.act(letter, through_menu=True)
+        if result.blocking:
+            after = conn.act("key_esc" if result.blocking == "text_input" else "N", through_menu=True)
+            after.messages = result.messages + after.messages
+            result = after
+        text = " ".join(strip_tags(m.get("text", "")) for batch in result.messages
+                        if batch.get("msg") == "msgs" for m in batch.get("messages", []))
+        if "You remove" in text:
+            self.jewels.discard(letter)
+            self.count("jewel_off")
+        elif f"{letter} - " in text and "(worn)" in text:
+            self.jewels.add(letter)
+            self.count("jewel_on")
+        result.messages = opened.messages + result.messages
+        return result
+
+    def trogs_hand(self, conn) -> ActResult:
+        """`Style.hand`: `a`, then the letter the ability menu shows for Trog's Hand; Esc if it isn't there."""
+        behind = conn.catch_up()
+        if behind.blocking:
+            return behind
+        opened = conn.act("a")
+        opened.messages = behind.messages + opened.messages
+        if opened.blocking != "menu":
+            return opened
+        letter = next((k for k, text, _ in gear.worn_from_menu(opened.messages) if "Trog's Hand" in text), None)
+        result = conn.act(letter or "key_esc", through_menu=True)
+        if letter:
+            self.count("hand")
+        result.messages = opened.messages + result.messages
+        return result
+
     @staticmethod
     def through_menu(conn, verb: str, letter: str) -> ActResult:
         """Press `verb`, and `letter` only once its menu is up. A refused verb (reading while silenced)
@@ -770,6 +955,8 @@ class BrainTiers(StubTiers):
     # --- bookkeeping ---------------------------------------------------
 
     def observe(self, action: str, before: Before, state: GameState, interrupts: list[Interrupt]) -> None:
+        if self.auto and state.turn == before.turn and state.level_seq == before.level_seq:
+            self.auto_blocked[self.auto] = state.turn + BLOCK_TURNS     # went nowhere: leave it a while
         if any(i.kind == "level_change" for i in interrupts):
             self.blocked.clear()
             self.stalls.clear()
@@ -806,4 +993,7 @@ class BrainTiers(StubTiers):
             self.level_explored = True
 
     def describe(self) -> dict:
-        return {"model": self.net.name if self.net else None, "epsilon": self.epsilon, "style": asdict(self.style)}
+        out = {"model": self.net.name if self.net else None, "epsilon": self.epsilon, "style": asdict(self.style)}
+        if self.style.kit or self.style.hand:
+            out["kit"] = dict(self.kit_counts)
+        return out

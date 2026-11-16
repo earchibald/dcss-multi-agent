@@ -208,7 +208,7 @@ def observe(state: GameState, hostiles: list[Monster], ctx: dict) -> dict:
     d_down = 0 if here == MF_STAIR_DOWN else path(state, MF_STAIR_DOWN)[1]
     d_up = 0 if here == MF_STAIR_UP else path(state, MF_STAIR_UP)[1]
     mons = sorted(hostiles, key=lambda m: state.distance(m.pos))
-    better = gear.upgrades(state, ctx.get("worn") or {})
+    better = gear.upgrades(state, ctx.get("worn") or {}, kit=bool(ctx.get("kit")))
     open_n = sum(1 for dx, dy in DIRECTIONS
                  if (c := state.cells.get((px + dx, py + dy))) and c.get("mf", 0) not in NOT_WALKABLE)
     obs = {

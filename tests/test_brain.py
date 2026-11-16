@@ -2646,3 +2646,231 @@ def test_unseen_hits_reset_and_leave_out_poison_and_the_end_of_a_rage():
     assert t.assailed({**hit, "status": ["-Berserk", "Slow"], "hp_delta": 0.0}) is None
     assert t.assailed({**hit, "status": ["-Berserk", "Slow"]}) is None       # the first hit after it
     assert t.assailed({**hit, "status": ["-Berserk", "Slow"]}) == policy.UNSEEN
+
+
+# --- Style.kit and Style.hand: jewellery, enchant scrolls, the tower shield, Trog's Hand ------------------------
+
+JEWELLERY, ARMOUR, WEAPON = 6, 2, 0
+
+
+def jewel(name, letter, plus=0, **kw):
+    return {"name": name, "quantity": 1, "base_type": JEWELLERY, "letter": ord(letter), "plus": plus, **kw}
+
+
+def kit_state(*items, hostile=None, **player_fields):
+    """A lit room, a mace in hand (slot 0), animal skin (slot 1) and `items` in the pack; `hostile` (a name) to the east."""
+    fields = {"depth": 3, "god": "Trog", "xl": 5, "weapon_index": 0, **player_fields}
+    state = make_state(["#########", "#..@....#", "#.......#", "#########"], **fields)
+    with_inv(state, s0=item("+0 mace", WEAPON, 1, ord("a")), s1=item("+0 animal skin", ARMOUR, 1, ord("b")),
+             **{f"s{i + 2}": it for i, it in enumerate(items)})
+    if hostile:
+        add_monster(state, (7, 1), 7, hostile, threat=2)
+    return state
+
+
+def test_kit_and_hand_are_off_by_default_and_off_plays_as_before():
+    from ladder.brain import gear
+    assert Style().kit == 0 and Style().hand == 0
+    ring, scroll = jewel("+4 ring of protection", "c", plus=4), item("scroll of enchant armour", SCROLLS, 1, ord("c"))
+    for st in (kit_state(ring, scroll), kit_state(ring, scroll, hostile="orc sorcerer", piety_rank=3)):
+        tiers = BrainTiers(rng=random.Random(0))
+        assert tiers.next_action(st) not in ("put_on", "read_kit", "trogs_hand") and tiers.auto is None
+        assert tiers.auto_step(st, st.hostiles()) is None
+    # nor does the tower shield count without it, in the wear ranking or in what the model sees
+    shield = kit_state({"name": "+0 tower shield", "quantity": 1, "base_type": ARMOUR, "letter": ord("c")})
+    assert gear.upgrades(shield, {"body": "1"})["wear"] is None
+    assert gear.upgrades(shield, {"body": "1"}, kit=True)["wear"] == "c"
+    assert observe(shield, [], {"worn": {"body": "1"}})["inv"]["wear"] == 0
+    assert observe(shield, [], {"worn": {"body": "1"}, "kit": True})["inv"]["wear"] == 1
+    assert BrainTiers(rng=random.Random(0)).describe().keys() == {"model", "epsilon", "style"}
+
+
+def test_kit_and_hand_add_no_action_and_change_no_input():
+    # the model contract (actions, inputs) is the one every saved model was trained on
+    assert ACTIONS == ["explore", "fight", "rest", "descend", "flee_up", "quaff_heal", "quaff_unknown",
+                       "read_unknown", "read_teleport", "wait", "berserk", "wield", "wear"]
+    st = kit_state(jewel("+4 ring of protection", "c", plus=4), item("scroll of enchant armour", SCROLLS, 1, ord("c")))
+    plain = observe(st, [], {"worn": {"body": "1"}})
+    assert observe(st, [], {"worn": {"body": "1"}, "kit": True}) == plain        # nothing kit ranks is in the pack
+    s0, m0, _ = encode(plain, ["explore"])
+    assert s0.shape == (SELF_DIM,) and m0.shape == (MAX_MONS, MON_DIM)
+
+
+def test_saved_models_still_load_and_choose_the_same_with_the_switches_on_or_off():
+    from ladder.brain.net import load_model
+    root = Path(__file__).parent.parent / "models"
+    paths = [p for p in sorted(root.glob("v6-*.json")) + sorted(root.glob("v7-*.json")) + [root / "brain.json"]
+             if p.exists() and not p.name.endswith((".parity.json", ".ledger.json"))]
+    if not paths:
+        pytest.skip("no saved models in this checkout")
+    for p in paths[:6]:
+        net = load_model(str(p))
+        a = BrainTiers(net, Style(), rng=random.Random(0))
+        b = BrainTiers(net, Style(kit=1, hand=1), rng=random.Random(0))
+        st = stairs_state()
+        assert a.next_action(st) == b.next_action(st)
+        assert a.last["obs"] == b.last["obs"] and a.last.get("values") == b.last.get("values")
+
+
+def test_jewel_values_follow_qw_and_skip_artefacts_useless_and_worthless_pieces():
+    from ladder.brain import gear
+    assert gear.jewel(jewel("+4 ring of protection", "c", plus=4)) == ("ring", "ring of protection", 200)
+    assert gear.jewel(jewel("ring of poison resistance", "c")) == ("ring", "ring of poison resistance", 225)
+    assert gear.jewel(jewel("amulet of faith", "c"))[:2] == ("amulet", "amulet of faith")
+    for bad in (jewel("-2 ring of strength", "c", plus=-2), jewel("ring of wizardry", "c"),
+                jewel("+3 ring of intelligence", "c", plus=3), jewel("amulet of dissipation", "c"),
+                jewel("ring of see invisible", "c", useless=1),
+                jewel("ring of Zufaqip {rC+ Will++ Dex-2 Slay+6 SInv}", "c"),
+                item("ring mail", ARMOUR, 1, ord("c"))):
+        assert gear.jewel(bad) is None, bad["name"]
+
+
+def test_jewellery_choice_fills_free_slots_skips_repeats_and_swaps_only_for_much_better():
+    from ladder.brain import gear
+    prot = jewel("+4 ring of protection", "c", plus=4)               # 200
+    pois = jewel("ring of poison resistance", "d")                   # 225
+    pois2 = jewel("ring of poison resistance", "g")
+    sinv = jewel("ring of see invisible", "e")                       # 200
+    regen = jewel("amulet of regeneration", "f")                     # 200
+    faith = jewel("amulet of faith", "h")                            # 1000
+    choose = gear.jewellery_choice
+    assert choose([]) is None
+    assert choose([("c", prot, False), ("d", pois, False)]) == "d"                        # the best first
+    assert choose([("c", prot, False), ("d", pois, True)]) == "c"                         # then the second slot
+    assert choose([("c", prot, False), ("d", pois, True), ("f", regen, False)]) == "f"    # the amulet first
+    assert choose([("d", pois, True), ("g", pois2, False)]) is None                       # a second rPois adds nothing
+    # both ring slots full: a piece 50 or more better takes the worst one's place (P on it takes it off first)
+    assert choose([("c", prot, True), ("e", sinv, True), ("d", pois, False)]) is None      # 225 against 200: no
+    big = jewel("+9 ring of slaying", "i", plus=9)                                         # 450
+    assert choose([("c", prot, True), ("e", sinv, True), ("i", big, False)]) in ("c", "e")
+    assert choose([("f", regen, True), ("h", faith, False)]) == "f"
+    assert choose([("h", faith, True), ("f", regen, False)]) is None
+
+
+def menu(*lines):
+    """A webtiles menu message with these item lines ("c - a +4 ring of protection (worn)") under a heading."""
+    return {"msg": "menu", "items": [{"text": "Jewellery"}] + [{"hotkeys": [ord(t.strip()[0])], "text": " " + t}
+                                                               for t in lines]}
+
+
+def test_enchant_target_picks_what_is_in_use_from_the_scrolls_menu():
+    from ladder.brain import gear
+    armour = gear.worn_from_menu([menu("c - a +0 cloak (worn)", "d - a +0 plate armour (worn)",
+                                       "b - a +0 animal skin", "e - a +0 kite shield (worn)")])
+    assert gear.enchant_target("enchant_item", armour) == "d"
+    no_body = gear.worn_from_menu([menu("c - a +0 cloak (worn)", "e - a +0 kite shield (worn)", "b - a +0 animal skin")])
+    assert gear.enchant_target("enchant_item", no_body) == "e"
+    assert gear.enchant_target("enchant_item", gear.worn_from_menu([menu("b - a +0 animal skin")])) is None
+    weapons = gear.worn_from_menu([menu("b - a +0 flail", "a - a +0 mace (weapon)")])
+    assert gear.enchant_target("enchant_weapon", weapons) == "a"
+    assert gear.enchant_target("brand_weapon", weapons) == "a"
+    assert gear.enchant_target("brand_weapon", gear.worn_from_menu([menu("b - a +0 flail")])) is None
+    assert gear.enchant_target("acquirement", weapons) is None
+
+
+def test_kit_answers_an_enchant_prompt_instead_of_cancelling_it():
+    state = kit_state(item("scroll labelled FOO", SCROLLS, 1, ord("c")))
+    asked = ActResult(blocking="enchant_item", messages=[menu("b - a +0 animal skin (worn)")])
+    for on, keys in ((0, [("r",), ("c",), ("key_esc",), ("Y",)]), (1, [("r",), ("c",), ("b",)])):
+        conn = ScriptedConn([ActResult(blocking="menu"), asked, ActResult(blocking="yesno") if not on else ActResult()])
+        tiers = BrainTiers(style=Style(kit=on))
+        tiers.perform(SimpleNamespace(state=state, conn=conn), "read_unknown")
+        assert [k for k, _ in conn.sent] == keys
+    assert tiers.kit_counts == {"enchant_enchant_item": 1}
+    # nothing in the menu fits (no weapon in hand to brand): cancelled as before
+    conn = ScriptedConn([ActResult(blocking="menu"), ActResult(blocking="brand_weapon", messages=[menu("b - a +0 flail")]),
+                         ActResult(blocking="yesno")])
+    BrainTiers(style=Style(kit=1)).perform(SimpleNamespace(state=state, conn=conn), "read_unknown")
+    assert [k for k, _ in conn.sent][-2:] == [("key_esc",), ("Y",)]
+
+
+def test_kit_reads_known_enchant_scrolls_and_puts_on_jewellery_with_nothing_in_view():
+    known = item("scroll of enchant armour", SCROLLS, 1, ord("d"))
+    ring = jewel("+4 ring of protection", "c", plus=4)
+    tiers = BrainTiers(style=Style(kit=1), rng=random.Random(0))
+    assert tiers.next_action(kit_state(known, ring)) == "read_kit" and tiers.last is None
+    assert tiers.next_action(kit_state(ring)) == "put_on"
+    tiers.worn = {"body": "1"}                                       # the animal skin is on
+    assert tiers.next_action(kit_state(item("scroll labelled FOO", SCROLLS, 1, ord("d")))) == "read_unknown"
+    # brand weapon only onto a weapon without a brand
+    brand = item("scroll of brand weapon", SCROLLS, 1, ord("d"))
+    assert policy.kit_scroll(kit_state(brand)) == "d"
+    branded = kit_state(brand)
+    with_inv(branded, s0=item("+0 mace of flaming", WEAPON, 1, ord("a")))
+    assert policy.kit_scroll(branded) is None
+    # not with something in view, nor in a rage, nor while it is set aside after going nowhere
+    assert BrainTiers(style=Style(kit=1)).next_action(kit_state(known, ring, hostile="orc")) not in ("read_kit", "put_on")
+    raging = kit_state(known, ring, status=[{"light": "Berserk"}])
+    assert BrainTiers(style=Style(kit=1)).next_action(raging) not in ("read_kit", "put_on")
+    st = kit_state(ring)
+    tiers = BrainTiers(style=Style(kit=1), rng=random.Random(0))
+    tiers.worn = {"body": "1"}
+    assert tiers.next_action(st) == "put_on"
+    tiers.observe("put_on", Before.capture(st), st, [])               # no game time passed
+    assert tiers.next_action(st) == "explore" and tiers.auto_blocked["put_on"] == st.turn + BLOCK_TURNS
+
+
+def test_put_on_reads_what_is_worn_from_the_menu_and_presses_the_right_letter():
+    prot, pois = jewel("+4 ring of protection", "c", plus=4), jewel("ring of poison resistance", "d")
+    state = kit_state(prot, pois)
+    up = ActResult(blocking="menu", messages=[menu("c - a +4 ring of protection (worn)", "d - a ring of poison resistance")])
+    done = ActResult(messages=[{"msg": "msgs", "messages": [{"text": "d - a ring of poison resistance (worn)"}]}])
+    conn = ScriptedConn([up, done])
+    tiers = BrainTiers(style=Style(kit=1))
+    tiers.perform(SimpleNamespace(state=state, conn=conn), "put_on")
+    assert [k for k, _ in conn.sent] == [("P",), ("d",)]
+    assert tiers.jewels == {"c", "d"} and tiers.kit_counts == {"jewel_on": 1}
+    # both on already: Esc, and nothing left to do
+    both = ActResult(blocking="menu", messages=[menu("c - a +4 ring of protection (worn)",
+                                                     "d - a ring of poison resistance (worn)")])
+    conn = ScriptedConn([both, ActResult()])
+    tiers.perform(SimpleNamespace(state=state, conn=conn), "put_on")
+    assert [k for k, _ in conn.sent] == [("P",), ("key_esc",)]
+    assert tiers.auto_step(state, []) is None
+    # interrupted ("Spend multiple turns changing equipment while enemies are nearby?"): no
+    conn = ScriptedConn([ActResult(blocking="menu", messages=[menu("c - a +4 ring of protection")]),
+                         ActResult(blocking="menu"), ActResult()])
+    BrainTiers(style=Style(kit=1)).perform(SimpleNamespace(state=kit_state(prot), conn=conn), "put_on")
+    assert [k for k, _ in conn.sent] == [("P",), ("c",), ("N",)]
+
+
+def test_hand_wanted_follows_qws_rule():
+    want = policy.hand_wanted
+    assert want("Trog", 2, 5, [], ["orc sorcerer"], 1.0, False)
+    assert want("Trog", 2, 16, [], ["Grinder", "ogre mage"], 1.0, False)          # Grinder only under XL 10
+    assert not want("Trog", 2, 10, [], ["Grinder"], 1.0, False)
+    assert not want("Trog", 2, 17, [], ["orc sorcerer"], 1.0, False)
+    assert not want("Trog", 1, 5, [], ["orc sorcerer"], 1.0, False)               # piety
+    assert not want("", 6, 5, [], ["orc sorcerer"], 1.0, False)
+    assert not want("Trog", 2, 5, [], ["orc wizard", "orc"], 1.0, False)          # not on qw's list
+    for st in (["Berserk"], ["Regen Will++"], ["Conf"], ["silenced"], ["Tele"]):
+        assert not want("Trog", 2, 5, st, ["orc sorcerer"], 1.0, False), st
+    assert want("Trog", 2, 5, ["-Berserk", "Slow", "-Regen"], ["orc sorcerer"], 1.0, False)
+    assert not want("Trog", 2, 5, [], ["orc sorcerer"], 0.5, True)                # the potion first
+    assert want("Trog", 2, 5, [], ["orc sorcerer"], 0.5, False)
+
+
+def test_hand_reaches_brain_tiers_and_is_sent_by_the_letter_the_menu_gives():
+    seen = {}
+    for on in (0, 1):
+        st = kit_state(hostile="orc sorcerer", piety_rank=2)
+        tiers = BrainTiers(style=Style(hand=on), rng=random.Random(0))
+        seen[on] = tiers.next_action(st)
+    assert seen[0] != "trogs_hand" and seen[1] == "trogs_hand"
+    abilities = ActResult(blocking="menu", messages=[menu("a - Berserk     Piety-  2%", "b - Trog's Hand     Piety-  3%")])
+    conn = ScriptedConn([abilities, ActResult()])
+    tiers = BrainTiers(style=Style(hand=1))
+    tiers.perform(SimpleNamespace(state=kit_state(), conn=conn), "trogs_hand")
+    assert [k for k, _ in conn.sent] == [("a",), ("b",)] and tiers.kit_counts == {"hand": 1}
+    conn = ScriptedConn([ActResult(blocking="menu", messages=[menu("a - Berserk     Piety-  2%")]), ActResult()])
+    tiers.perform(SimpleNamespace(state=kit_state(), conn=conn), "trogs_hand")
+    assert [k for k, _ in conn.sent] == [("a",), ("key_esc",)]
+    assert tiers.describe()["kit"] == {"hand": 1}
+
+
+def test_kit_and_hand_are_styles_and_old_runs_still_match():
+    import argparse
+    from ladder.brain.cli import _style
+    assert _style(argparse.Namespace(style=["kit=1", "hand=1"])) == Style(kit=1, hand=1)
+    old = {k: v for k, v in Style().to_dict().items() if k not in ("kit", "hand")}
+    assert Style.saved(old) == Style()

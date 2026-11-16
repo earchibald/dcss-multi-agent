@@ -57,6 +57,7 @@ def _play(job: dict, cfg: dict, log, beat) -> dict:
     from ..reflex import Hooks, Reflex
     from ..state import GameState
     from .net import load_model
+    from .gear import KIT_RC
     from .policy import BrainTiers
     from .steplog import StepLog
 
@@ -79,7 +80,7 @@ def _play(job: dict, cfg: dict, log, beat) -> dict:
     conn = Connection(cfg["server"], on_message=state.apply, record=record)
     try:
         conn.login(user)
-        conn.set_rc(crawlrc())
+        conn.set_rc(crawlrc() + (KIT_RC if style.kit else ""))     # Style.kit also picks up tower shields
         opening = conn.start_game(cfg["species"], cfg["background"], cfg["weapon"], seed=seed)
         if state.turn > 1:
             # The account still held a game (one that ended without a death and wasn't quit), and a

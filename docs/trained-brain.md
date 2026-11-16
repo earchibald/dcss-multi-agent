@@ -2792,6 +2792,249 @@ they are still unused.**
   - copies: `arms.py`, `seeds.py`, `verify.py`, `mindex.py`, `chain.sh` (now prints the server's disk after each
     run) and `refresh.sh`.
 
+#### Kit and Trog's Hand: two things qw does that our bot couldn't, built as switches (2026-11-16, afternoon)
+
+The previous section found that qw does things on the same dungeons that our bot has no way to do at all. This
+section builds the two cheapest of them and measures them. **Kit (`kit=1`)**: put on rings and amulets, read enchant
+and brand scrolls onto the gear in use, and wear a tower shield. **Trog's Hand (`hand=1`)**: invoke it at the
+monsters qw invokes it at. **Result on the tuning blocks: `kit=1` is ahead, +0.64 [+0.31, +0.96] levels pooled over
+A and C, and positive on both blocks. `hand=1` alone is level, −0.07 [−0.17, +0.03]. The two together, +0.70 [+0.37,
++1.04], are no better than `kit=1` alone (+0.06 [−0.03, +0.17]).** So `kit=1` was pre-registered and played on the
+fresh seeds 690000–690599. **Fresh test: +0.51 [+0.22, +0.80] levels over 598 dungeons, so the pre-registered rule
+passes.** No default was changed.
+
+**What was built, and by which route.** Both are *automatic steps*, taken before the brain chooses, as `fence_shops`
+already was (`BrainTiers.auto_step` in `src/ladder/brain/policy.py`). They are not actions.
+- `features.ACTIONS`, the observation and the input vector are unchanged.
+- An automatic step writes no step-log line, so the corpus never sees one.
+- Saved models (`models/*.json`, `v6-*`, `v7-*`) load and choose as before, with the switches on or off.
+- Each switch is a `Style` key, off by default. No default changed, and no `STYLE_ADDED_AS` entry is needed: a run
+  saved before the keys existed was played with them off.
+- A step that used no game time (a menu without the expected entry, say) is set aside for `BLOCK_TURNS` (50) turns.
+
+The parts:
+
+- **`kit=1`, jewellery** (`gear.JEWEL_VALUES`, `gear.jewel`, `gear.jewellery_choice`, `BrainTiers.put_on`).
+  - When: nothing in view and no rage on.
+  - What is worth wearing: a value per ring and amulet taken from qw's own valuation (`runs/qw/build-zk/qw.lua`:
+    `item_property`, `linear_property_value`, `absolute_property_value`), for a Minotaur Berserker of Trog with a mace:
+    - per point of plus: protection, evasion and slaying 50, strength 35, dexterity 15;
+    - flat: amulet of faith 1000, poison resistance 225, reflection 220, see invisible, flight and regeneration 200,
+      fire and cold protection 125, willpower, guardian spirit and the acrobat 100, resist corrosion 50, positive
+      energy 25.
+  - Never put on: anything else (intelligence, wizardry, magical power, stealth and the newer amulets are worth 0 to
+    qw for this character), negative rings, artefacts, pieces the game marks useless, and a second ring of a kind
+    already worn.
+  - Jewellery is identified when picked up in 0.34 (every one in the reference runs' packs had its full name), so
+    there is no unknown-ring risk to weigh.
+  - How: `P` opens "Put on or remove which piece of jewellery?". Its lines end "(worn)" for what is on, and the bot
+    reads that as the truth each time. `P` on a free slot's piece puts it on: "c - a +4 ring of protection (worn)".
+  - `P` on a worn piece takes it off ("You remove your ..."). With both ring slots full, `P` on a third ring asks, as
+    text, which to remove. The bot never does that. Instead it takes the worst ring off first, and only for a piece
+    worth `JEWEL_GAIN` (50) more; the next step puts the new one on.
+  - An amulet takes several turns. If something comes into view meanwhile, the game asks "Spend multiple turns
+    changing equipment while enemies are nearby?", and the bot answers no, as `wear` does.
+- **`kit=1`, enchant and brand scrolls** (`gear.enchant_target`, `BrainTiers.answer_enchant`, `policy.kit_scroll`).
+  - Unknown scrolls: an unknown scroll that turns out to be enchant armour, enchant weapon or brand weapon now gets
+    its item menu answered instead of cancelled.
+    - The menus are "Enchant which item?", "Enchant which weapon?" and "Brand which weapon?". They list only what the
+      scroll can still improve, marked "(worn)" or "(weapon)".
+    - The answer is the body armour worn, else the shield, else another worn piece; for the weapon scrolls, the
+      weapon in hand.
+    - If nothing fits, the bot cancels as before.
+  - Known scrolls: with nothing in view, no rage and able to read, the bot reads them by the same route. Brand weapon
+    is read only onto a weapon with no brand yet.
+  - Acquirement is still cancelled.
+- **`kit=1`, the tower shield** (`gear.KIT_ARMOURS`, `gear.KIT_RC`).
+  - Added to the armour ranking at 7, against the kite shield's 5 and the buckler's 3; the game's SH is 13, 8 and 3.
+  - The weapon's handedness rules are unchanged: no shield with a two-handed weapon, no two-hander with a shield on.
+  - The rc's autopickup takes one tower shield, by an extra rc block sent only with `kit=1` (`selfplay._play`).
+  - The tower shield counts toward `wear`'s availability (`observe` with `ctx["kit"]`) only with `kit=1`.
+- **`hand=1`** (`policy.HAND_MONSTERS`, `policy.hand_wanted`, `BrainTiers.trogs_hand`).
+  - The monster list is qw's `hand_monsters` as written, by name, used while the character's XL is under the number
+    qw gives: Grinder under 10; orc sorcerer and "wizard" under 17; ogre mage, liches, golden eye, deep elf sorcerer,
+    sphinx, satyr, siren and the rest under 100.
+  - It also needs, as qw's `can_trogs_hand` and `want_to_trogs_hand` do:
+    - Trog, at piety rank 2 or more;
+    - not raging, confused or silenced (`can_invoke`);
+    - not already regenerating from the Hand (the status line's "Regen Will++");
+    - no teleport coming.
+  - Not at half HP or under with a healing potion held: qw drinks first (`plan_heal_wounds` comes before
+    `plan_trogs_hand` in its emergency cascade).
+  - How: `a`, then the letter the ability menu shows on the line naming "Trog's Hand" (it has been `b` in every game
+    seen); Esc if no line names it.
+
+**The prompts, seen in the real game.** A scenario game on the `laddertest` account (`probe.py`, `kit.yaml` in the
+job's `brain-v6h/` scratch directory) was driven key by key: picking up rings, an amulet, three unknown scrolls and a
+tower shield, putting the jewellery on, wearing the shield, and reading the scrolls. That showed:
+- the `P` menu and its "(worn)" marks;
+- the take-off on `P`, and the text prompt for a third ring;
+- the multi-turn amulet;
+- the three scroll menus and their answers: "Your +0 animal skin glows green for a moment.", "Your +0 mace glows red
+  for a moment.", "Your +1 mace drips with poison. a - a +1 mace of venom (weapon)" (no further question);
+- 0.34's separate letters for gear and consumables: a ring and a scroll can both be `c`, and each menu uses its own.
+
+The Trog's Hand menu line is from the reference runs' protocol logs (" b - Trog's Hand   Piety-   3%"). Setting piety
+in wizard mode for a scenario test hung the probe. The first `hand=1` games showed the whole round trip: the menu,
+"Your skin crawls.", "You feel the effects of Trog's Hand fading."
+
+**Play with the switches off is unchanged.**
+- Nine block A dungeons (500000–500008) were replayed with no switches (`v6h/A-off`) and compared with
+  `v6e/A-ref` (`same.py`). 9 of 9 were identical: the same deepest level, the same final turn, the same death or end,
+  and the same choices step by step (296 to 1,495 of them per game).
+- The `hand=1` arm, which can differ only where a Hand monster comes into view, reached the same depth as the
+  reference in 181 of 200 A dungeons and 187 of 199 C dungeons.
+- Tests in `tests/test_brain.py`:
+  - `test_kit_and_hand_are_off_by_default_and_off_plays_as_before`
+  - `test_kit_and_hand_add_no_action_and_change_no_input` (the action list is pinned)
+  - `test_saved_models_still_load_and_choose_the_same_with_the_switches_on_or_off`: every `v6-*` and `v7-*` model
+    present plus `brain.json`, up to six. Each one loads and gives the same choice, observation and values with
+    `kit=1 hand=1` as with neither.
+  - `test_jewel_values_follow_qw_and_skip_artefacts_useless_and_worthless_pieces`
+  - `test_jewellery_choice_fills_free_slots_skips_repeats_and_swaps_only_for_much_better`
+  - `test_enchant_target_picks_what_is_in_use_from_the_scrolls_menu`
+  - `test_kit_answers_an_enchant_prompt_instead_of_cancelling_it`
+  - `test_kit_reads_known_enchant_scrolls_and_puts_on_jewellery_with_nothing_in_view`
+  - `test_put_on_reads_what_is_worn_from_the_menu_and_presses_the_right_letter`
+  - `test_hand_wanted_follows_qws_rule`
+  - `test_hand_reaches_brain_tiers_and_is_sent_by_the_letter_the_menu_gives`
+  - `test_kit_and_hand_are_styles_and_old_runs_still_match`
+
+**How often each fired** (`kitstats.py`, from the games' own messages and the end-of-game counts; whole games, not
+only to D:7; 200 dungeons each):
+
+| | `v6e/A-ref` | `A-kit` | `C-kit` | `A-hand` | `C-hand` | `A-both` | `C-both` | qw (block A, by D:7) |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| rings put on | 0 | 233 | 204 | 0 | 0 | 235 | 207 | 283 |
+| amulets put on | 0 | 35 | 31 | 0 | 0 | 35 | 31 | 64 |
+| taken off for a better one | 0 | 19 | 17 | 0 | 0 | 21 | 16 | |
+| enchant armour landed | 0 | 135 | 114 | 0 | 0 | 138 | 120 | 293 enchant scrolls |
+| enchant weapon landed | 0 | 116 | 110 | 0 | 0 | 119 | 114 | (with the line above) |
+| brand weapon landed | 0 | 48 | 48 | 0 | 0 | 51 | 48 | 63 |
+| enchant or brand prompt cancelled | 201 | 0 | 0 | 202 | 177 | 0 | 0 | |
+| shields put on (tower) | 36 (0) | 48 (9) | 54 (8) | 36 (0) | 40 (0) | 46 (9) | 54 (7) | 115 |
+| Trog's Hand | 0 | 0 | 0 | 35 | 22 | 31 | 23 | 35 fights on D:3–7 |
+
+(`v6e/C-ref` cancelled 172 prompts and put on 40 shields, none tower.)
+
+- **What is measured here.** The kit switch roughly closes the gap in how much jewellery and enchantment the bot uses
+  (qw's counts are by D:7, ours over whole games, which mostly end by D:9).
+- **Trog's Hand** fires about as often as qw uses it.
+- **Shields** stay well below qw's: the bot wears one only when it finds one, and qw also buys them.
+
+**AC and SH on first arrival** (step log; means over dungeons the bot reached the level in; qw's from the previous
+section, over the dungeons all three bots reached):
+
+| level | A-ref → A-kit: AC (paired dungeons) | SH, shield worn: A-ref → A-kit | C-ref → C-kit: AC (paired) | SH, shield worn: C-ref → C-kit | qw AC / SH |
+| --- | --- | --- | --- | --- | --- |
+| D:4 | 8.1 → 8.5 (163) | 0.4, 9% → 0.9, 15% | 8.3 → 8.4 (140) | 0.5, 11% → 0.9, 19% | 9.2 / 1.2 |
+| D:5 | 9.1 → 9.7 (133) | 0.5, 11% → 1.1, 19% | 9.3 → 9.7 (106) | 0.5, 13% → 1.3, 25% | 10.6 / 1.6 |
+| D:6 | 10.0 → 10.6 (107) | 0.6, 13% → 1.6, 26% | 10.3 → 10.6 (94) | 0.6, 15% → 1.6, 30% | 12.4 / 1.7 |
+| D:7 | 11.0 → 12.1 (72) | 0.9, 20% → 1.9, 26% | 11.2 → 11.5 (72) | 0.7, 15% → 1.6, 28% | 14.4 / 1.9 |
+| D:8 | 12.1 → 12.8 (52) | 0.9, 21% → 2.1, 29% | 11.9 → 12.5 (55) | 0.9, 17% → 2.0, 33% | |
+
+- **SH reaches qw's level.** On arrival at D:5–7, SH is 1.1–2.0, which is qw's 1.6–1.9.
+- **AC rises only 0.3–1.1, and qw's lead stays at about 2–3.** The enchantments go onto body armour that is often
+  light (an animal skin can take +2 at most), and a ring of protection is uncommon. The rest of qw's AC lead
+  comes from heavier body armour and from buying: inferred, not measured here.
+
+**Tuning.**
+- **Method.** This tree, no model, epsilon 0, 9 workers asked (7 played: `ladderbrain7` and `9` still refuse login),
+  A (500000–500199) and C (540000–540199) only, 09:58–11:38 (`chain.sh`, `jobs-tune.txt`). The arm order alternated
+  by block: A kit, C both, A hand, C hand, A both, C kit.
+- **Analysis.** Each arm minus `v6e/{A,C}-ref` (the defaults), paired by dungeon over games both finished and neither
+  stale nor off its seed (`arms.py`); 95% bootstrap over dungeons, 10,000 resamples. Description only: these blocks
+  are spent.
+- **Seed checks** (`verify.py`). Every game of the six runs: no "Welcome back", no protocol without its seed, no
+  first step after turn 1, and a morgue on its seed. One game hung, 540052 in `C-hand`, as it does in every C
+  reference.
+
+| arm (`--style`) | A: mean depth | C: mean depth | − defaults, A | − defaults, C | **− defaults, A + C** | deeper / same / shallower | died D:1–3 / 4–6 / 7+ (A + C) |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| defaults (`v6e/*-ref`) | 6.99 | 6.27 | | | | | 64 / 121 / 196 |
+| `kit=1` | 7.42 | 7.09 | +0.42 [−0.04, +0.89] | +0.85 [+0.40, +1.31] | **+0.64 [+0.31, +0.96]** (399) | 156 / 144 / 99 | 50 / 106 / 225 |
+| `hand=1` | 6.96 | 6.17 | −0.03 [−0.20, +0.12] | −0.10 [−0.21, −0.01] | **−0.07 [−0.17, +0.03]** (399) | 15 / 368 / 16 | 64 / 117 / 200 |
+| `kit=1 hand=1` | 7.50 | 7.13 | +0.51 [+0.03, +0.98] | +0.89 [+0.44, +1.35] | **+0.70 [+0.37, +1.04]** (399) | 156 / 147 / 96 | 49 / 105 / 226 |
+
+- `kit=1 hand=1` − `kit=1`: +0.09 [−0.06, +0.25] on A, +0.04 [−0.09, +0.17] on C, pooled +0.06 [−0.03, +0.17] over
+  400 dungeons (12 + 10 deeper, 7 + 6 shallower, the rest the same).
+- `kit=1` cuts deaths on D:1–3 (64 → 50) and on D:4–6 (121 → 106). More characters die on D:7 and below (196 → 225)
+  because more get there.
+- `hand=1` changes only the 31 of 399 dungeons where it fired in a way that mattered. Where it did, it was as often
+  worse as better.
+
+**Pre-registration of the fresh test** (written before any game on these seeds was played).
+- **Configuration**: `--style kit=1`. Everything else is today's defaults, with no model and epsilon 0.
+  - `kit=1` is clearly ahead: the pooled interval is wholly above zero and both blocks are positive.
+  - `hand=1` is not tested. On its own it is level or slightly behind, and it adds nothing measurable to `kit=1`.
+- **Baseline**: the defaults (no `--style`), played fresh with this same tree on the same seeds.
+- **Seeds**: 690000–690599, once each per arm, in three blocks of 200. The arm order alternates per block:
+  - 690000–690199: defaults, then `kit=1`;
+  - 690200–690399: `kit=1`, then defaults;
+  - 690400–690599: defaults, then `kit=1`.
+- **Analysis**, done once, after all six runs have finished:
+  - `kit=1` − defaults in deepest Dungeon level reached, paired by dungeon over the dungeons both arms finished and
+    neither is stale nor off its seed (`arms.py`, `verify.py`);
+  - 95% bootstrap over dungeons, 10,000 resamples, pooled over the three blocks.
+- **Pass rule**: the pooled interval's lower end is above zero. If it is, `kit=1` is a candidate for a default; this
+  section does not change any default either way.
+
+**The fresh test** (played 11:41–12:58, after the pre-registration above was written into this file; analysed once,
+by `arms.py` over the three block pairs, after all six runs had finished; runs `v6h/F{1,2,3}-{def,kit}`).
+
+| block | defaults: mean depth | `kit=1`: mean depth | `kit=1` − defaults | deeper / same / shallower | dungeons |
+| --- | --- | --- | --- | --- | --- |
+| 690000–690199 (defaults first) | 6.33 | 6.62 | +0.30 [−0.18, +0.80] | 71 / 72 / 56 | 199 |
+| 690200–690399 (`kit=1` first) | 6.47 | 7.16 | +0.68 [+0.15, +1.22] | 81 / 66 / 52 | 199 |
+| 690400–690599 (defaults first) | 6.26 | 6.79 | +0.54 [+0.07, +1.02] | 70 / 66 / 64 | 200 |
+| **pooled** | | | **+0.51 [+0.22, +0.80]** | 222 / 204 / 172 | 598 |
+
+- **The pre-registered rule passes.** The pooled interval's lower end, +0.22, is above zero. All three blocks are
+  positive, and two of them have intervals above zero on their own.
+- **Deaths** (defaults → `kit=1`, three blocks together):
+  - on D:1–3, 108 → 92;
+  - on D:4–6, 187 → 177;
+  - on D:7 and below, 280 → 298, since more characters get there.
+- **Dungeons left out of the pairs.** Two of the 600 hung: 690134 under `kit=1`, and 690312 in both arms. Each
+  verifies as on its seed in every other respect (`verify.py`): no "Welcome back", no protocol without its seed, no
+  first step after turn 1, and a morgue on its seed for every finished game.
+- **On the fresh seeds the kit fired as on the tuning blocks.** Per 200 dungeons:
+  - 194–197 rings and 30–43 amulets put on;
+  - 106–129 enchant armour, 113–134 enchant weapon and 41–53 brand weapon scrolls landed;
+  - 3–6 tower shields.
+- **AC on arrival** at D:5–7 (block 690000–690199, paired dungeons): 9.2 → 9.9, 10.1 → 11.0 and 11.1 → 12.1. SH
+  rose from 0.6–0.7 to 1.1–1.6.
+- **Seeds spent**: 690000–690599, once each per arm, as pre-registered. Unspent fresh seeds now start at 690600.
+
+**No default was changed.** `kit=1` passed its pre-registered test and is a candidate for a default; making it one is
+a separate decision. `hand=1` was not fresh-tested.
+
+**Summary of the section.**
+- Measured:
+  - every count, mean and interval above;
+  - the menus and their answers in the real game (the scenario probe; the protocol logs);
+  - that play with the switches off is the same game, choice for choice, on 9 block A dungeons;
+  - that saved models load and choose the same with the switches on or off (unit test);
+  - that every tuning and fresh game was played on its seed;
+  - the tests: `uv run pytest -q` 503 passed, 5 deselected; `uv run ruff check` clean.
+- Inferred:
+  - that the extra depth comes from the kit's effect on fights, through AC, SH, rings such as poison resistance, and
+    an enchanted and branded weapon. The switch changes all of these at once, and they were not separated.
+  - that the AC still missing against qw (about 2–3 at D:6–7) comes from heavier body armour and from shops.
+- Not done:
+  - buying (shops are still fenced off);
+  - acquirement;
+  - artefact jewellery (left alone);
+  - Brothers in Arms;
+  - a `hand=1` test on fresh seeds;
+  - changing any default.
+- Runs: `runs/brain/v6h/A-off` (switches-off check), `smoke-kh`, `{A,C}-{kit,hand,both}` (tuning) and
+  `F{1,2,3}-{def,kit}` (fresh). The server's disk stayed at 52%.
+- Scripts in the job's `brain-v6h/` scratch directory:
+  - new: `probe.py` and `kit.yaml` (the scenario probe), `kitstats.py` (what fired, AC and SH on arrival), `same.py`
+    (choice-by-choice comparison of two runs), `jobs-off.txt`, `jobs-smoke.txt`, `jobs-tune.txt`, `jobs-fresh.txt`;
+  - copies: `arms.py`, `seeds.py`, `verify.py`, `mindex.py`, `chain.sh` and `refresh.sh`.
+
 ## What carried over from s1-battle, and what couldn't
 
 | s1-battle | here |
