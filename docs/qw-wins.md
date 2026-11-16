@@ -34,6 +34,16 @@ inferred.
 - **qw nearly always dies inside a rage or just after one.** At XL 15+, 40% die berserk and 52% die
   on berserk cooldown (slowed). 62% die holding heal wounds and 68% holding teleportation. While
   berserk, the game allows no drinking, reading or invoking. [V]
+- **qw's public games show the same Zot pattern** (section 7). On CDI (0.29–0.33) qw won 0.03%
+  of its games, and 19 of the 219 that reached Zot (8.7%). 81 of 96 Zot deaths there had a
+  teleport still pending ("about to teleport"). On CAO in 2016–17 (0.18–0.21-a) the win rate was
+  1.1%, and Minotaur Berserkers of Trog won 4 of their 97 games. [V]
+  - In 13 of 15 combos, the median winner ended with more AC+EV+SH than the median Zot death of
+    the same combo (combos with at least 4 such games). It is not a clean line, though: some
+    deaths had more than any win. [V]
+  - Winners drank more heal wounds in Zot in total (3.3 against 2.8) but stayed over twice as
+    long. Per turn in Zot, the deaths drank more. [V] So the extra drinking looks like a result of
+    the longer stay, not its cause. [I]
 
 ## 1. How rare are wins
 
@@ -72,15 +82,9 @@ The funnel over the distinct trajectories (n = 8,623) [V]:
   `goal_normal_next` (goals.lua:4–133). [V]
 - The first rune came from Swamp 182 times, Spider 134, Shoals 128 and Snake 112. [V]
 
-**Public record.** The agent fetching qw's public games and Sequell-style stats had not reported
-when this was written, so public win rates, by version and combo, are **not established here**.
-What is verified comes only from the qw clone's own `docs/accomplishments.md`:
-
-- It lists online wins for about 60 combos, including **MiBe^Trog** and many Fighters of Okawaru.
-- It says "Historically qw's best 3-rune winrate was 15% with DDFi^Makhleb".
-- It links winning morgues on crawl.dcss.io, for example the 0.29 MiBe win
-  `https://crawl.dcss.io/crawl/morgue/qw/morgue-qw-20220913-002803.txt`. That morgue was not read
-  for this note.
+**Public record.** Section 7 has qw's public games. In short: 1.1% of qw's 10,600 games on CAO
+in 2016–17 won, against 0.03% of its 62,579 games on CDI in 2022–24. On CDI, 19 of the 219 games
+that reached Zot won (8.7%), close to our 3 of 36. [V]
 
 ## 2. Wins against losses at the same stage
 
@@ -357,6 +361,197 @@ Ranked by evidence and by how much of the funnel each one affects:
 
 The seed explains about half of early outcomes and little of the late ones (section 3).
 
+## 7. Public record
+
+qw plays as the account `qw` on public servers. Two servers keep its games:
+
+- **CAO** (crawl.akrasiac.org): 2016–17, versions 0.18 to 0.21-a, elliptic's era.
+- **CDI** (crawl.dcss.io): 2022–24, versions 0.29 to 0.33-a, run by the devteam. Most of its
+  games went to separate "bot" logfiles.
+
+The counts below come from the servers' raw logfiles, filtered to `name=qw` with quits dropped.
+The scripts are in `/Users/earchibald/.claude/jobs/1cdb9134/tmp/qw-wins/public/scripts/`
+(`stats.py`, `funnel.py`, `deep.py`, `bychar.py`, `mibe.py`, `zotbatch.py`, `zotagg.py`).
+Two caveats apply to every figure:
+
+- The god is the god at the end of the game. A game that dies before an altar counts as godless,
+  so per-god rates are too high.
+- CDI's games are mostly devteam test runs: qw was being rewritten and tried on weak combos, such
+  as 8,182 DEHu games with no win. [I]
+
+### Win rate by server and version [V]
+
+| Server, version | Logfile | Games | Wins | Win rate | Reached Zot:1 | Wins / Zot:1 |
+|---|---|---|---|---|---|---|
+| CAO 0.18.1 | [logfile18](https://crawl.akrasiac.org/logfile18) | 253 | 3 | 1.19% | | |
+| CAO 0.19-a | [logfile-git](https://crawl.akrasiac.org/logfile-git) | 5,231 | 80 | 1.53% | | |
+| CAO 0.19 | [logfile19](https://crawl.akrasiac.org/logfile19) | 585 | 5 | 0.85% | | |
+| CAO 0.20-a | logfile-git | 532 | 2 | 0.38% | | |
+| CAO 0.20 | [logfile20](https://crawl.akrasiac.org/logfile20) | 1,835 | 25 | 1.36% | | |
+| CAO 0.21-a | logfile-git | 2,164 | 5 | 0.23% | | |
+| **CAO total** | | **10,600** | **120** | **1.13%** | | |
+| CDI 0.29 | [crawl-bot-0.29](https://crawl.dcss.io/crawl/meta/crawl-bot-0.29/logfile) | 11,227 | 3 | 0.03% | 41 | 3/41 |
+| CDI 0.30-a | [crawl-bot-git](https://crawl.dcss.io/crawl/meta/crawl-bot-git/logfile) | 2,352 | 0 | 0 | 62 | 0/62 |
+| CDI 0.30 | [crawl-bot-0.30](https://crawl.dcss.io/crawl/meta/crawl-bot-0.30/logfile) | 1,975 | 1 | 0.05% | 34 | 1/34 |
+| CDI 0.31-a | crawl-bot-git | 22,175 | 9 | 0.04% | 67 | 9/67 |
+| CDI 0.31 | [crawl-bot-0.31](https://crawl.dcss.io/crawl/meta/crawl-bot-0.31/logfile) | 8,018 | 3 | 0.04% | 6 | 3/6 |
+| CDI 0.32-a | [crawl-git](https://crawl.dcss.io/crawl/meta/crawl-git/logfile) | 12,588 | 2 | 0.02% | 4 | 2/4 |
+| CDI 0.32 | [crawl-0.32](https://crawl.dcss.io/crawl/meta/crawl-0.32/logfile) | 8 | 1 | | 1 | 1/1 |
+| CDI 0.33-a | crawl-git | 4,236 | 0 | 0 | 4 | 0/4 |
+| **CDI total** | | **62,579** | **19** | **0.030%** | **219** | **19/219 (8.7%)** |
+| *Ours, MiBe^Trog, 0.34 (section 1)* | | *8,623* | *3* | *0.035%* | *36* | *3/36* |
+
+- Zot:1 counts come from the matching `milestones` files (`br.enter` into Zot). The CAO
+  milestones were not fetched, so CAO has no Zot column.
+- With quits counted, the totals are 10,715 CAO games and 62,885 CDI games. They match the
+  [CAO scoring page](https://crawl.akrasiac.org/scoring/players/qw.html): 42,946 games and 153
+  wins in all, which also counts CSZO (2013–15, 26 wins) and 7 of the 19 CDI wins.
+- **Runes.** CAO's wins: 117 with 3 runes, 1 with 4, and 2 with 15 (GrFi^TSO, 0.20). The scoring
+  page adds a 4-rune and a 5-rune GrBe win on CSZO. Every CDI win has 3 runes.
+
+### By combo [V]
+
+| Combo | Where | Games | Wins | Rate | Games with 3+ runes | Won of those |
+|---|---|---|---|---|---|---|
+| **MiBe** (all wins with Trog) | CAO 0.18–0.20 | 97 | 4 | 4.1% | 7 | 4 |
+| **MiBe** (all wins with Trog) | CDI 0.29 | 808 | 1 | 0.12% | 17 | 1 |
+| DDFi | CAO 0.19-a/0.20 | 327 | 23 | 7.0% | 59 | 23 |
+| DDFi^Makhleb (god at end) | CAO | 183 | 18 | 9.8% | | |
+| GrBe (all wins with Trog) | CAO 0.18–0.19-a | 184 | 14 | 7.6% | 23 | 14 |
+| MiFi (11 gods) | CAO | 1,852 | 17 | 0.9% | 33 | 17 |
+| GrFi | CAO 0.20–0.21-a | 1,144 | 6 | 0.5% | 127 | 6 |
+| GrFi | CDI 0.29–0.32 | 7,304 | 3 | 0.04% | 149 | 3 |
+| GrHu (all wins with Okawaru) | CDI 0.31 | 4,347 | 7 | 0.16% | 20 | 7 |
+
+- **MiBe in 0.19-a won 4 of its 6 three-rune games.** MiBe in 0.29 won 1 of 17, and the other 16
+  died in Zot.
+- **The "15%" in `docs/accomplishments.md` is not in the public logs.** The best public rate for a
+  combo with 100+ games is DDFi^Makhleb at 9.8% (CAO 0.19-a), and that is biased up by
+  god-at-end. The 15% is probably an offline or shorter-window figure. [I]
+- **qw's public MiBe funnel (0.29) against ours (0.34)** [V; that the versions explain the
+  difference is I]:
+
+| Reached | Public 0.29 (808 games) | Ours (8,623) |
+|---|---|---|
+| Died on D:1–5 | 26% (gnoll 33, Sigmund 25, orc wizard 16) | 22% (gnoll, Sigmund, orc wizard) |
+| Lair | 46% | 52% |
+| First rune | 5.9% | 6.4% |
+| Zot:1 | 2.1% | 0.42% |
+| Won | 0.12% | 0.035% |
+
+  Up to the first rune the two match. After it, the public 0.29 games reached Zot 5 times as often
+  (17 of 48 games with a rune, against our 36 of 556). Only 20 of the 808 died in Vaults, against
+  our 311 of 8,620 deaths.
+
+### Morgues read
+
+All morgues are qw's own. Losses L1–L5 are MiBe^Trog games with three runes, picked as the deep
+deaths.
+
+- W1–W8 and L1–L7 were each read in their header, inventory, final notes and final messages, plus
+  their Zot notes in full, by script (`morgue.py`) and by eye.
+- All 96 CDI Zot deaths with three runes and all 19 CDI wins were then parsed by `zotbatch.py`.
+- AC/EV/SH and HP are values at the end of the game.
+
+**Wins**
+
+| # | Morgue | Version, combo | Turns | AC/EV/SH (sum) | Resists at end | Kit | Left at end: HW / tele | Lowest HP | In Zot |
+|---|---|---|---|---|---|---|---|---|---|
+| W1 | [20220913-002803](https://crawl.dcss.io/crawl/morgue/qw/morgue-qw-20220913-002803.txt) | 0.29 MiBe^Trog | 71,339 | 56/19/29 (104) | rF+ rC+ rPois, no rElec, Reflect | +9 war axe of protection, +11 gold dragon scales, tower shield | 0 / 4 | 20/231 on Vaults:5; 45/273 on Zot:4 | 9,817 turns. 3 teleport reads, each bridged by heal wounds (stacks 12→11, 11→6, 6→5). 25 rages |
+| W2 | [20220911-050638](https://crawl.dcss.io/crawl/morgue/qw/morgue-qw-20220911-050638.txt) | 0.29 GrDe^Oka | 56,867 | 56/9/29 (94) | rF+ rC+ rElec rPois rCorr | +9 vampiric broad axe, gold dragon scales, tower shield | 8 / 17 | 2/32 on D:3 | 6,019 turns. No teleport, no heal wounds |
+| W3 | [20240120-013941](https://crawl.dcss.io/crawl/morgue/qw/morgue-qw-20240120-013941.txt) | 0.31 GrHu^Oka | 45,598 | 55/41/0 (96) | rElec rPois, no rF/rC | +10 longbow, quicksilver dragon scales | 17 / 14 | 35/176 on Vaults:5 (its only low-HP note) | 6,207 turns, never low |
+| W4 | [20240124-012829](https://crawl.dcss.io/crawl/morgue/qw/morgue-qw-20240124-012829.txt) | 0.31 DjHu^Oka | 43,509 | 31/40/0 (71) | rF+++ rC+ rPois rCorr, no rElec | +27 heavy crossbow "Sniper", swamp dragon scales | 4 / 8 | 13/175 on Depths:2; 31/200 on Zot:2 | 1 teleport read, 2 heal wounds |
+| W5 | [20240202-063259](https://crawl.dcss.io/crawl/morgue/qw/morgue-qw-20240202-063259.txt) | 0.31 DgHu (no god) | 42,872 | 15/83/5 (103) | rC+ only | arbalest "Damnation", leather armour, two +6 rings of dexterity | 8 / 21 | 32/174 on Depths:2; 48/198 on Zot:1 | 7 teleport reads and 7 heal wounds (stack 14→9) |
+| W6 | [20230520-020802](https://crawl.dcss.io/crawl/morgue/qw/morgue-qw-20230520-020802.txt) | 0.30 GrFi^Oka | 62,467 | 73/22/27 (122) | rF+ rC+ rElec rPois | +9 vampiric war axe, +11 gold dragon scales, tower shield | 5 / 22 | 7/88 on Lair:5; 34/171 on Zot:2 | 1 teleport read, 3 heal wounds |
+| W7 | [20160531-015616](https://crawl.akrasiac.org/rawdata/qw/morgue-qw-20160531-015616.txt) | 0.19-a MiBe^Trog | 61,551 | 53/27/0 (80) | rF+ rC+ rElec rPois | +9 vampiric battleaxe, +5 plate, no shield; also wands of teleportation and heal wounds (0.19 items) | 3 / 19 | 27/273 on Zot:5 (Orb Guardian) | No teleport, no heal wounds. 17 rages |
+| W8 | [20160603-140931](https://crawl.akrasiac.org/rawdata/qw/morgue-qw-20160603-140931.txt) | 0.19-a MiBe^Trog | 71,178 | 34/33/28 (95) | rF+ rC+ only | +8 broad axe of speed, +5 plate, large shield | 0 / 0 | 2/146 on Snake:2 (Aizul); 18/271 on Zot:4 | 3 teleport reads and 3 heal wounds, using up both |
+
+The CAO morgues (W7, W8) are served gzip-compressed under a `.txt` name.
+
+**Losses**
+
+| # | Morgue | Version, combo | Turns | AC/EV/SH (sum) | Resists at end | Kit | Left at end: HW / tele | Death | Status at death, last turns |
+|---|---|---|---|---|---|---|---|---|---|
+| L1 | [20220904-102411](https://crawl.dcss.io/crawl/morgue/qw/morgue-qw-20220904-102411.txt) | 0.29 MiBe^Trog | 61,447 | 48/21/28 (97) | rF++ rC+ rN+ rPois rCorr, no rElec | +14 obsidian axe, +16 plate of the Crypt, tower shield | 0 / 12 | Zot:5, orb of fire | About to teleport, berserk cooldown, slowed. Read 4 teleports and drank 8 heal wounds in its last 52 turns; died 8 turns after the last read |
+| L2 | [20220906-054518](https://crawl.dcss.io/crawl/morgue/qw/morgue-qw-20220906-054518.txt) | 0.29 MiBe^Trog | 68,482 | 37/18/28 (83) | rF+ rC+ rN+ rElec rPois | +4 broad axe, gold dragon scales, tower shield | 0 / 0 | Zot:2, white draconian | Berserk cooldown. Banished from Zot:2 to the Abyss, returned, died 21 turns later with no healing or teleport left |
+| L3 | [20220907-003446](https://crawl.dcss.io/crawl/morgue/qw/morgue-qw-20220907-003446.txt) | 0.29 MiBe^Trog | 59,324 | 42/12/26 (80) | rF+++ rC+ rN+ rElec rPois rCorr | +5 broad axe, +8 plate, tower shield | 13 / 9 | Zot:1, red draconian scorcher, 33 turns after entering Zot | Raged, then slowed; read teleport; "You feel the Orb delaying your translocation!"; died the same turn holding 13 heal wounds |
+| L4 | [20220912-210912](https://crawl.dcss.io/crawl/morgue/qw/morgue-qw-20220912-210912.txt) | 0.29 MiBe^Trog | 61,750 | 24/18/36 (78) | rF+++ rC++ rElec rPois | +9 vampiric broad axe, chain mail, +8 tower shield | 0 / 5 | Zot:5, Orb Guardian | About to teleport, berserk cooldown, slowed. At 3/242 HP, drank its last 7 heal wounds over 7 turns, then read 2 more teleports and died 1 turn after the last |
+| L5 | [20220908-193156](https://crawl.dcss.io/crawl/morgue/qw/morgue-qw-20220908-193156.txt) | 0.29 MiBe^Trog | 62,317 | 58/13/29 (100) | rF+ rC+ rPois, no rElec | +8 broad axe, +11 gold dragon scales, tower shield | 2 / 12 | Zot:1, yellow draconian knight | About to teleport, berserk cooldown, slowed. Stairdanced from Zot:2, read teleport, drank 3 heal wounds, died 4 turns after the read |
+| L6 | [20240119-223626](https://crawl.dcss.io/crawl/morgue/qw/morgue-qw-20240119-223626.txt) | 0.31 GrHu^Oka | 46,735 | 52/2/0 (54) | rF+ rC++ rN+ rElec rPois | +6 arbalest "Damnation", ring mail | 1 / 20 | Zot:5, green draconian monk | Paralysed by a dread lich, about to teleport, slowed. Read teleport, drank 6 heal wounds, died 9 turns later |
+| L7 | [20240202-191055](https://crawl.dcss.io/crawl/morgue/qw/morgue-qw-20240202-191055.txt) | 0.31 SpHu^Oka | 41,633 | 9/66/0 (75) | rF+++ rC+++ rN+ rElec rPois rCorr | +8 hand cannon, troll leather armour | 5 / 5 | Zot:1, black draconian, 100 turns after entering Zot | About to teleport. Retreated for at least 18 turns, read teleport, drank 3 heal wounds, died 5 turns later |
+
+What these 15 morgues show [V for each fact; the reading is I]:
+
+- 6 of the 7 losses died with a teleport pending. The seventh (L2) had no teleport left.
+- All 5 MiBe losses died on berserk cooldown, and 4 of them slowed: the same rage-then-slowed
+  death as ours.
+- Draconians killed 5 of the 7 losses. An orb of fire and an Orb Guardian killed the other two,
+  both on Zot:5.
+- The winners' worst moments in Zot (45/273, 31/200, 48/198, 34/171, 27/273, 18/271) were often
+  milder than their worst moments earlier (2/32, 7/88, 13/175, 2/146).
+  - W2, W3 and W7 never read a teleport in Zot. In the 19 CDI wins, 6 never read one there.
+
+### All 96 CDI Zot deaths with three runes against the 19 CDI wins [V]
+
+From `zotbatch.py` over the morgues in `public/morgues/cdi-all/` (3 quit games dropped).
+
+| | 19 wins | 96 Zot deaths |
+|---|---|---|
+| AC+EV+SH at end, median (range) | 96 (60–122) | 97.5 (24–134) |
+| Heal wounds drunk in Zot, mean / median | 3.3 / 3 | 2.8 / 1 |
+| Turns in Zot, mean | 6,751 | 3,158 |
+| Teleports read in Zot, mean | 1.7 | 2.3 |
+| Read a teleport in the last 15 turns | – | 79 (median 2 turns before death, at most 14) |
+| "About to teleport" at death | – | 81 |
+| "Orb delaying your translocation" in the final message block | – | 45 |
+| Died holding heal wounds / holding teleportation | – | 49 / 92 |
+| rElec at end | 15 | 79 |
+| Died on Zot:1 / 2 / 3 / 4 / 5 | – | 28 / 16 / 14 / 15 / 23 |
+
+Pooled across combos, the defences are the same. GrFi, with high AC, is 47 of the 96 deaths and
+only 3 of the 19 wins. Within a combo, the median win is higher [V]:
+
+| Combo | Wins: AC+EV+SH | Zot deaths: median (max) | Deaths at or above the best win |
+|---|---|---|---|
+| MiBe (CDI 0.29) | 104 | 85.5 (106) of 16 | 1 |
+| GrFi (CDI) | 103, 114, 122 | 108 (134) of 47 | 6 |
+| GrHu (CDI) | 81–101, median 94 | 81 (101) of 11 | 1 |
+| MiBe (CAO, from xlog) | median 96.5 of 4 | 70 of 3 | |
+| DDFi (CAO) | median 82 of 23 | 79 of 31 | |
+| GrBe (CAO) | median 97.5 of 14 | 84 of 5 | |
+| CAO, all combos | median 96 of 120 | 82 of 99 | |
+
+In CAO, the medians favour the wins in 8 of the 10 combos with 4+ such games. The exceptions are
+MfBe and VpFi.
+
+### Our claims against the public record
+
+| Our claim | Verdict | Evidence |
+|---|---|---|
+| Zot is where three-rune qw games die | **Supported** for games aimed at a three-rune win | CDI bot logs: 91 of the 118 three-rune deaths were in Zot; the rest were in Tomb, Slime and Depths on longer goal lists. MiBe 0.29: 16 of 16 in Zot. CAO: 99 of 189, plus 47 in Ziggurats, where qw's goals went past three runes. [V] |
+| Reaching Zot is the real filter, about 1 in 12 then wins | **Supported** for current qw | CDI: 19 of 219 (8.7%); MiBe 0.29: 1 of 17. Old qw converted far more: in CAO 0.19-a, 80 of 163 three-rune games won, MiBe 4 of 6. [V] |
+| Winners have more defence (AC+EV+SH) | **Partly supported** | Within a combo the median win is higher in 13 of 15 combos. Pooled on CDI there is no difference (96 against 97.5). Our "every Zot death ≤ 100" does not hold as a rule: a public MiBe death had 106, above its win's 104. These are end values, and drain and corrosion lower the deaths'. [V] |
+| Winners drink more heal wounds in Zot | **Not supported as a cause** | CDI wins drank more in total (3.3 against 2.8), but over twice as many Zot turns. 5 of the 19 wins drank none. 49 of 96 deaths still held heal wounds. W1 (MiBe) did bridge each teleport with heal wounds, like our 600058. [V] |
+| The Zot teleport delay defeats qw's escape | **Supported** | 81 of 96 CDI Zot deaths were "about to teleport", and 79 had read a teleport within 15 turns (median 2). The delay message appears in 0.29 on Zot:1 without the Orb (L3), so the rule is not new in 0.34. 92 of 96 died holding teleport scrolls. [V] Whether CAO 0.19-a had the delay cannot be told from these morgues. |
+| Early luck matters most | **Cannot tell** | Every public game has its own seed (all 62,571 CDI games that record a seed have distinct ones), so the seed's share cannot be measured. What is visible: early deaths dominate (MiBe 0.29: 26% die on D:1–5 to gnolls, Sigmund and orc wizards, as in ours). [V for the counts] |
+| qw dies in or just after a rage | **Supported** for MiBe | All 5 public MiBe losses read died on berserk cooldown, 4 slowed. CDI Zot deaths overall: 34 of 96 slowed, 21 on berserk cooldown. Most are Okawaru games, which cannot rage. [V] |
+
+### Sources that failed or were not used
+
+- **dcss-stats.com** returned 429 (the earlier fetch) and its API returned nothing. Its per-player
+  breakdowns are not used.
+- **crawl.develz.org/scoring/players/qw.html**: 404.
+- **CSZO** (crawl.s-z.org, 2013–15): unreachable, so its games are not counted. Only its 26 wins
+  are known, from the CAO scoring page. qw's CSZO win rate is unknown.
+- **The `qwqw` morgues** that `accomplishments.md` lists for 0.29 returned 404. qwqw's 0.29 games
+  on CDI are not in the logfiles we read (one qwqw line in all of them).
+- **Sequell** is IRC-only and was not queried. Its numbers may differ in which servers and
+  accounts it counts.
+- **The CAO milestones** (several GB for trunk) were not fetched, so CAO has no Zot-entry count.
+- **Devteam posts and the Tavern** were not searched. No tournament page lists qw.
+- **Not checked**: the other servers (CXC, CUE, CBRO). The accomplishments page says online wins
+  are tracked under `qw`, and all 153 scoring-page wins are on CSZO, CAO or CDI.
+
 ## Sources and what is missing
 
 - **Our games.**
@@ -374,10 +569,18 @@ The seed explains about half of early outcomes and little of the late ones (sect
   `tools/qw/patches.py`, and the deployed `runs/qw/build-zk/qw.lua`. `/data/qw/lib` is now the zk
   build (same md5 as lib-zk), not fix1 as docs/qw-teacher.md says.
 - **DCSS 0.34 source** (container `/crawl`): `spl-transloc.cc`:930–962 and `orb.cc`:83.
+- **Public games** (section 7):
+  - Logfiles and milestones from crawl.akrasiac.org and crawl.dcss.io (links in section 7).
+  - The morgue trees `crawl.akrasiac.org/rawdata/qw/` and `crawl.dcss.io/crawl/morgue/qw/`.
+  - The copies are in `/Users/earchibald/.claude/jobs/1cdb9134/tmp/qw-wins/public/`
+    (`dl/`, `morgues/`). An earlier fetch is in `.../qw-wins/web/`; it has the same CAO and CDI
+    counts.
 - **Not established**:
-  - qw's public win rate by version and combo (Sequell, the scoring pages, the crawl.dcss.io morgue
-    directories). That research had not reported when this was written.
-  - Public winning and losing morgues, which were not read.
+  - qw's win rate on CSZO (2013–15, unreachable); only its 26 wins are known.
+  - Zot-entry counts for CAO (milestones not fetched).
+  - Sequell's own figures (not queried) and dcss-stats.com (429).
+  - Whether qw's 0.19-era Zot had the teleport delay.
+  - How much of the outcome the seed decides in public games: every public game has its own seed.
 - **Caveats**:
   - n = 3 wins on 2 seeds. Every win-against-loss difference in section 2 is suggestive, not
     significant.
