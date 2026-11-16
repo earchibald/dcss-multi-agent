@@ -98,11 +98,12 @@ class Style:
                               # reach, and one of them awake and coming (`hold_ground`): wait for them, up to k waits
                               # in a row, as qw's `plan_melee_wait_for_enemy` does, instead of walking to them.
                               # 0 = off. Off by default.
-    kit: float = 0.0          # 1 = with nothing in view and no rage on, put on the rings and amulets worth wearing (by qw's
+    kit: float = 1.0          # 1 = with nothing in view and no rage on, put on the rings and amulets worth wearing (by qw's
                               # valuation, `gear.JEWEL_VALUES`), read known enchant armour, enchant weapon and brand weapon
                               # scrolls, answer those scrolls' prompts with the armour or weapon in use instead of cancelling
                               # them, and rank and pick up the tower shield (`gear.KIT_ARMOURS`). Automatic steps taken
-                              # before the brain's choice (`BrainTiers.auto_step`), not actions. 0 = off. Off by default.
+                              # before the brain's choice (`BrainTiers.auto_step`), not actions. 0 = off. On by default
+                              # since it passed its test on fresh dungeons (docs/trained-brain.md).
     hand: float = 0.0         # 1 = invoke Trog's Hand when a monster on qw's `hand_monsters` list is in view (`hand_wanted`),
                               # as an automatic step before the brain's choice. 0 = off. Off by default.
 
@@ -125,7 +126,7 @@ class Style:
 
 # Style keys whose default has changed since they were added, with the value they were added at: a run
 # saved before the key existed was played with this value.
-STYLE_ADDED_AS = {"recover": 0.0, "retreat": 0.0, "teleport": 0.0, "unseen": 0.0}
+STYLE_ADDED_AS = {"recover": 0.0, "retreat": 0.0, "teleport": 0.0, "unseen": 0.0, "kit": 0.0}
 
 
 SERIOUS_POISON = 65       # % of current HP the poison will take: the game's "seriously poisoned" (status.cc)

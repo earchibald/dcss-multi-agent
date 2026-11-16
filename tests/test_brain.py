@@ -2115,7 +2115,7 @@ def test_retreat_and_stairs_switches_are_styles_and_old_runs_still_match():
     assert Style.saved(old) != Style()
     # one saved with recover but before retreat existed
     assert Style.saved({**old, "recover": 1.0}) == Style(recover=1, retreat=0)
-    assert Style.saved(None) == Style(recover=0, retreat=0, teleport=0, unseen=0)
+    assert Style.saved(None) == Style(recover=0, retreat=0, teleport=0, unseen=0, kit=0)
 
 
 def test_retreat_level_3_also_leaves_a_fight_met_while_exhausted():
@@ -2668,12 +2668,12 @@ def kit_state(*items, hostile=None, **player_fields):
     return state
 
 
-def test_kit_and_hand_are_off_by_default_and_off_plays_as_before():
+def test_kit_is_on_and_hand_off_by_default_and_off_plays_as_before():
     from ladder.brain import gear
-    assert Style().kit == 0 and Style().hand == 0
+    assert Style().kit == 1 and Style().hand == 0
     ring, scroll = jewel("+4 ring of protection", "c", plus=4), item("scroll of enchant armour", SCROLLS, 1, ord("c"))
     for st in (kit_state(ring, scroll), kit_state(ring, scroll, hostile="orc sorcerer", piety_rank=3)):
-        tiers = BrainTiers(rng=random.Random(0))
+        tiers = BrainTiers(style=Style(kit=0), rng=random.Random(0))
         assert tiers.next_action(st) not in ("put_on", "read_kit", "trogs_hand") and tiers.auto is None
         assert tiers.auto_step(st, st.hostiles()) is None
     # nor does the tower shield count without it, in the wear ranking or in what the model sees
@@ -2682,7 +2682,7 @@ def test_kit_and_hand_are_off_by_default_and_off_plays_as_before():
     assert gear.upgrades(shield, {"body": "1"}, kit=True)["wear"] == "c"
     assert observe(shield, [], {"worn": {"body": "1"}})["inv"]["wear"] == 0
     assert observe(shield, [], {"worn": {"body": "1"}, "kit": True})["inv"]["wear"] == 1
-    assert BrainTiers(rng=random.Random(0)).describe().keys() == {"model", "epsilon", "style"}
+    assert BrainTiers(style=Style(kit=0), rng=random.Random(0)).describe().keys() == {"model", "epsilon", "style"}
 
 
 def test_kit_and_hand_add_no_action_and_change_no_input():
@@ -2873,4 +2873,4 @@ def test_kit_and_hand_are_styles_and_old_runs_still_match():
     from ladder.brain.cli import _style
     assert _style(argparse.Namespace(style=["kit=1", "hand=1"])) == Style(kit=1, hand=1)
     old = {k: v for k, v in Style().to_dict().items() if k not in ("kit", "hand")}
-    assert Style.saved(old) == Style()
+    assert Style.saved(old) == Style(kit=0) and Style.saved(old) != Style()   # a run saved before kit played without it
