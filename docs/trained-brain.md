@@ -4375,6 +4375,220 @@ calm=1`) is behind `calm=1` alone, which itself failed its fresh test. Seeds 691
   `scans.py`, `diverge.py`, `tailgame.py`, `jobs-*.txt`; copies of `arms.py`, `seeds.py`, `verify.py`, `same.py`,
   `mindex.py`, `refresh.sh` and `chain.sh` (now with `MAXSTEPS` and `MAXTURNS`) from `brain-v6l/`.
 
+#### The Lair detour gated by XL, with a step back from packs and a shallower turn: closer, still behind (2026-11-17, late morning)
+
+The previous section found that the Lair detour loses depth because our characters go in too weak and die there. This
+section looks at what was known at the moment of going in, builds three refinements of `lair=1` as opt-in keys (`lairxl`,
+`lairtele`, `lairflee`, `lairdeep`; four keys, one of them a second gate), and tunes them with and without `calm=1`.
+**Result: entering only at XL 11 or more cuts the deaths in the Lair from about half of those who go in to about a
+third, and the step back from a pack on arrival brings Lair:1's deaths down to qw's rate. But no configuration is ahead
+of the defaults: without `calm` the best arms are −0.07 [−0.14, −0.01]; with `calm=1` they are +0.17 and +0.22 against
+the defaults (intervals from −0.28 to +0.67) and −0.14 [−0.24, −0.03] and −0.09 [−0.20, +0.03] against `calm=1` alone.
+No fresh test was played; seeds 691800–692399 are unspent.**
+
+**What separates the games that came out of the Lair from the ones that died there** (measured, `lairgate.py`; the 158
+games that went in in `v6m/{A,C}-{l1,lc}`; the state at the last choice in the Dungeon before the first in the Lair;
+"out / died", 7 others left out).
+- **XL is the clearest single separator.** XL 8: 1 / 3; 9: 9 / 15; 10: 24 / 49; 11: 24 / 21; 12: 4 / 1. HP max (which
+  follows XL for a Minotaur) the same way: under 100, 49 / 81; 100 or more, 13 / 8.
+- **A teleport scroll held, and Berserk available** (not raging, not "-Berserk", not slowed after a rage): no teleport
+  12 / 36 (71% died), one 13 / 20, two or more 37 / 33; Berserk not available 12 / 32, available 50 / 57. Healing potions
+  (heal wounds or curing) held: none 17 / 40, one 10 / 17, two or more 35 / 32.
+- **AC matters less than XL**: under 15, 7 / 21; 15–18, 31 / 38; 19–22, 17 / 24; 23 or more, 7 / 6. The entrance's level
+  (D:8–11) hardly at all.
+- In a logistic fit of dying against all of them together (standardised), teleport held (z −2.7) and Berserk available
+  (z −2.1) stand out; XL, HP max and AC are too tied to each other to separate (each |z| ≤ 1). 158 games is few:
+  description, not a model to rely on.
+- **Entrants each gate would keep, and their outcome** (out / died): none 158 (62 / 89); XL ≥ 10: 128 (52 / 71); **XL ≥ 11:
+  52 (28 / 22, 42% died; skipped 106, of which 67 died)**; XL ≥ 12: 6 (4 / 1); AC ≥ 18: 73 (33 / 36); teleport held: 107
+  (50 / 53); two healing potions: 71 (35 / 32); XL ≥ 11 and teleport: 38 (22 / 14); XL ≥ 11 and AC ≥ 18: 35 (20 / 13);
+  XL ≥ 11 and a healing potion: 32 (19 / 11).
+- **By Lair level**, for those who went in at XL 11 or more against under 11 (died / reached): Lair:1 3 / 52 against
+  31 / 106, Lair:2 7 / 49 against 17 / 73, Lair:3 5 / 42 against 13 / 57, Lair:4 6 / 36 against 2 / 44. So the XL gate
+  removes mostly Lair:1's deaths, and for the stronger entrants Lair:4 is the worst level (17%): the case for
+  `lairdeep=3`.
+- **Packs on arrival.** Of 778 arrivals on a Lair level, 105 had three or more hostiles in view at the first choice;
+  19 of them died on that visit (18%), against 36 of 458 (8%) arriving with none in view. Of the 89 deaths, 19 had three
+  or more in view at the first choice and 47 within the first 30 turns. Most often in view on arrival (visits / died on
+  that visit): yaks 58 / 9, water moccasins 58 / 10, cane toads 54 / 7, komodo dragons 40 / 11, bullfrogs 36 / 4, blink
+  frogs 30 / 5, black mambas 23 / 8, death yaks 11 / 5.
+- **What a gate on XL would mean for the games that find the entrance first** (`xlreach.py`: in the same dungeon
+  without the detour, where the character first reaches XL 11, counted from the entrance's level). Without `calm`, of 63
+  games that found it: XL 11 already 9; reached within 3 levels below 26; more than 3 below 4; never (died first) 24.
+  With `calm=1`, of 119: 39, 54, 3 and 23. For XL 12, without `calm` 40 of 63 never reach it and 11 more only past 3
+  levels below, so `lairxl=12` was not run without `calm`.
+
+**What qw does** (`runs/qw/build-zk/qw.lua`; read, not run).
+- **On arriving next to a pack** it goes straight back up: `plan_stairdance_up` (14743–14753) is the first of its
+  emergency plans (`set_plan_emergency` 12594–12644, before teleport, healing, Trog's Hand and Berserk), and
+  `want_to_stairdance_up` (14688–14741) says yes when it stands on an up staircase with at least one alert enemy able to
+  follow adjacent and at least one other enemy in view, or with none adjacent when `want_to_flee` holds. It does not
+  count threat, tracks no arrival time (standing on the up staircase is what makes it "on arrival"), will not do it
+  while raging or at a third of its HP or less with a follower adjacent, and stops after 20 per level
+  (`stairdance_count`). It fights the followers upstairs.
+- **Yaks and death yaks** have no entry anywhere: no yak, death yak, komodo dragon, elephant, black mamba or cane toad
+  appears in the file. They count only through the general threat sum (`assess_enemies_func` 8327–8357,
+  `monster_threat` 8581–8646), which decides Berserk (`want_to_berserk` 12339–12362: threat within two squares of 5–10 by
+  XL, or HP at half with an enemy close) and teleport or flight (`want_to_teleport` 12187–12227, `want_to_flee`
+  8701–8760: total threat of 10–20 by XL). Hydras alone have special handling (a scary entry below XL 17 with a bad
+  weapon, a weapon swap).
+- **No XL or AC gate on the Lair**: `ready_for_lair` (4571–4596) is by god and piety only, always for Trog, and the depth
+  explored there is set by its goal list only.
+
+**The keys** (`src/ladder/brain/route.py`, `LairRoute`; `Style` in `policy.py`). All off by default, all refinements of
+`lair` (without `lair` they do nothing), all automatic steps; no action, observation or feature changes.
+- **`lairxl=N`**: the route goes in only at XL N or more (`LairRoute.ready`). Below it the entrance is left alone and
+  the rules descend the Dungeon as they would without the detour. When XL N is reached on a level within `LAIR_CLIMB`
+  (3) levels below the entrance, the route climbs back where the rules would go down, as it already did after a shaft,
+  finds the entrance again on the new visit and goes in. **An entrance left more than 3 levels above while still under
+  XL N gives the route up** ("left too far above, not ready"), on arriving on that level: it could never climb back.
+  This happened in 8 of the 65 games that found the entrance without `calm` (`lairxl=11`), and 3 of 118 with it; in
+  another 23 (without) and 28 (with `calm`) the character died before reaching XL 11 while the route waited; 23 and 49
+  reached it later within 3 levels below, and 11 and 38 had it on finding the entrance.
+- **`lairtele=N`** (the second gate, from the teleport counts above): likewise, only with N or more known teleport
+  scrolls in the pack. Built and tested; not tuned (below).
+- **`lairflee=1`**: arrived on a Lair level by going down, still on the arrival square (an up staircase), within
+  `LAIR_FLEE_TURNS` (30) turns, not raging, with `LAIR_FLEE_N` (3) or more hostiles in view: an automatic step,
+  "lair_flee", takes `<` at once, before the rules choose. Then, where the rules would go down again, the route waits a
+  turn at a time (`s`, "lair_wait") until `LAIR_FLEE_WAIT` (50) turns have passed, then lets the rules (or the route)
+  descend. At most `LAIR_FLEE_MAX` (2) flights from each Lair level; after that the rules fight there as before. A
+  flight out of Lair:1 counts as an entry, as before (3 at most).
+- **`lairdeep=K`**: the deepest Lair level explored before the way back, in place of 4 (`lair=1`) or 5 (`lair=2`).
+- Tests (`tests/test_brain.py`): the refinements are off by default and `lair=1` alone has no gate, flight or wait;
+  `lairdeep` turns back at its level; `lairxl` goes on down while under, climbs back once reached, gives up when left
+  too far above, and as after a shaft past the bound; `lairtele` counts only known teleport scrolls; `lairflee` goes up
+  from three, not two, waits, then descends, and not off the arrival square, after 30 turns, when raging, when arrived
+  going up, or past its bound; `test_saved_models_still_load_and_choose_the_same_with_the_switches_on_or_off` now also
+  with all four keys on (the plain level, a level with a branch staircase, and a Lair arrival with two yaks, where the
+  model chooses as without, and three, where the flight comes first and the model is not asked).
+
+**Play is unchanged without the new keys** (`same.py`, step limit 12,000): `lair=1` on 500040–500048 (`v6n/A-chk1`; six
+of them went into the Lair in `v6m/A-l1`) against `v6m/A-l1`, and no `--style` on 500027–500035 (`v6n/A-chk0`)
+against `v6k/A-ref`: 18 of 18 identical, the same deepest level, final turn and end, and the same choices step by step.
+In the smoke run (`v6n/smoke-xf`, `lair=1 lairxl=11 lairflee=1`, the same nine seeds as `A-chk1`) the games that never
+found the entrance, and two that found it and never went in, were identical to the reference; one more (500045) that
+never went in parted from it at the scan of D:8 (the rc's key, as the previous section found once on D:5), not at
+anything the new keys do. Seen in it: two flights up out of Lair:1 from the same three (a bullfrog, a torpor snail, a
+yak) 340 turns apart in 500040, which then died on Lair:2; in 500042 two flights from a water moccasin and wolves, then
+Lair:1–4 explored, out at XL 13 and down to D:13 (the reference died on D:11).
+
+**Tuning.**
+- **Method** as in the previous section: this tree, no model, epsilon 0, A (500000–500199) and C (540000–540199) only, 9
+  workers, `--max-steps 12000 --max-turns 40000` in every arm; paired by dungeon over games both finished and neither
+  stale nor off its seed (`arms.py`, `verify.py`; 540052 hung in every C run, as in the references; 540162 in `C-xfd`
+  and 500034 in `A-xfd`, both deaths on D:1, left no morgue to check and are left out); 95% bootstrap over dungeons,
+  10,000 resamples. **The gate was chosen from games on these same two blocks** (the `v6m` runs), so any gain here would
+  be optimistic.
+- **Arm order** (07:09–11:07): C-x11, A-x11, A-xf, C-xf, C-xfd, A-xfd, A-cxd, C-cxd, C-cxfd, A-cxfd. No game reached the
+  step or turn limit. The server's disk stayed at 52%.
+- `lairxl=12` was replaced by `lairxl=11` with `lairdeep=3` (too few reach XL 12 without `calm`, above), and `lairtele`
+  was not run: after the first round no gated arm was ahead, and a further gate would only keep fewer entrants.
+
+| arm (`--style`) | A: mean depth | C: mean depth | − ref, A | − ref, C | **− ref, pooled** (dungeons) | − `calm=1`, pooled |
+| --- | --- | --- | --- | --- | --- | --- |
+| reference (`v6k/*-ref`) | 7.84 | 7.51 | | | | |
+| `calm=1` (`v6k/*-calm`) | 7.95 | 8.03 | | | +0.31 [−0.16, +0.77] (failed its fresh test) | |
+| `lair=1` (`v6m`, before) | 7.49 | 7.28 | −0.35 | −0.24 | −0.30 [−0.43, −0.17] (399) | |
+| `lair=1 lairxl=11` | 7.82 | 7.40 | −0.03 [−0.12, +0.06] | −0.12 [−0.22, −0.03] | **−0.07 [−0.14, −0.01]** (399) | |
+| `lair=1 lairxl=11 lairflee=1` | 7.79 | 7.37 | −0.06 [−0.17, +0.04] | −0.15 [−0.24, −0.07] | **−0.10 [−0.17, −0.04]** (399) | |
+| `lair=1 lairxl=11 lairflee=1 lairdeep=3` | 7.77 | 7.45 | −0.08 [−0.18, +0.02] | −0.07 [−0.16, +0.01] | **−0.07 [−0.14, −0.01]** (397) | |
+| `lair=1 calm=1` (`v6m`, before) | 7.64 | 7.72 | −0.20 | +0.21 | +0.01 [−0.44, +0.45] (399) | −0.30 [−0.46, −0.15] |
+| `calm=1 lair=1 lairxl=11 lairdeep=3` | 7.80 | 7.90 | −0.04 [−0.69, +0.61] | +0.39 [−0.26, +1.04] | **+0.17 [−0.28, +0.63]** (399) | −0.14 [−0.24, −0.03] (400) |
+| `calm=1 lair=1 lairxl=11 lairflee=1 lairdeep=3` | 7.94 | 7.86 | +0.10 [−0.56, +0.75] | +0.35 [−0.30, +0.99] | **+0.22 [−0.23, +0.67]** (399) | −0.09 [−0.20, +0.03] (400) |
+
+Against `calm=1` alone, block by block: `cxd` A −0.14 [−0.27, −0.03], C −0.12 [−0.29, +0.04]; `cxfd` A −0.01
+[−0.15, +0.14], C −0.17 [−0.34, +0.01].
+
+- **No arm meets the rule for a fresh test.** Without `calm`, every arm is below the defaults in both blocks. With
+  `calm=1`, neither arm is clearly ahead of the defaults (both intervals reach −0.2 or lower, and A is about level), and
+  **both are behind `calm=1` alone, which itself failed its fresh test**; a configuration with `calm=1` would have had to
+  be clearly ahead of `calm=1` alone to qualify.
+
+**What the route did** (A + C; `lairstats.py`, `split.py`; measured). qw: block A, `zk-heldout-200`, from the previous
+section.
+
+| | `lair=1` (before) | `lairxl=11` | `+ lairflee=1` | `+ lairflee=1 lairdeep=3` | `lair=1 calm=1` (before) | `calm=1 … lairdeep=3` | `calm=1 … lairflee=1 lairdeep=3` | qw |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| found the entrance | 63 | 65 | 63 | 63 | 119 | 118 | 118 | — |
+| went in | 51 | 23 | 22 | 22 | 107 | 72 | 71 | 99 of 199 |
+| died in the Lair | 33 (65%) | 10 (43%) | 12 (55%) | 8 (36%) | 56 (52%) | 26 (36%) | 24 (34%) | 29 (29%) |
+| came out | 15 | 11 | 9 | 13 | 47 | 45 | 42 | — |
+| on coming out: XL / AC | 11.9 / 21.0 | 12.6 / 20.9 | 12.9 / 20.5 | 12.2 / 18.9 | 12.8 / 21.1 | 12.4 / 21.0 | 12.5 / 20.9 | 13.8 / 24.3 |
+| flights up from a pack | — | — | 23 | 18 | — | — | 62 | — |
+
+Everyone gated went in at XL 11 (mean 11.0–11.1; AC 17.4–19.1, HP max 99) against XL 9.7–10.4 before.
+
+Deaths in the Lair per game reaching the level (paired games; the arms with `lairdeep=3` reach Lair:4–5 only through
+a shaft or a hatch):
+
+| level | `lairxl=11` | `+ lairflee=1` | `+ lairflee=1 lairdeep=3` | `calm=1 … lairdeep=3` | `calm=1 … lairflee=1 lairdeep=3` | `lair=1 calm=1` (before) | qw |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Lair:1 | 2 / 23 | 3 / 22 | 3 / 22 | 9 / 72 (13%) | 2 / 71 (3%) | 19 / 107 (18%) | 3 / 99 (3%) |
+| Lair:2 | 1 / 21 | 2 / 19 | 2 / 19 | 7 / 62 (11%) | 9 / 64 (14%) | 15 / 88 (17%) | 3 / 96 (3%) |
+| Lair:3 | 5 / 19 | 4 / 17 | 2 / 17 | 8 / 54 (15%) | 10 / 55 (18%) | 13 / 72 (18%) | 5 / 92 (5%) |
+| Lair:4 | 2 / 16 | 2 / 12 | 1 / 2 | 1 / 5 | 1 / 5 | 5 / 59 (8%) | 1 / 87 (1%) |
+| Lair:5 | 0 / 2 | 1 / 1 | 0 / 1 | 1 / 2 | 2 / 2 | 4 / 10 | 17 / 85 |
+
+Deaths per level visit on D:7–12 (before the Lair, or never in it / after coming out of it): defaults 163 / 840
+(19.4%); `calm=1` 167 / 972 (17.2%); `lairxl=11` 161 / 808 (19.9%) / 3 / 45 (6.7%); `+ lairflee=1` 161 / 803 / 2 / 31;
+`+ lairflee=1 lairdeep=3` 161 / 803 / 2 / 42 (4.8%); `calm=1 … lairdeep=3` 143 / 861 (16.6%) / 7 / 152 (4.6%); `calm=1
+… lairflee=1 lairdeep=3` 148 / 875 (16.9%) / 4 / 144 (2.8%); qw 33 / 431 (7.7%) / 4 / 174 (2.3%).
+
+The paired difference by what the route did in the arm's game (without `calm` against the defaults, with `calm` against
+`calm=1` alone; games, mean, sum):
+
+| group | `lairxl=11` | `+ lairflee=1 lairdeep=3` | `calm=1 … lairdeep=3` | `calm=1 … lairflee=1 lairdeep=3` |
+| --- | --- | --- | --- | --- |
+| never found the entrance | 334, +0.01 | 334, +0.00 | 282, −0.02 | 282, +0.02 |
+| found it, never went in | 42, −0.33 (sum −14) | 41, −0.32 (−13) | 46, −0.22 (−10) | 47, −0.21 (−10) |
+| went in and died there | 10, −1.60 (−16) | 8, −2.00 (−16) | 26, −2.69 (−70) | 24, −2.50 (−60) |
+| went in and came out | 11, +0.27 (+3) | 13, +0.38 (+5) | 45, +0.76 [+0.29, +1.24] (+34) | 42, +0.95 [+0.40, +1.50] (+40) |
+| went in, other | 2, −2.00 | 1, −4.00 | 1, −3.00 | 5, −2.20 |
+
+- **What it comes to.** The XL gate does what the counts said it would: the share of entrants who die in the Lair falls
+  from 52–65% to 34–43% (55% in one small arm, 12 of 22), against qw's 29%, and with `calm=1` about as
+  many come out as before (42–45 against 47) for half the deaths (24–26 against 56). The flight from a pack on arrival
+  brings Lair:1's deaths to qw's rate (2 of 71 against 9 of 72 without it), but the deaths move to Lair:2 and Lair:3
+  (19 against 15), where packs find the character away from the stairs; in total 24 against 26.
+- **Why it is still behind.** Three costs remain. (1) Each death in the Lair still costs 2–2.7 Dungeon levels, and a
+  third of the gated entrants still die there, 3 to 5 times qw's rate per level on Lair:2–3. (2) The games that found
+  the entrance and never went in lose about 0.2–0.3 levels each (sum −10 to −14): climbing back up to the entrance, and
+  the walk to it across a level, kill some characters the reference would have taken on down (for example 500055, 500069,
+  540008: the reference reached D:14–15, the arm died on D:10–11 on its way to the entrance), and a few play differently
+  from the scan alone. (3) A gated character comes back to the Lair from up to three levels below, so the levels it
+  then reaches after the Lair are partly levels it had already reached: those who came out gain +0.3 to +0.95, against
+  +1.0 to +1.3 before.
+- Measured against inferred: the counts, means and intervals above are measured; the three costs are read from the
+  split and from single games, not tested one at a time.
+
+**No fresh test was played.** No configuration was clearly ahead of the defaults in both blocks, and both `calm=1`
+configurations are behind `calm=1` alone. Seeds 691800–692399 are unspent.
+
+**No default was changed.**
+
+**What might still turn it around** (inferred; none tried):
+- **A Lair-only way of fighting.** The deaths that remain are on Lair:2–3, away from the stairs, against the same packs.
+  qw's threat-based Berserk and teleport, and its stair-dance anywhere it stands on an up staircase, not only on
+  arrival, are what differ.
+- **No climb back.** Entering only when XL 11 is reached on the entrance's own level (or within one level) would avoid
+  most of the "found it, never went in" cost, at the price of fewer entrants.
+- **Berserk available on entry** was the other clear separator above (z −2.1) and costs only a rest at the entrance.
+
+**Summary of the section.**
+- Measured: the split of 158 entrants by what was known on entering; where XL 11 is reached relative to the entrance;
+  that `lair=1` alone and play without switches are unchanged, step for step, on 18 dungeons; every tuning mean,
+  interval and count; that every game counted was on its seed; the tests: `uv run pytest -q` 544 passed, 5 deselected;
+  `uv run ruff check` clean.
+- Inferred: why the gated detour is still behind (the three costs), and what might turn it around.
+- Read, not run: qw's stair-dance and its handling of Lair monsters.
+- Not done: tuning `lairtele`; `lairxl=12`; a fresh test.
+- Runs: `runs/brain/v6n/A-chk1`, `A-chk0` (unchanged-play checks), `smoke-xf` (smoke run), `{A,C}-{x11,xf,xfd}`
+  (without `calm`), `{A,C}-{cxd,cxfd}` (with `calm=1`).
+- Scripts in the job's `brain-v6n/` scratch directory: `lairgate.py` (entry state against outcome, gates, arrivals),
+  `xlreach.py` (where XL N is reached relative to the entrance), `jobs-chk.txt`, `jobs-tune.txt`, `jobs-tune2.txt`;
+  copies of `arms.py`, `seeds.py`, `verify.py`, `same.py`, `split.py`, `lairstats.py`, `lairdeaths.py`, `diverge.py`,
+  `tailgame.py`, `mindex.py`, `refresh.sh` and `chain.sh` from `brain-v6m/`.
+
 ## What carried over from s1-battle, and what couldn't
 
 | s1-battle | here |

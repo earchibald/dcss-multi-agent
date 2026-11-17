@@ -158,6 +158,17 @@ class Style:
                               # with the rules as they are; then walk back up through the Lair and go on down the Dungeon from
                               # the entrance's level. Automatic steps ("lair_scan", "lair"), no action, no observation change.
                               # 0 = off. Off by default.
+    # Refinements of `lair`, each off by default (with all off, `lair` plays as it did before they existed); all act
+    # through `route.LairRoute`, as automatic steps, and change no action and nothing the model sees.
+    lairxl: float = 0.0       # N > 0 = go into the Lair only at XL N or more; while under it, go on down the Dungeon and come
+                              # back up for the Lair once XL N is reached, within `route.LAIR_CLIMB` levels (else given up).
+    lairtele: float = 0.0     # N > 0 = likewise, only with N or more known teleport scrolls in the pack.
+    lairflee: float = 0.0     # 1 = arrived on a Lair level going down, still on the arrival staircase up within
+                              # `route.LAIR_FLEE_TURNS` turns, not raging, with `route.LAIR_FLEE_N` or more hostiles in view:
+                              # straight back up ("lair_flee"), and wait `route.LAIR_FLEE_WAIT` turns before going down again;
+                              # at most `route.LAIR_FLEE_MAX` flights per Lair level.
+    lairdeep: float = 0.0     # K > 0 = the deepest Lair level explored before turning back (in place of 4 for lair=1, 5 for
+                              # lair=2).
 
     def weights(self) -> np.ndarray:
         return np.asarray([getattr(self, c) for c in COMPONENTS], dtype=np.float32)
@@ -899,7 +910,9 @@ class BrainTiers(StubTiers):
         self.disturbed = False                 # Style.calm 2: explore was just refused for a disturbance
         self.disturb_steps = 0                 # ...steps taken away from one on this level visit (DISTURB_MAX)
         self.cure_now = False                  # Style.cure: `cure_wanted` held at the last choice (curing, not heal wounds)
-        self.route = LairRoute(int(self.style.lair)) if self.style.lair else None   # Style.lair
+        self.route = LairRoute(int(self.style.lair), deep=int(self.style.lairdeep), xl=int(self.style.lairxl),
+                               tele=int(self.style.lairtele), flee=int(self.style.lairflee)) \
+            if self.style.lair else None       # Style.lair and its refinements
 
     # --- choosing ------------------------------------------------------
 
@@ -1028,6 +1041,8 @@ class BrainTiers(StubTiers):
         def ok(step: str) -> bool:
             return state.turn >= self.auto_blocked.get(step, 0)
 
+        if self.route and hostiles and ok("lair_flee") and self.route.flee_now(state, len(hostiles), "Berserk" in status):
+            return "lair_flee"
         if self.style.hand and hostiles and ok("trogs_hand"):
             if hand_wanted(state.player.get("god") or "", state.player.get("piety_rank", 0) or 0,
                            state.player.get("xl", 1) or 1, status, [m.name for m in hostiles],
@@ -1324,6 +1339,10 @@ class BrainTiers(StubTiers):
             return result
         if action == "lair":
             return self.lair_step(conn, state)
+        if action == "lair_flee":
+            self.count("lair_flee")
+            self.route.fled(state, [m.name for m in self.active_hostiles(state)])
+            return conn.act("<")
         if action == "disturb_step":
             way = disturb_square(state, self.disturb_steps)
             self.disturb_steps += 1
@@ -1552,6 +1571,9 @@ class BrainTiers(StubTiers):
         aim = route.target(state)
         if aim is None:
             return ActResult()
+        if aim == "wait":
+            self.count("lair_wait")
+            return conn.act("s")                # Style.lairflee: a turn upstairs before going down again
         if aim == "up" and where(state)[0] == "Lair":
             route.start_back(state)
         if aim == "entrance":

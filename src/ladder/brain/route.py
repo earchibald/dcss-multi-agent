@@ -25,13 +25,26 @@ shafts and stairs taken in a fight all land in the right phase.
 Every loop is bounded: LAIR_ENTRIES entries at most, LAIR_FAILS steps that went nowhere or found no way, and
 LAIR_CLIMB levels climbed back toward the entrance; past any of them the route is given up ("off") and the rules
 descend as they would without it.
+
+Opt-in refinements, each its own `Style` key, all off by default (with all of them off the route is as above):
+- `lairxl` = N, `lairtele` = N (gates, `ready`): go in only at XL N or more / with N known teleport scrolls or more.
+  Until then the entrance is left alone and the rules go on down the Dungeon; once the gates open, the route climbs
+  back to the entrance as it does after a shaft, at most LAIR_CLIMB levels. Left more than LAIR_CLIMB levels above
+  while a gate is shut, the route is given up ("left too far above, not ready"): it could never climb back.
+- `lairflee` = 1 (`flee_now`): just arrived on a Lair level by going down, still on the arrival staircase up, within
+  LAIR_FLEE_TURNS turns, not raging, with LAIR_FLEE_N or more hostiles in view: straight back up (qw's
+  `plan_stairdance_up` goes up from an up-staircase with an adjacent follower and another enemy in view, qw.lua
+  14688-14753; it tracks no arrival time). Then, where the rules would go down again, wait LAIR_FLEE_WAIT turns first
+  (`target` gives "wait"). At most LAIR_FLEE_MAX flights per Lair level; after that the rules fight there as before.
+- `lairdeep` = K: the deepest Lair level explored, in place of `lair`'s own (4 for lair=1, 5 for lair=2).
 """
 
 from __future__ import annotations
 
 import re
 
-from ..state import MF_STAIR_BRANCH, GameState
+from ..state import MF_STAIR_BRANCH, MF_STAIR_UP, GameState
+from .features import inventory
 
 LAIR_KEY = chr(9352)      # the rc's ladder_find_lair macro (LAIR_RC)
 LAIR_FLOORS = {1: 4, 2: 5}   # Style.lair -> the deepest Lair level explored before turning back
@@ -40,6 +53,11 @@ LAIR_FAILS = 5            # "lair" steps that went nowhere, or found no known wa
 LAIR_FROM = range(8, 12)  # the Dungeon levels the Lair's entrance is on (crawl-ref branch-data.h: BRANCH_LAIR, D 8-11)
 LAIR_NO_WAY = 2           # times the entrance had no known way to it (explore is then let go on) before giving up
 LAIR_CLIMB = 3            # Dungeon levels below the entrance's that the route climbs back from (else given up)
+LAIR_FLEE_N = 3           # `lairflee`: hostiles in view on arrival that send the character back up (72 of 89 fatal
+                          # Lair fights in v6m had three or more in view)
+LAIR_FLEE_TURNS = 30      # ...within this many turns of arriving, standing on the arrival staircase still
+LAIR_FLEE_WAIT = 50       # ...turns to wait upstairs, where the rules would go down again, before trying again
+LAIR_FLEE_MAX = 2         # ...flights per Lair level at most (qw: 20 stairdances per level, `stairdance_count`)
 
 # The rc lines `Style.lair` adds (selfplay.py). The scan covers every map cell relative to the character (the map is
 # 80 x 70), about 23,000 lookups: well inside the game's Lua throttle (50,000 instructions between pauses, 15 pauses).
@@ -73,8 +91,13 @@ class LairRoute:
     """The detour's state across levels. Phases: "seek" (not yet entered, or out again before the way back began),
     "in" (in the Lair, going down), "back" (on the way up), "done" (out at the entrance's level), "off" (given up)."""
 
-    def __init__(self, level: int):
-        self.floors = LAIR_FLOORS.get(int(level), 4)
+    def __init__(self, level: int, deep: int = 0, xl: int = 0, tele: int = 0, flee: int = 0):
+        self.floors = int(deep) or LAIR_FLOORS.get(int(level), 4)    # Style.lairdeep, else Style.lair's own
+        self.xl_min, self.tele_min, self.flee = int(xl), int(tele), int(flee)    # Style.lairxl, lairtele, lairflee
+        self.opened = False                    # the gates (`ready`) have been seen open
+        self.arrival: tuple | None = None      # `lairflee`: (level_seq, turn, square) of an arrival going down
+        self.flees: dict[int, int] = {}        # ...flights up per Lair level
+        self.hold_until = 0                    # ...the turn before which a descend waits instead
         self.entrance: tuple[int, tuple[int, int]] | None = None   # (Dungeon depth, map square)
         self.entrance_seq: int | None = None   # the level visit (`GameState.level_seq`) its square is counted in
         self.rescanned: int | None = None      # the visit last scanned, so a visit is scanned once at most
@@ -103,6 +126,11 @@ class LairRoute:
     def arrived(self, state: GameState, came_from: str) -> None:
         """A level change (`BrainTiers.observe`): move the phase on from where the character now is."""
         branch, depth = where(state)
+        self.arrival = None
+        if self.flee and branch == "Lair" and self.phase in ("seek", "done", "in"):
+            came_depth = came_from.rpartition(":")[2]
+            if not came_from.startswith("Lair") or (came_depth.isdigit() and int(came_depth) < depth):
+                self.arrival = (state.level_seq, state.turn, state.pos)     # arrived going down
         if branch == "Lair":
             if not came_from.startswith("Lair"):
                 self.entries += 1
@@ -128,6 +156,45 @@ class LairRoute:
         elif branch == "Dungeon" and self.phase == "done" and self.entrance and depth > self.entrance[0] and \
                 not any(e["what"] == "resume" for e in self.events):
             self.event("resume", state)
+        if branch == "Dungeon" and self.phase == "seek" and self.entrance and (self.xl_min or self.tele_min) and \
+                depth - self.entrance[0] > LAIR_CLIMB and not self.ready(state):
+            self.give_up("left too far above, not ready", state)
+
+    # --- the gates (Style.lairxl, Style.lairtele) ---------------------
+
+    def ready(self, state: GameState) -> bool:
+        """Whether the gates let the character go in now: XL `xl_min` or more, `tele_min` known teleport scrolls or
+        more. Always, with neither set. The first time they are seen open with a gate set, an event says so."""
+        if not (self.xl_min or self.tele_min):
+            return True
+        tele = inventory(state)["teleport"] if self.tele_min else 0
+        now = (state.player.get("xl", 0) or 0) >= self.xl_min and tele >= self.tele_min
+        if now and not self.opened:
+            self.opened = True
+            self.event("ready", state, tele=tele)
+        return now
+
+    # --- leaving a pack at the stairs (Style.lairflee) ----------------
+
+    def flee_now(self, state: GameState, n_hostiles: int, raging: bool) -> bool:
+        """`lairflee`: back up the stairs now: just arrived going down (this visit, within LAIR_FLEE_TURNS), on the
+        arrival square, which is a staircase up, LAIR_FLEE_N hostiles or more in view, not raging, and fewer than
+        LAIR_FLEE_MAX flights from this level so far."""
+        if not self.flee or self.arrival is None or raging or n_hostiles < LAIR_FLEE_N:
+            return False
+        seq, turn, pos = self.arrival
+        branch, depth = where(state)
+        return branch == "Lair" and state.level_seq == seq and state.turn - turn <= LAIR_FLEE_TURNS and \
+            state.pos == pos and state.cells.get(pos, {}).get("mf") == MF_STAIR_UP and \
+            self.flees.get(depth, 0) < LAIR_FLEE_MAX
+
+    def fled(self, state: GameState, names: list[str]) -> None:
+        """`lairflee`: a flight up taken: count it, and hold the next descend LAIR_FLEE_WAIT turns."""
+        depth = where(state)[1]
+        self.flees[depth] = self.flees.get(depth, 0) + 1
+        self.hold_until = state.turn + LAIR_FLEE_WAIT
+        self.arrival = None
+        self.event("flee", state, hostiles=len(names), names=sorted(set(names)))
 
     def needs_scan(self, state: GameState) -> bool:
         """Whether to press LAIR_KEY now: on a Dungeon level the Lair can hang from (LAIR_FROM), in "seek", either a
@@ -169,7 +236,12 @@ class LairRoute:
     def target(self, state: GameState) -> str | None:
         """Where the next "lair" step goes now: "entrance", "up", or None (the rules' own descend)."""
         branch, depth = where(state)
+        if self.flee and state.turn < self.hold_until and self.phase in ("seek", "in") and \
+                (branch == "Lair" or (self.entrance and depth == self.entrance[0])):
+            return "wait"                             # `lairflee`: wait upstairs a while before going down again
         if self.phase == "seek" and self.entrance and branch == "Dungeon":
+            if not self.ready(state):
+                return None                           # a gate is shut: the rules' own descend, on down the Dungeon
             if depth == self.entrance[0]:
                 # a square from another visit is no square here: scan first (`needs_scan`)
                 return "entrance" if self.entrance_seq == state.level_seq else None
@@ -200,6 +272,7 @@ class LairRoute:
             self.give_up(f"fails: {why}", state)
 
     def record(self) -> dict:
-        return {"floors": self.floors, "phase": self.phase, "entrance": list(self.entrance[1]) if self.entrance else None,
+        return {"floors": self.floors, "xl_min": self.xl_min, "tele_min": self.tele_min, "flee": self.flee,
+                "flees": {str(k): v for k, v in self.flees.items()}, "phase": self.phase, "entrance": list(self.entrance[1]) if self.entrance else None,
                 "entrance_depth": self.entrance[0] if self.entrance else None, "entries": self.entries,
                 "levels": self.levels, "fails": self.fails, "why_off": self.why_off, "events": self.events}

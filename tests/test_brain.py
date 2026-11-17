@@ -2707,14 +2707,15 @@ def test_saved_models_still_load_and_choose_the_same_with_the_switches_on_or_off
         net = load_model(str(p))
         for style in (Style(kit=1, hand=1, throw=1, step=1), Style(kit=2), Style(kit=2, kitpart=1), Style(save=1),
                       Style(calm=1), Style(calm=2), Style(calm=2, save=1), Style(ident=1), Style(stack=1),
-                      Style(cure=1), Style(ident=1, stack=1, cure=1), Style(lair=1), Style(lair=2)):
+                      Style(cure=1), Style(ident=1, stack=1, cure=1), Style(lair=1), Style(lair=2),
+                      Style(lair=1, lairxl=11, lairtele=1, lairflee=1, lairdeep=3)):
             a = BrainTiers(net, Style(), rng=random.Random(0))
             b = BrainTiers(net, style, rng=random.Random(0))
             st = stairs_state()
             assert a.next_action(st) == b.next_action(st), style
             assert a.last["obs"] == b.last["obs"] and a.last.get("values") == b.last.get("values")
         # Style.lair on a level with a branch staircase: once it has looked (no game time), the model chooses as without
-        for style in (Style(lair=1), Style(lair=2)):
+        for style in (Style(lair=1), Style(lair=2), Style(lair=1, lairxl=11, lairtele=1, lairflee=1, lairdeep=3)):
             a = BrainTiers(net, Style(), rng=random.Random(0))
             b = BrainTiers(net, style, rng=random.Random(0))
             st = make_state(["#######", "#@..B>#", "#######"], depth=9)
@@ -2722,6 +2723,21 @@ def test_saved_models_still_load_and_choose_the_same_with_the_switches_on_or_off
             b.perform(SimpleNamespace(state=st, conn=ScriptedConn([lair_said("Ladder_lair none")])), "lair_scan")
             assert a.next_action(st) == b.next_action(st), style
             assert a.last["obs"] == b.last["obs"] and a.last.get("values") == b.last.get("values")
+        # Style.lairflee on arriving in the Lair: two hostiles, the model chooses as without; three, the flight up
+        # comes before it (no choice made, nothing the model sees)
+        flee = Style(lair=1, lairflee=1)
+        a = BrainTiers(net, Style(), rng=random.Random(0))
+        b = BrainTiers(net, flee, rng=random.Random(0))
+        st = make_state(["#########", "#<@.....#", "#########"], place="Lair", depth=2, xl=11)
+        player(st, pos={"x": 1, "y": 1})
+        b.route.phase = "in"
+        b.route.arrived(st, "Lair:1")
+        add_monster(st, (5, 1), 20, "yak", threat=2)
+        add_monster(st, (6, 1), 21, "yak", threat=2)
+        assert a.next_action(st) == b.next_action(st)
+        assert a.last["obs"] == b.last["obs"] and a.last.get("values") == b.last.get("values")
+        add_monster(st, (7, 1), 22, "yak", threat=2)
+        assert b.next_action(st) == "lair_flee" and b.last is None
 
 
 def test_jewel_values_follow_qw_and_skip_artefacts_useless_and_worthless_pieces():
@@ -3749,6 +3765,134 @@ def test_lair_way_back_walks_up_and_takes_the_stairs_up():
     assert conn.sent == [(("<",), {})]
     rec = tiers.describe()["lair"]
     assert rec["phase"] == "back" and rec["levels"] == [4] and rec["entrance_depth"] == 9
+
+
+def test_lair_refinements_are_off_by_default_and_lair_alone_is_as_before():
+    import argparse
+    from ladder.brain.cli import _style
+    from ladder.brain.route import LairRoute
+    assert (Style().lairxl, Style().lairtele, Style().lairflee, Style().lairdeep) == (0, 0, 0, 0)
+    assert _style(argparse.Namespace(style=["lair=1", "lairxl=11", "lairflee=1", "lairdeep=3"])) == \
+        Style(lair=1, lairxl=11, lairflee=1, lairdeep=3)
+    old = {k: v for k, v in Style().to_dict().items() if not k.startswith("lair")}
+    assert Style.saved(old) == Style()                  # added off, still off: no STYLE_ADDED_AS entry
+    r = BrainTiers(style=Style(lair=1), rng=random.Random(0)).route
+    assert (r.floors, r.xl_min, r.tele_min, r.flee) == (4, 0, 0, 0)
+    assert LairRoute(2).floors == 5 and LairRoute(1, deep=3).floors == 3 and LairRoute(2, deep=3).floors == 3
+    # without the refinements: no gate, no flight, no wait
+    st = lair_level(["#####", "#@<.#", "#####"], place="Lair", depth=2)
+    r.entrance, r.entrance_seq = (9, (1, 1)), st.level_seq
+    assert r.ready(st) and not r.events
+    r.arrived(st, "Lair:1")
+    assert r.arrival is None and not r.flee_now(st, 5, False)
+    # the refinements' keys only (no lair): no route at all
+    assert BrainTiers(style=Style(lairxl=11, lairflee=1), rng=random.Random(0)).route is None
+
+
+def test_lairdeep_turns_back_at_its_level():
+    tiers = BrainTiers(style=Style(lair=1, lairdeep=3), rng=random.Random(0))
+    r = tiers.route
+    st = lair_level(["#####", "#<.@#", "#####"], place="Lair", depth=3)
+    r.entrance = (9, (1, 1))
+    r.arrived(lair_level(["###", "#@#", "###"], place="Lair", depth=2), "D:9")
+    assert r.target(lair_level(["###", "#@#", "###"], place="Lair", depth=2)) is None   # Lair:2: on down
+    r.arrived(st, "Lair:2")
+    assert r.target(st) == "up"                                         # Lair:3 is the last level now
+    assert tiers.describe()["lair"]["floors"] == 3
+
+
+def test_lairxl_goes_on_down_while_under_and_climbs_back_once_reached():
+    from ladder.brain.route import LAIR_CLIMB
+    tiers = BrainTiers(style=Style(lair=1, lairxl=11), rng=random.Random(0))
+    tiers.worn = {"body": "1"}
+    r = tiers.route
+    st = lair_level(["#######", "#@..B>#", "#######"], xl=10)
+    assert tiers.next_action(st) == "lair_scan"
+    tiers.perform(SimpleNamespace(state=st, conn=ScriptedConn([lair_said("Ladder_lair 3 0")])), "lair_scan")
+    assert r.entrance == (9, (4, 1))
+    # XL 10: the entrance is left alone, the rules' own stairs down
+    tiers.level_explored = True
+    assert r.target(st) is None and tiers.next_action(st) == "travel" and tiers.last["action"] == "descend"
+    below = lair_level(["#######", "#<.@..#", "#######"], depth=10, xl=10)
+    r.arrived(below, "D:9")
+    assert r.phase == "seek" and r.target(below) is None
+    # XL 11 on D:10: climb back where the rules would go down
+    player(below, xl=11)
+    assert r.target(below) == "up" and r.wants(below)
+    assert [e["what"] for e in r.events] == ["found", "ready"]
+    # XL 11 reached on the entrance's level: in
+    r2 = BrainTiers(style=Style(lair=1, lairxl=11), rng=random.Random(0)).route
+    r2.entrance, r2.entrance_seq = (9, (4, 1)), st.level_seq
+    player(st, xl=11)
+    assert r2.target(st) == "entrance"
+    # left more than LAIR_CLIMB levels above while under it: given up, the Dungeon as without the switch
+    r3 = BrainTiers(style=Style(lair=1, lairxl=11), rng=random.Random(0)).route
+    r3.entrance = (9, (4, 1))
+    r3.arrived(lair_level(["###", "#@#", "###"], depth=9 + LAIR_CLIMB, xl=10), "D:11")
+    assert r3.phase == "seek"
+    r3.arrived(lair_level(["###", "#@#", "###"], depth=10 + LAIR_CLIMB, xl=10), "D:12")
+    assert r3.phase == "off" and r3.why_off == "left too far above, not ready"
+    # reached past the bound: given up as after a shaft
+    r4 = BrainTiers(style=Style(lair=1, lairxl=11), rng=random.Random(0)).route
+    r4.entrance = (9, (4, 1))
+    deep = lair_level(["###", "#@#", "###"], depth=10 + LAIR_CLIMB, xl=11)
+    assert not r4.wants(deep) and r4.phase == "off"
+
+
+def test_lairtele_counts_known_teleport_scrolls_only():
+    r = BrainTiers(style=Style(lair=1, lairtele=1), rng=random.Random(0)).route
+    st = lair_level(["#######", "#@..B>#", "#######"])
+    r.entrance, r.entrance_seq = (9, (4, 1)), st.level_seq
+    assert not r.ready(st) and r.target(st) is None
+    with_inv(st, s5=item("2 scrolls labelled FOOBAR {unknown}", SCROLLS, 2, ord("f")))
+    assert r.target(st) is None
+    with_inv(st, s6=item("a scroll of teleportation", SCROLLS, 1, ord("g")))
+    assert r.ready(st) and r.target(st) == "entrance" and r.events[-1]["what"] == "ready"
+
+
+def test_lairflee_goes_back_up_from_a_pack_on_arrival_then_waits_before_going_down():
+    from ladder.brain.route import LAIR_FLEE_MAX, LAIR_FLEE_N, LAIR_FLEE_TURNS, LAIR_FLEE_WAIT
+    st = lair_level(["#########", "#@......#", "#########"], place="Lair", depth=2, turn=500)
+    st.apply({"msg": "map", "cells": [{"x": 1, "y": 1, "mf": MF_STAIR_UP, "g": "<", "t": {"bg": 1}}]})
+    tiers = BrainTiers(style=Style(lair=1, lairflee=1), rng=random.Random(0))
+    tiers.worn = {"body": "1"}
+    r = tiers.route
+    r.entrance, r.phase = (9, (1, 1)), "in"
+    r.arrived(st, "Lair:1")                                       # arrived going down, on the stairs up
+    for k in range(LAIR_FLEE_N - 1):
+        add_monster(st, (5 + k, 1), 20 + k, "yak", threat=2)
+    assert tiers.auto_step(st, tiers.active_hostiles(st)) != "lair_flee"     # two: the rules as before
+    add_monster(st, (7, 1), 30, "yak", threat=2)
+    assert tiers.next_action(st) == "lair_flee" and tiers.last is None
+    conn = ScriptedConn()
+    tiers.perform(SimpleNamespace(state=st, conn=conn), "lair_flee")
+    assert conn.sent == [(("<",), {})] and r.flees == {2: 1} and r.events[-1]["what"] == "flee"
+    assert r.events[-1]["names"] == ["yak"] and tiers.kit_counts["lair_flee"] == 1
+    # upstairs (Lair:1, explored), where the rules would go down: a wait, LAIR_FLEE_WAIT turns, then down
+    up = lair_level(["#####", "#@.>#", "#####"], place="Lair", depth=1, turn=501)
+    r.arrived(up, "Lair:2")
+    assert r.arrival is None and r.phase == "in"
+    tiers.level_explored = True
+    assert tiers.next_action(up) == "lair"
+    conn = ScriptedConn()
+    tiers.perform(SimpleNamespace(state=up, conn=conn), "lair")
+    assert conn.sent == [(("s",), {})] and tiers.kit_counts["lair_wait"] == 1
+    player(up, turn=501 + LAIR_FLEE_WAIT)
+    assert r.target(up) is None                                   # the rules' own descend again
+    # not on arrival any more: off the stairs, after LAIR_FLEE_TURNS, raging, or arrived going up
+    r.arrived(st, "Lair:1")
+    assert r.flee_now(st, 3, False) and not r.flee_now(st, 3, True)
+    player(st, turn=500 + LAIR_FLEE_TURNS + 1)
+    assert not r.flee_now(st, 3, False)
+    player(st, turn=500, pos={"x": 2, "y": 1})
+    assert not r.flee_now(st, 3, False)
+    player(st, pos={"x": 1, "y": 1})
+    r.arrived(st, "Lair:3")
+    assert not r.flee_now(st, 3, False)
+    # at most LAIR_FLEE_MAX flights from a level
+    r.arrived(st, "Lair:1")
+    r.flees[2] = LAIR_FLEE_MAX
+    assert not r.flee_now(st, 3, False)
 
 
 def test_a_death_in_the_lair_scores_the_deepest_dungeon_level(tmp_path):
