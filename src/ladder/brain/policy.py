@@ -23,7 +23,7 @@ from ..state import MF_DOOR, MF_FEATURE, MF_STAIR_UP, MF_TRAP, MF_WATER, NOT_WAL
 from ..travel import DIRECTIONS, step_toward
 
 from . import gear, monsters
-from .features import ACTIONS, COMPONENTS, MDAM_LEFT, encode, inventory, observe, path
+from .features import ACTIONS, COMPONENTS, MDAM_LEFT, POTIONS, encode, inventory, observe, path
 from .net import Ensemble, TrainedNet
 
 # What a scroll can stop on (conn.classify_error's names). Anything else that comes up after using an
@@ -69,6 +69,11 @@ class Style:
     calm: float = 0.0         # 1 = with nothing in view, wait out a rage instead of trying to explore (DCSS
                               # refuses: "Calm down first, please."), and don't count that refusal as the
                               # level being done (`raging`). Off by default.
+                              # 2 = as 1, and when explore is refused for an unseen monster close by ("There is a
+                              # strange disturbance nearby!"), step to a free adjacent square and try again, as qw's
+                              # `plan_disturbance_random_step` does, instead of setting explore aside and taking the
+                              # stairs; at most DISTURB_MAX such steps per level visit (an automatic step,
+                              # `BrainTiers.auto_step`).
     retreat: float = 2.0      # 1 = when a rage runs out with RETREAT_LEFT or more hostiles in view and stairs up
                               # known, go up them (kept to on that level while `recovering`), then rest the
                               # exhaustion out before anything else; 2 = the same, only with the stairs up within
@@ -124,6 +129,12 @@ class Style:
                               # cuts the hostiles able to hit next turn by k or more (`step_square`; 2 is qw's "outnumbered"),
                               # where the rules of thumb would fight, wait or rage; at most STEP_MAX steps per fight. An
                               # automatic step (`BrainTiers.auto_step`). 0 = off. Off by default.
+    save: float = 0.0         # 1 = keep potions as qw does: in a fight, drink a healing potion at SAVE_HEAL (a quarter) of the
+                              # maximum HP or under, not at half (qw's `want_to_heal_wounds`: `hp_is_low(25)`), and drink an
+                              # unknown potion to identify it only from a stack of two or more (qw's `plan_quaff_unided_potions`:
+                              # `quaff_unided_potion(2)`), nothing in view as before; at that HP in a fight with no healing
+                              # potion known, drink an unknown one (qw's `heal_general`). Rules only: no action, no
+                              # observation changes. 0 = off. Off by default.
 
     def weights(self) -> np.ndarray:
         return np.asarray([getattr(self, c) for c in COMPONENTS], dtype=np.float32)
@@ -216,6 +227,8 @@ def recovering(obs: dict) -> bool:
 
 
 CALM_DOWN = "Calm down first, please."     # DCSS's answer to autoexplore (and travel) during a rage
+DISTURBANCE = "There is a strange disturbance nearby!"   # ...and with an unseen monster close by (`Style.calm` 2)
+DISTURB_MAX = 10          # `Style.calm` 2: steps away from a disturbance per level visit, at most
 
 
 def raging(obs: dict) -> bool:
@@ -492,6 +505,7 @@ def throw_wanted(obs: dict, missiles: int) -> bool:
 KIT_PARTS = {1: "gear", 2: "acquire", 4: "shop"}
 SHOP_GOLD = 20            # `Style.kit` 2 "shop": gold below this isn't worth a walk to a shop
 SHOP_STEPS = 80           # ...and a shop more steps away than this is given up for this visit to the level
+SAVE_HEAL = 0.25          # `Style.save`: the HP fraction a healing potion waits for in a fight (qw's hp_is_low(25))
 ACQUIRE_GOLD = (0.5, 3.0)  # what the acquirement's gold is worth (armour plus points) without and with "shop"
 
 
@@ -553,6 +567,38 @@ def step_square(state: GameState, hostiles: list, need: float) -> tuple[int, int
     return best[1] if best else None
 
 
+def disturb_square(state: GameState, k: int) -> tuple[int, int] | None:
+    """`Style.calm` 2: the direction of a step to a free adjacent square (walkable, no monster, no cloud, not a shut
+    door, shallow water, a trap or a shop), the k-th such in `DIRECTIONS` order, going round. qw's
+    `random_step` picks one at random; a fixed turn of the list keeps a replay the same game."""
+    px, py = state.pos
+    taken = {m.pos for m in state.monsters()}
+    shops = state.shops()
+    free = []
+    for dx, dy in DIRECTIONS:
+        sq = (px + dx, py + dy)
+        cell = state.cells.get(sq)
+        if cell is None or sq in taken or sq in shops or (cell.get("t") or {}).get("cloud"):
+            continue
+        mf = cell.get("mf", 0)
+        if mf in NOT_WALKABLE or (mf in STEP_INTO and not (mf == MF_DOOR and cell.get("g") == OPEN_DOOR)):
+            continue
+        free.append((dx, dy))
+    return free[k % len(free)] if free else None
+
+
+def unknown_pair(state: GameState) -> str | None:
+    """`Style.save`: the letter of the largest unknown potion stack holding two or more, else None."""
+    best = None
+    for item in (state.player.get("inv") or {}).values():
+        name, qty = item.get("name", ""), item.get("quantity", 1) or 0
+        if item.get("base_type") != POTIONS or qty < 2 or (" of " in name and "{unknown}" not in name):
+            continue
+        if best is None or qty > best[0]:
+            best = (qty, chr(item.get("letter", ord("a"))))
+    return best[1] if best else None
+
+
 KIT_SCROLLS = ("enchant armour", "enchant weapon", "brand weapon")
 
 
@@ -582,7 +628,8 @@ def kit_scroll(state: GameState, parts: set[str] = frozenset()) -> str | None:
 def baseline(obs: dict, avail: list[str], level_explored: bool, wiki: bool = False, teleport: int = 0,
              recover: int = 0, calm: bool = False, retreat: bool = False, rest_out: bool = False,
              to_stairs: bool = False, assailed: str | None = None, avoid: float = 0.0, escape: float = 0.0,
-             unique: float = 0.0, rage: float = 0.0, hold: bool = False) -> str:
+             unique: float = 0.0, rage: float = 0.0, hold: bool = False, heal_at: float = 0.5,
+             gamble: bool = False) -> str:
     """Rules of thumb: the stub's behaviour, plus drinking a healing potion instead of giving up.
 
     `wiki` plays the variant that follows the DCSS wiki's strategy guides instead (`Style.wiki`).
@@ -605,6 +652,10 @@ def baseline(obs: dict, avail: list[str], level_explored: bool, wiki: bool = Fal
     `rage` (`Style.rage`) starts a rage only when `late_rage` holds, not at the first threat-2 monster within two.
     `hold` (`BrainTiers` from `Style.hold` and `hold_ground`) waits for the hostiles in view to come instead of
     walking to them.
+    `heal_at`: in a fight, a healing potion is drunk at this fraction of the maximum HP or under (`Style.save`
+    lowers it to SAVE_HEAL); the cure for serious poison is drunk whatever the HP. `gamble` (`Style.save`): at that
+    HP with no healing potion known, drink an unknown potion (qw's `heal_general`: `quaff_unided_potion()` when heal
+    wounds is not identified); a fifth of the unknown potions the rules drank were curing or heal wounds.
     """
     if wiki:
         return baseline_wiki(obs, avail, level_explored)
@@ -618,15 +669,17 @@ def baseline(obs: dict, avail: list[str], level_explored: bool, wiki: bool = Fal
             go = frac <= 0.5 or any(m["threat"] >= 2 for m in near) or len(near) >= 3
         now, crowded = teleport_rule(obs, teleport)
         if retreat:
-            away = (["quaff_heal"] if frac <= 0.5 else []) + ["flee_up"]
+            away = (["quaff_heal"] if frac <= heal_at else []) + ["flee_up"]
         else:
             away = ["flee_up"] if to_stairs else []
         now = now or avoid_rule(obs, avoid) or escape_rule(obs, escape) or unique_rule(obs, unique)
         if unique and "Tele" in (obs.get("status") or []) and dangerous_unique(obs):
             # the scroll is working: keep the unique at a distance until it does (a healing potion first at half HP)
-            away = away + (["quaff_heal"] if frac <= 0.5 else []) + ["flee_up", "wait"]
+            away = away + (["quaff_heal"] if frac <= heal_at else []) + ["flee_up", "wait"]
         order = cure + away + (["read_teleport"] if now else []) + (["berserk"] if go and near else []) + \
-                (["quaff_heal"] if frac <= 0.5 else []) + (["read_teleport"] if crowded else []) + \
+                (["quaff_heal"] if frac <= heal_at else []) + \
+                (["quaff_unknown"] if gamble and frac <= heal_at and not obs["inv"]["heal"] else []) + \
+                (["read_teleport"] if crowded else []) + \
                 (["wait"] if hold else []) + ["fight", "descend", "flee_up", "wait"]
     else:
         onward = ["descend"] if level_explored else ["explore"]
@@ -726,6 +779,10 @@ class BrainTiers(StubTiers):
         self.shop_steps = 0                    # ...steps walked toward the shop being visited
         self.shop_goal: tuple | None = None    # ...(level_seq, shop square) being walked to
         self.shop_back: tuple[int, int] | None = None   # ...the direction of the last step taken toward it
+        self.shop_leave: tuple | None = None   # ...(level_seq, square) of the shop just visited, to step off once
+        self.shop_opened = False               # ...the step just taken opened a shop (it takes no game time)
+        self.disturbed = False                 # Style.calm 2: explore was just refused for a disturbance
+        self.disturb_steps = 0                 # ...steps taken away from one on this level visit (DISTURB_MAX)
 
     # --- choosing ------------------------------------------------------
 
@@ -754,7 +811,7 @@ class BrainTiers(StubTiers):
             "level_explored": self.level_explored, "level_steps": self.level_steps, "level_turn": self.level_turn,
             "hp_delta": 0.0 if self.prev_frac is None else frac - self.prev_frac, "last_action": self.last_action})
         self.prev_frac = frac
-        blocked = {a for a, until in self.blocked.items() if state.turn < until}
+        blocked = {a for a, until in self.blocked.items() if state.turn < until} | self.save_blocked(state, hostiles)
         retreat, rest_out, to_stairs = self.fight_moves(state.level_seq, obs)
         assailed = self.assailed(obs)
         # Style.calmfor: calm only for the first T turns of this visit to the level
@@ -779,7 +836,8 @@ class BrainTiers(StubTiers):
         base = baseline(obs, avail, self.level_explored, wiki=bool(self.style.wiki), teleport=int(self.style.teleport),
                         recover=int(self.style.recover), calm=self.calm_now, retreat=retreat,
                         rest_out=rest_out, to_stairs=to_stairs, assailed=assailed, avoid=self.style.avoid,
-                        escape=self.style.escape, unique=self.style.unique, rage=self.style.rage, hold=hold)
+                        escape=self.style.escape, unique=self.style.unique, rage=self.style.rage, hold=hold,
+                        heal_at=SAVE_HEAL if self.style.save else 0.5, gamble=bool(self.style.save))
         choice, source, extra = base, "baseline", {}
         if self.fork_turn is not None and self.horizon and state.turn > self.fork_turn + self.horizon:
             raise Escalation(FORK_DONE)
@@ -833,6 +891,10 @@ class BrainTiers(StubTiers):
           this level not yet visited, with SHOP_GOLD or more and half HP or more).
         A step that used no game time is not tried again for BLOCK_TURNS turns (`observe`); a throw that found no clear
         shot, for THROW_RETRY."""
+        if self.disturbed:
+            self.disturbed = False
+            if not hostiles and self.style.calm >= 2 and disturb_square(state, self.disturb_steps):
+                return "disturb_step"
         if not (self.style.kit or self.style.hand or self.style.throw or self.style.step):
             return None
         status = state.statuses
@@ -880,9 +942,10 @@ class BrainTiers(StubTiers):
         return not any("is a mimic" in m for m in state.recent_messages(5))
 
     def on_visited_shop(self, state: GameState) -> bool:
-        """`Style.kit` 2 "shop": standing on a shop already visited. Its square is travel-excluded (the fence), and
-        explore refuses to start from one ("You're in a travel-excluded area, stopping explore."), so step off first."""
-        return (state.level_seq, state.pos) in self.shops_done
+        """`Style.kit` 2 "shop": standing on the shop just visited. Its square is travel-excluded (the fence), and
+        explore refuses to start from one ("You're in a travel-excluded area, stopping explore."), so step off first,
+        once: a later walk across a visited shop (to another shop, or to the stairs) is not stepped back from."""
+        return self.shop_leave == (state.level_seq, state.pos)
 
     def shop_target(self, state: GameState) -> tuple[int, int] | None:
         """`Style.kit` 2 "shop": the nearest shop on this level not yet visited (nor given up), when there is gold to
@@ -914,7 +977,7 @@ class BrainTiers(StubTiers):
             "worn": self.worn or {}, "kit": bool(self.style.kit),
             "level_explored": self.level_explored, "level_steps": self.level_steps, "level_turn": self.level_turn,
             "hp_delta": 0.0 if self.prev_frac is None else frac - self.prev_frac, "last_action": self.last_action})
-        blocked = {a for a, until in self.blocked.items() if state.turn < until}
+        blocked = {a for a, until in self.blocked.items() if state.turn < until} | self.save_blocked(state, hostiles)
         retreat = False
         if self.style.retreat and obs["n_hostiles"]:
             reach = STAIRS_NEAR if self.style.retreat >= 2 else 10 ** 9
@@ -931,8 +994,17 @@ class BrainTiers(StubTiers):
         choice = baseline(obs, avail, self.level_explored, wiki=bool(self.style.wiki), teleport=int(self.style.teleport),
                           recover=int(self.style.recover), calm=calm, retreat=retreat, assailed=None,
                           avoid=self.style.avoid, escape=self.style.escape, unique=self.style.unique,
-                          rage=self.style.rage, hold=bool(self.style.hold) and hold_ground(obs))
+                          rage=self.style.rage, hold=bool(self.style.hold) and hold_ground(obs),
+                          heal_at=SAVE_HEAL if self.style.save else 0.5, gamble=bool(self.style.save))
         return obs, choice
+
+    def save_blocked(self, state: GameState, hostiles: list) -> set[str]:
+        """`Style.save`: {"quaff_unknown"} with nothing in view and no unknown potion stack of two or more (qw drinks
+        one to identify it only from such a stack, so a kind costs at most half of what was found), else nothing. With
+        hostiles in view the rules drink one only as a last healing potion (`baseline`'s `heal_at`)."""
+        if not self.style.save or hostiles or unknown_pair(state):
+            return set()
+        return {"quaff_unknown"}
 
     def jewel_pieces(self, state: GameState) -> list[tuple[str, dict, bool]]:
         """(letter, item, worn) for each ring or amulet in the pack, worn as last seen (`self.jewels`)."""
@@ -1035,6 +1107,8 @@ class BrainTiers(StubTiers):
                 "read_unknown": ("r", "unknown_scrolls"), "read_teleport": ("r", "teleport")}
         if action in item:
             verb, kind = item[action]
+            if action == "quaff_unknown" and self.style.save and unknown_pair(state):
+                letters = {**letters, kind: unknown_pair(state)}
             if action == "quaff_heal":
                 # which of the two, by what is needed now (heal_potion)
                 kind = heal_potion({"hp": state.hp, "hp_max": state.hp_max, "status": state.statuses, "inv": inv,
@@ -1084,6 +1158,14 @@ class BrainTiers(StubTiers):
             return self.throw(conn, state)
         if action == "kit_shop":
             return self.shop(conn, state)
+        if action == "disturb_step":
+            way = disturb_square(state, self.disturb_steps)
+            self.disturb_steps += 1
+            if way is None:
+                return ActResult()
+            self.count("disturb_step")
+            self.note(conn, auto="disturb_step", turn=state.turn, way=list(way))
+            return conn.act(DIRECTIONS[way])
         if action == "equip":
             up = gear.upgrades(state, self.worn or {}, kit=2)
             action = "wield" if up["wield"] else "wear"
@@ -1205,10 +1287,11 @@ class BrainTiers(StubTiers):
         """`Style.kit` 2 "shop": one step toward the shop `shop_target` picks (answering yes to "Really walk into a
         travel-excluded area?": the bot fences shops off from explore), or, on it, open it (`<`), mark what
         `gear.shop_choice` picks, buy (Enter, then yes) and leave (Esc). Buying takes no game time. A shop is visited
-        once per level visit; one SHOP_STEPS or more steps away is given up."""
-        if self.on_visited_shop(state):
-            return self.leave_shop(conn, state)
+        once per level visit; one SHOP_STEPS or more steps away is given up. Standing on the shop just visited, with
+        no other to walk to, step off it (`leave_shop`)."""
         shop = self.shop_target(state)
+        if shop is None and self.on_visited_shop(state):
+            return self.leave_shop(conn, state)
         if shop is None:
             return ActResult()
         key = (state.level_seq, shop)
@@ -1234,6 +1317,7 @@ class BrainTiers(StubTiers):
             return behind                          # nothing to open here (a mimic): never press `<` blind
         opened = conn.open_menu("<")
         opened.messages = behind.messages + opened.messages
+        self.shop_leave, self.shop_opened = key, True      # no game time: the step off it isn't to be held back
         menu = gear.worn_from_menu(opened.messages)
         letters = gear.shop_choice(menu, state, self.worn or {}, self.jewels)
         self.count("shop_visit")
@@ -1252,7 +1336,8 @@ class BrainTiers(StubTiers):
 
     def leave_shop(self, conn, state: GameState) -> ActResult:
         """One step off a visited shop's square: back the way the character came if that square is free, else to the
-        first free walkable neighbour (no monster, no trap, not a shop)."""
+        first free walkable neighbour (no monster, no trap, not a shop). Tried once per visit."""
+        self.shop_leave = None
         taken = {m.pos for m in state.monsters()}
         px, py = state.pos
         ways = ([(-self.shop_back[0], -self.shop_back[1])] if self.shop_back else []) + list(DIRECTIONS)
@@ -1332,14 +1417,18 @@ class BrainTiers(StubTiers):
     # --- bookkeeping ---------------------------------------------------
 
     def observe(self, action: str, before: Before, state: GameState, interrupts: list[Interrupt]) -> None:
-        if self.auto and state.turn == before.turn and state.level_seq == before.level_seq:
-            # went nowhere: leave it a while (a throw only briefly: the shot may be clear after the next move)
+        opened, self.shop_opened = self.shop_opened, False
+        if self.auto and state.turn == before.turn and state.level_seq == before.level_seq and not opened:
+            # went nowhere: leave it a while (a throw only briefly: the shot may be clear after the next move). A
+            # shop's menu takes no game time either, but went somewhere: held back, the step off the shop's square
+            # waited BLOCK_TURNS, with explore refused there all the while
             self.auto_blocked[self.auto] = state.turn + (THROW_RETRY if self.auto == "throw" else BLOCK_TURNS)
         if any(i.kind == "level_change" for i in interrupts):
             self.blocked.clear()
             self.stalls.clear()
             self.idle = 0
             self.unseen_hits = 0
+            self.disturb_steps = 0
             self.level_steps, self.level_turn = 0, state.turn
         try:
             super().observe(action, before, state, interrupts)
@@ -1358,6 +1447,10 @@ class BrainTiers(StubTiers):
         if self.calm_now and self.choice == "explore" and \
                 any(m["text"] == CALM_DOWN for m in state.messages[before.msg_index:]):
             return                              # refused for the rage, not for want of anywhere to go
+        if self.style.calm >= 2 and self.choice == "explore" and self.disturb_steps < DISTURB_MAX and \
+                any(m["text"] == DISTURBANCE for m in state.messages[before.msg_index:]):
+            self.disturbed = True               # an unseen monster close by: step aside and try again (`auto_step`)
+            return
         self.stalls[self.choice] = self.stalls.get(self.choice, 0) + 1
         if self.stalls[self.choice] < 2:
             return
@@ -1372,6 +1465,6 @@ class BrainTiers(StubTiers):
 
     def describe(self) -> dict:
         out = {"model": self.net.name if self.net else None, "epsilon": self.epsilon, "style": asdict(self.style)}
-        if self.style.kit or self.style.hand or self.style.throw or self.style.step:
+        if self.style.kit or self.style.hand or self.style.throw or self.style.step or self.style.calm >= 2:
             out["kit"] = dict(self.kit_counts)
         return out

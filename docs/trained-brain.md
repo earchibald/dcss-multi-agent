@@ -3581,6 +3581,289 @@ entry (0, the value it was added at) stays as it is: runs saved before `kit` exi
     `probe/acq.yaml` (acquirement in a scenario), `jobs-*.txt`;
   - copies: `arms.py`, `seeds.py`, `verify.py`, `mindex.py`, `same.py`, `kitstats.py`, `chain.sh` and `refresh.sh`.
 
+#### A shop fault fixed, exploring with the kit on (`calm=1`, `calm=2`), and potions kept as qw keeps them (`save=1`) (2026-11-16, night)
+
+`kit=2` is now the default. Its fresh test had shown the step off a visited shop firing 131 times in 40 games. This
+section finds and fixes that fault, plays a new reference with the fix, replays `calm=1` against it, counts what still
+leaves levels unexplored with `calm=1`, builds the largest bounded cause as `calm=2`, and measures potions and scrolls
+against qw and builds `save=1` from that.
+
+**The shop fault.**
+- *What the counts were.* 79 of the 131 steps off a shop came from one game, 690753. The other 39 games took about one
+  per visit, as intended.
+- *That one game.* On D:9 it shuttled between two squares for 78 turns. It stepped off the shop just visited, and its
+  walk to a second shop led straight back across the first (`key_dir_sw`, then `key_dir_ne` and `Y`, 39 times). The
+  walk was only given up after `SHOP_STEPS`.
+- *The bigger fault, found on the way.* After every shop visit the bot stood on the shop's square for about 50 turns.
+  - The visit takes no game time.
+  - `BrainTiers.observe` therefore took the automatic step for one that "went nowhere" and held it back for
+    `BLOCK_TURNS` (50 turns). That included the step off the square.
+  - Meanwhile explore was refused there ("You're in a travel-excluded area, stopping explore."). The rules waited,
+    tried explore every 10 turns, and after two refusals set explore aside.
+  - Counted by replaying the recordings (`excl.py`): 505 such refusals in 87 of `v6j/A-k2b`'s 200 games, and 638–845
+    in each fresh block. In 92 of the levels `A-k2b` left unexplored, the last refusal before the stairs was this one
+    (`leave.py`).
+- *A third, smaller one.* The walk to the stairs (`Reflex.step`'s `travel`, a step at a time) refused to cross a fenced
+  shop square: "Really walk into a travel-excluded area?" was answered with Esc. Descend then went nowhere and was
+  blocked; 690753 ended this way, stuck. This happened 12–21 times per 200 games.
+- *Fix* (`src/ladder/brain/policy.py`, `src/ladder/reflex.py`):
+  - A shop's menu no longer counts as a step that went nowhere (`shop_opened`).
+  - The step off is taken once, only from the shop just visited (`shop_leave`).
+  - With another shop to visit, the bot walks on to it rather than stepping back.
+  - Reflex's own steps (to the stairs, and `approach`) answer yes to that question when the square is a shop
+    (`Reflex._onto_shop`).
+- *After the fix* (`v6k/A-ref`, `C-ref`):
+  - Steps off a shop: 192 for 210 visits on A.
+  - Explore refusals on a shop square: 0 on C. On A, 15 in 2 games, none on a visited shop.
+  - Unexplored levels whose last refusal was the shop square: 92 → 2 on A.
+  - Escaped "Really walk into…" questions: 4 on A, 13 on C. These were not on a visible shop square; not looked
+    into.
+- *Smoke test*: 18 block A dungeons (`v6k/smoke-shop`). The 10 that met no shop played exactly as `v6j/A-k2b`.
+- *Tests*: `test_kit2_steps_off_a_visited_shop_at_once_and_only_once` and
+  `test_reflex_walks_over_a_fenced_shop_on_the_way_to_the_stairs`.
+
+**The reference.** The fix changes play wherever a shop is met, so `v6j`'s `kit=2` runs could not serve as the
+reference. Today's defaults (no `--style`) were replayed with the fixed tree as `v6k/A-ref` and `C-ref`.
+- Every game was on its seed; one hung (540052, as in every C run).
+- Against `v6j/{A,C}-k2b` (the same defaults before the fix): A +0.09 [−0.34, +0.53], C −0.03 [−0.41, +0.35] levels.
+  On A the games are 367 turns longer on average (4,525 against 4,158).
+
+**What leaves a level unexplored** (`leave.py`). It takes each Dungeon level left downward with the brain's
+`level_explored` still false at its last choice. The cause is the step log's last choice there, plus the game's reply
+to the last explore that went nowhere.
+
+| cause | `A-ref` | `C-ref` | `A-calm` | `C-calm` | `A-calm2` | `C-calm2` |
+| --- | --- | --- | --- | --- | --- | --- |
+| levels left | 1,317 | 1,249 | 1,353 | 1,367 | 1,358 | 1,340 |
+| explore said it was done ("Done exploring", "Partly explored") or the flag was set | 709 (54%) | 638 (51%) | 1,146 (85%) | 1,166 (85%) | 1,204 (89%) | 1,185 (88%) |
+| explore set aside: a rage ("Calm down first, please.") | 479 | 491 | 0 | 0 | 0 | 0 |
+| explore set aside: an unseen monster close by ("There is a strange disturbance nearby!") | 37 | 50 | **97** | **95** | 26 | 28 |
+| explore set aside: confused ("You're confused, stopping explore.") | 39 | 24 | 47 | 40 | 62 | 52 |
+| fell (shaft or trapdoor) | 43 | 39 | 43 | 54 | 41 | 55 |
+| explore set aside: a cloud, fire, a monster "nearby", none seen | 9 | 5 | 17 | 11 | 21 | 15 |
+| explore set aside: shop square | 2 | 0 | 2 | 0 | 1 | 0 |
+| stairs taken with hostiles in view, or up the stairs | 1 | 2 | 2 | 1 | 5 | 0 |
+| *of the "done" levels: flag set after two fights that went nowhere* | 94 | 93 | 137 | 136 | 152 | 136 |
+
+- **With `calm=1` one cause dominates: an unseen monster close by**, 97 and 95 of the 207 and 201 unexplored levels.
+  - Typically an orc wizard that "flickers and vanishes". Explore is refused, the refusal counts as a stall twice, and
+    the rules take the stairs.
+  - qw has a plan for exactly this: `plan_disturbance_random_step` (qw.lua 11529–11534) takes a random step when that
+    message is among the last five; it fired 39 times on block A.
+- **Not causes.**
+  - Teleportation never left a level unexplored: it moves the character within the level.
+  - The retreat up the stairs (`retreat=2`) left only "up the stairs" endings (0–3 per run).
+  - "Items it will not walk to" ends as "Partly explored", which counts as done.
+- **A larger group, counted as done.** 136–152 levels per `calm` run have the flag set after a fight went nowhere
+  twice. `BrainTiers.observe` then calls the level done ("out of reach … head for the stairs"). The hostiles in view
+  at that moment were a mixed lot (orc wizards 66, orcs 65, rats 31, two-headed ogres 30, jellies 30, …). The nearest
+  was adjacent in 74 of 404 cases. That is no one cause with a bounded fix; it was left alone.
+
+**What `calm=2` is** (a new level of `Style.calm`; level 1 is unchanged).
+- As `calm=1`, plus: when explore is refused with "There is a strange disturbance nearby!", the refusal does not
+  count as a stall.
+- Instead an automatic step (`disturb_step`, `BrainTiers.auto_step`) moves to a free adjacent square
+  (`policy.disturb_square`), and explore is tried again. qw's `random_step` picks at random; this takes the k-th free
+  square in `DIRECTIONS` order, going round, so a replay stays the same game.
+- At most `DISTURB_MAX` (10) such steps per level visit. After that, refusals count as before. So it cannot loop.
+- No action, observation or step-log line was added. Each step writes a `_ladder` note.
+- It took 1,040 steps in 90 of `A-calm2`'s games. Disturbance-left levels fell from 97 to 26 (A) and from 95 to 28
+  (C).
+
+**Potions and scrolls against qw** (`cons.py`, `unkid.py`). Block A: today's reference `v6k/A-ref` against qw's
+`zk-heldout-200`.
+- *Data.* Ours: each choice's inventory counts in the step log, plus the protocol's inventory replayed. qw: its
+  per-decision lines (`QWACT`, the plan that acted) and state lines (`QWS`).
+- *qw's HP at use.* `QWACT`'s HP is read after the action, so qw's HP at a use is the previous decision's.
+- "Before D:7" counts what happened up to the first arrival on D:7, over the 79 dungeons both reached.
+
+| before D:7, per dungeon | qw | ours |
+| --- | --- | --- |
+| unknown potions drunk to identify them | 2.23 | **6.73** |
+| unknown scrolls read to identify them | 9.16 | 7.95 |
+| identify scrolls read | 4.47 | 0 |
+| curing drunk to heal | 0 | 0.41 (HP median 47%; 97% of them over a quarter) |
+| heal wounds drunk to heal | 0.11 (HP median 25%) | 0.13 (median 49%; 90% over a quarter) |
+| curing drunk for confusion / poison | 0.58 | 0 |
+| teleportation read | 0.16 | 0.24 |
+| haste drunk | 0.76 | 0 |
+| curing / heal wounds / teleportation gained (picked up, bought or identified) | 2.68 / 1.30 / 2.48 | 1.18 / 0.54 / 1.41 |
+
+- **Identifying by use costs healing potions.**
+  - Of the 1,352 unknown potions `A-ref` drank, 1,240 were the only one of their kind in the pack.
+  - 268 of the 1,352 turned out to be curing (147) or heal wounds (121): about 1.3 healing potions per game.
+  - qw drinks one to identify it only from a stack of two or more: `plan_quaff_unided_potions` calls
+    `quaff_unided_potion(2)` (qw.lua 13757–13775). It keeps the others (1.4–1.6 unknown stacks on arrival) and reads
+    identify scrolls, which our bot has no rule for.
+- **We drink to heal at twice qw's HP.**
+  - qw drinks heal wounds only with danger in view at a quarter of its HP or less (`want_to_heal_wounds` 12229–12242:
+    `hp_is_low(25)`).
+  - It never drinks curing to heal; curing is for poison (`plan_cure_bad_poison` 11768, `plan_cure_poison` 14288,
+    before a rage in `plan_berserk`) and confusion (`plan_cure_confusion` 12430).
+  - Ours drinks either at half its HP.
+- **Scrolls with hostiles in view: none.** Our rules read unknown scrolls only with nothing in view (0.00 per dungeon
+  with hostiles in view), as qw's `plan_read_unided_scrolls` does. Nothing to build there.
+- **What was read to identify** (A-ref, 1,181 named): teleportation 157, fog 107, fear, immolation and blinking 99
+  each, revelation 98…
+- **The rest is finding.** qw gains about twice our curing, heal wounds and teleportation before D:7. It has seen more
+  of each level (above).
+
+**What `save=1` is** (a new `Style` key, off by default; rules only).
+- In a fight, a healing potion is drunk at `SAVE_HEAL` (a quarter) of the maximum HP or under, not at half. This is
+  `baseline`'s new `heal_at`, used everywhere it drank at half. The cure for serious poison is unchanged.
+- At that HP, with no healing potion known, an unknown potion is drunk (`gamble`; qw's `heal_general` does this when
+  heal wounds is unidentified).
+- With nothing in view, an unknown potion is drunk to identify it only from a stack of two or more
+  (`policy.unknown_pair`, `BrainTiers.save_blocked`). The largest such stack is the one drunk.
+- `features.ACTIONS`, the observation and the feature vector are unchanged. `save_blocked` only takes
+  `quaff_unknown` out of what is possible with nothing in view and no pair held.
+
+**Play with the new switches off is unchanged** (`same.py`).
+- 500000–500008 with no `--style` (`v6k/A-off`) and 500009–500017 with `calm=0 save=0` (`v6k/A-off0`): 18 of 18
+  identical to `v6k/A-ref`. Same deepest level, final turn and end, and the same choices step by step (391 to 1,980
+  per game).
+- Tests:
+  - `test_save_is_off_by_default_and_off_drinks_at_half`
+  - `test_save_drinks_an_unknown_potion_only_from_a_pair`
+  - `test_save_is_a_style_and_old_runs_still_match`
+  - `test_calm2_steps_aside_from_a_disturbance_instead_of_setting_explore_aside`
+  - `test_saved_models_still_load_and_choose_the_same_with_the_switches_on_or_off`, now also with `save=1`, `calm=1`,
+    `calm=2` and `calm=2 save=1`.
+- No `STYLE_ADDED_AS` entry: `save` was added off, and `calm` keeps its default.
+
+**Tuning.**
+- **Method.** This tree, no model, epsilon 0, A (500000–500199) and C (540000–540199) only, 9 workers (all nine
+  `ladderbrain` accounts played).
+- **Arm order.** C-calm, A-calm (20:27–21:01), then A-calm2, C-calm2, C-save, A-save (21:04–22:06). Then the
+  combination, chosen after the single arms: A-cs, C-cs (22:07–22:40).
+- **Analysis.** Each arm minus `v6k/{A,C}-ref`, paired by dungeon over games both finished and neither stale nor off
+  its seed (`arms.py`, `verify.py`); 95% bootstrap over dungeons, 10,000 resamples.
+- **Seed checks.** Every game was on its seed. Hung: 540052 in `C-ref` and `C-save`; 500119 and 500161 in `A-cs`.
+
+| arm (`--style`) | A: mean depth | C: mean depth | − ref, A | − ref, C | **− ref, pooled** (dungeons) | deeper / same / shallower | died D:1–3 / 4–6 / 7+ (A + C) | levels explored, A / C |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| reference (`v6k/*-ref`) | 7.84 | 7.51 | | | | | 51 / 106 / 217 | 54% / 51% |
+| `calm=1` | 7.95 | 8.03 | +0.10 [−0.55, +0.77] | +0.51 [−0.14, +1.18] | **+0.31 [−0.16, +0.77]** (399) | 160 / 108 / 131 | 56 / 90 / 221 | 85% / 85% |
+| `calm=2` | 8.03 | 7.92 | +0.18 [−0.49, +0.88] | +0.41 [−0.24, +1.06] | **+0.30 [−0.17, +0.76]** (399) | 157 / 105 / 137 | 57 / 92 / 213 | 89% / 88% |
+| `save=1` | 7.68 | 7.21 | −0.16 [−0.82, +0.51] | −0.30 [−0.96, +0.36] | **−0.23 [−0.70, +0.25]** (399) | 151 / 96 / 152 | 65 / 89 / 220 | 56% / 55% |
+| `calm=1 save=1` | 8.26 | 7.51 | +0.39 [−0.25, +1.04] | +0.00 [−0.66, +0.65] | **+0.20 [−0.28, +0.66]** (397) | 164 / 98 / 135 | 71 / 80 / 207 | 85% / 86% |
+
+- **`calm=2` against `calm=1`**: A +0.08 [−0.17, +0.34], C −0.10 [−0.40, +0.20], pooled −0.01 [−0.21, +0.18].
+  - It explores 3–4 points more of the levels it leaves. 269 of 400 dungeons end at the same depth.
+  - The extra exploring does not show in depth.
+- **`save=1` loses early.** Deaths on D:1–3 rise from 21 to 27 on A and from 30 to 38 on C.
+  - The potions it keeps are mostly unknown ones: 3.6–4.0 unknown stacks held on arrival at D:5–9, against qw's
+    1.0–1.6.
+  - Its known healing potions on arrival are about the same as the reference's: curing 1.01 against 0.77 at D:7,
+    heal wounds 0.36 against 0.42.
+  - That the lower threshold costs the early deaths is inferred, not separated by a variant.
+- **The combination** is `calm=1` (the best single arm) with `save=1` (the only other switch). Against `calm=1` alone
+  it is −0.10 [−0.57, +0.38] (A +0.32, C −0.51). So `save=1` adds nothing on top.
+
+**Kit, AC and potions on arrival, block A against qw** (`gap.py`, `summ.py`; means over the dungeons both reached,
+qw / ours):
+
+| run | depth | dungeons | AC | SH | XL | gold held | curing | heal wounds | teleportation | unknown potion stacks |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `A-ref` | D:5 | 117 | 10.6 / 10.6 | 1.6 / 1.0 | 6.3 / 5.8 | 181 / 159 | 1.48 / 0.68 | 0.67 / 0.22 | 1.14 / 0.71 | 1.56 / 0.00 |
+| `A-ref` | D:7 | 79 | 13.4 / 12.7 | 2.8 / 1.8 | 8.4 / 7.6 | 279 / 219 | 2.38 / 0.77 | 1.19 / 0.42 | 2.32 / 1.15 | 1.39 / 0.00 |
+| `A-ref` | D:9 | 48 | 17.2 / 15.0 | 4.6 / 2.7 | 10.2 / 9.1 | 443 / 304 | 3.52 / 1.00 | 1.94 / 0.79 | 3.17 / 1.56 | 1.04 / 0.00 |
+| `A-calm` | D:5 | 119 | 10.3 / 11.1 | 1.7 / 1.1 | 6.2 / 6.1 | 178 / 193 | 1.38 / 0.95 | 0.66 / 0.25 | 1.13 / 1.01 | 1.57 / 0.00 |
+| `A-calm` | D:7 | 80 | 12.9 / 13.9 | 2.7 / 2.1 | 8.4 / 8.2 | 265 / 262 | 2.44 / 1.48 | 1.16 / 0.61 | 2.09 / 1.64 | 1.61 / 0.00 |
+| `A-calm` | D:9 | 53 | 16.5 / 15.9 | 4.8 / 3.3 | 10.1 / 9.5 | 391 / 342 | 3.36 / 1.75 | 1.62 / 0.77 | 2.91 / 1.98 | 1.08 / 0.00 |
+| `A-calm2` | D:7 | 80 | 13.1 / 13.9 | 2.5 / 2.1 | 8.4 / 8.2 | 271 / 270 | 2.42 / 1.52 | 1.14 / 0.56 | 2.05 / 1.60 | 1.65 / 0.00 |
+| `A-calm2` | D:9 | 50 | 16.7 / 16.1 | 5.2 / 3.5 | 10.0 / 9.5 | 386 / 349 | 3.26 / 2.08 | 1.60 / 0.80 | 3.12 / 2.28 | 1.14 / 0.00 |
+| `A-save` | D:7 | 90 | 13.6 / 12.5 | 2.3 / 1.5 | 8.4 / 7.5 | 271 / 204 | 2.31 / 1.01 | 1.04 / 0.36 | 2.19 / 1.12 | 1.47 / 3.97 |
+| `A-save` | D:9 | 51 | 18.2 / 14.7 | 4.8 / 2.5 | 10.2 / 8.8 | 476 / 276 | 2.88 / 1.06 | 1.75 / 0.55 | 3.20 / 1.49 | 0.82 / 3.92 |
+
+- **With the kit on, exploring closes most of the AC gap and half the potion gap.**
+  - At D:7, `calm=1`'s AC is above qw's on the same dungeons (13.9 against 12.9); the reference's is below (12.7
+    against 13.4).
+  - Curing on arrival almost doubles (0.77 → 1.48), heal wounds rises half (0.42 → 0.61) and teleportation by 40%
+    (1.15 → 1.64). Gold is level with qw's.
+  - SH is still behind (2.1 against 2.7).
+  - Healing potions are still about half qw's, and qw also holds 1.4–1.6 unknown stacks that ours has drunk.
+
+**Pre-registration of the fresh test** (written into this file before any game on these seeds was played).
+- **Configuration**: `--style calm=1`; everything else today's defaults (`recover=1 retreat=2 teleport=3 unseen=2
+  kit=2`), with the shop fix above. No model, epsilon 0.
+  - Why this one: of the arms, only `calm=1` and `calm=2` meet the rule set for a fresh test (pooled interval mostly
+    above zero, both blocks positive).
+  - Between the two, `calm=1` has the larger pooled difference (+0.31 against +0.30) and is the simpler. `calm=2`
+    adds nothing measurable over it (−0.01 [−0.21, +0.18]).
+  - At most one configuration is tested.
+- **Baseline**: today's defaults (no `--style`), the tree after the shop fix, played fresh on the same seeds.
+- **Seeds**: 691200–691799, once each per arm, in three blocks of 200. The arm order alternates per block:
+  - 691200–691399: defaults, then `calm=1`;
+  - 691400–691599: `calm=1`, then defaults;
+  - 691600–691799: defaults, then `calm=1`.
+- **Analysis**, done once, after all six runs have finished: `calm=1` − defaults in deepest Dungeon level reached,
+  paired by dungeon over the dungeons both arms finished and neither is stale nor off its seed (`arms.py`,
+  `verify.py`); 95% bootstrap over dungeons, 10,000 resamples, pooled over the three blocks.
+- **Pass rule**: the pooled interval's lower end is above zero. If it passes, `calm=1` is a candidate for a default;
+  this section changes no default either way.
+
+**The fresh test.** Played 22:45–00:28, after the pre-registration above was written into this file. Runs
+`v6k/F{1,2,3}-{def,calm}`. Analysed once, by `arms.py` over the three block pairs, after all six runs had finished.
+
+| block | defaults: mean depth | `calm=1`: mean depth | `calm=1` − defaults | deeper / same / shallower | dungeons |
+| --- | --- | --- | --- | --- | --- |
+| 691200–691399 (defaults first) | 7.95 | 7.98 | +0.06 [−0.55, +0.68] | 75 / 55 / 69 | 199 |
+| 691400–691599 (`calm=1` first) | 7.79 | 8.24 | +0.46 [−0.16, +1.07] | 83 / 43 / 74 | 200 |
+| 691600–691799 (defaults first) | 7.28 | 7.72 | +0.45 [−0.22, +1.14] | 77 / 50 / 72 | 199 |
+| **pooled** | | | **+0.32 [−0.05, +0.69]** | 235 / 148 / 215 | 598 |
+
+- **The pre-registered rule fails.** The pooled interval's lower end is −0.05, not above zero. The point estimate
+  (+0.32) is the same as on the tuning blocks (+0.31), and all three blocks are positive. But no single block's
+  interval excludes zero, and the pooled one doesn't either.
+- **Deaths** (defaults → `calm=1`, three blocks together): on D:1–3 84 → 82; on D:4–6 132 → 130; on D:7 and below
+  348 → 342. The games are 1,400–1,700 turns longer, and end 0.4–0.7 XL higher (8.12 → 8.56, 7.89 → 8.51,
+  7.38 → 8.04).
+- **Levels explored** (`explored.py`, the brain's own flag): 52% → 85%, 52% → 83%, 52% → 85%.
+- **Dungeons left out of the pairs.** 691399 hung in `F1-calm` and 691717 in `F3-def`. Every game verifies as on its
+  seed (`verify.py`): no "Welcome back", no protocol without its seed, no first step after turn 1, and a morgue on
+  its seed for every finished game.
+- **Seeds spent**: 691200–691799, once each per arm, as pre-registered. Unspent fresh seeds now start at 691800.
+
+**No default was changed.** `calm=1` did not pass its test. `calm=2` and `save=1` are off by default and were not
+fresh-tested.
+
+**Summary of the section.**
+- Measured:
+  - The shop fault: the 50-turn wait on the square of every visited shop (a shop's menu was taken for a step that
+    went nowhere); the loop in 690753; Reflex's walk to the stairs refused across a fenced shop. All three are fixed.
+    The reference was played after the fix.
+  - That play with the new switches off is the same game, choice for choice, on 18 block A dungeons.
+  - What leaves levels unexplored, by cause. With `calm=1`, an unseen monster close by is half of it (97 of 207,
+    95 of 201).
+  - The potion and scroll counts against qw on the same dungeons, and what the unknown potions drunk turned out to
+    be.
+  - Every tuning mean, interval and count above, and the fresh test.
+  - That every tuning and fresh game was played on its seed, and that all nine accounts played.
+  - The server's disk stayed at 52%.
+  - The tests: `uv run pytest -q` 526 passed, 5 deselected; `uv run ruff check` clean.
+- Inferred:
+  - That `save=1` loses through the lower healing threshold (its extra early deaths). The unknown-pair part was not
+    played alone.
+  - That `calm=2`'s extra exploring doesn't pay because the levels it finishes add little. It was not tested
+    further.
+  - That 690753's stuck end came from the refused walk across a shop; its last moves show it, and one game is all
+    there is.
+- Not done:
+  - The 136–152 levels per run called done after a fight went nowhere twice.
+  - Waiting out confusion before exploring (40–62 levels per `calm` run).
+  - Reading identify scrolls; drinking curing for confusion, as qw does.
+  - The parts of `save=1` played alone.
+  - Changing any default.
+- Runs: `runs/brain/v6k/smoke-shop` (the fix's smoke test), `{A,C}-ref` (the reference), `A-off`, `A-off0` (the
+  switches-off checks), `{A,C}-{calm,calm2,save,cs}` (tuning), `F{1,2,3}-{def,calm}` (fresh).
+- Scripts in the job's `brain-v6k/` scratch directory:
+  - new: `shopwalk.py` (arrivals on shop squares, and by which key), `excl.py` (explore refused on an excluded
+    square), `leave.py` (causes of unexplored levels), `cons.py` (potions and scrolls against qw), `unkid.py` (what
+    unknown potions and scrolls turned out to be), `summ.py` (arrival table against qw), `jobs-*.txt`;
+  - copies: `arms.py`, `seeds.py`, `verify.py`, `mindex.py`, `same.py`, `kitstats.py`, `k2stats.py`, `explored.py`,
+    `gap.py`, `gapstats.py`, `tail.py`, `chain.sh` and `refresh.sh`.
+
 ## What carried over from s1-battle, and what couldn't
 
 | s1-battle | here |

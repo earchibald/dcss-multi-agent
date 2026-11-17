@@ -23,8 +23,8 @@ from .decisions import END_GAME, Answer, DecisionRequest
 from .interrupts import Before, Detector, Interrupt
 from .pace import pace_key
 from .runlog import RunLog
-from .state import MF_STAIR_DOWN, GameState, Monster
-from .travel import first_step, step_toward
+from .state import MF_STAIR_DOWN, GameState, Monster, strip_tags
+from .travel import DIRECTIONS, first_step, step_toward
 
 KEYS = {
     "explore": ("o",),
@@ -33,6 +33,8 @@ KEYS = {
     "struggle": ("key_dir_e",),     # held in a web or net, any move struggles; Tab only says you're caught
     "descend": (">",),
 }
+# The trained brain fences shops off from explore (travel exclusions on their squares); a step of our own onto one asks
+EXCLUDED_PROMPT = "Really walk into a travel-excluded area?"
 # Autofight's targeting steps greedily and won't path through runed doors (Crazy Yiuf's cottage)
 RE_UNREACHABLE = ("No reachable target in view!", "Failed to move towards target.")
 
@@ -205,7 +207,8 @@ class Reflex:
         before = Before.capture(self.state)
         if action == "travel":
             mode = "travel"
-            result = self.conn.act(first_step(self.state, MF_STAIR_DOWN))
+            key = first_step(self.state, MF_STAIR_DOWN)
+            result = self._onto_shop(key, self.conn.act(key))
         elif action == "shop":
             mode = "travel"
             result = self._visit_shop()
@@ -249,13 +252,30 @@ class Reflex:
         closed.messages = opened.messages + closed.messages
         return closed
 
+    def _onto_shop(self, key: str | None, result: ActResult) -> ActResult:
+        """A step of our own path that crosses a shop square the brain fenced off (`fence_shops`) is asked about
+        ("Really walk into a travel-excluded area?"). Say yes: the fence only keeps explore out of the shop, and
+        walking over the square opens nothing. Refused, the walk to the stairs went nowhere and descend was blocked.
+        Any other excluded square is left to `_answer_prompts`, as before."""
+        if result.blocking != "menu" or key is None:
+            return result
+        way = next((d for d, k in DIRECTIONS.items() if k == key), None)
+        px, py = self.state.pos
+        if way is None or (px + way[0], py + way[1]) not in self.state.shops() or not any(
+                EXCLUDED_PROMPT in strip_tags((m.get("title") or {}).get("text", ""))
+                for m in result.messages if m.get("msg") == "menu"):
+            return result
+        after = self.conn.act("Y", through_menu=True)
+        after.messages = result.messages + after.messages
+        return after
+
     def _approach(self) -> ActResult:
         """One step along our own path to the nearest hostile; moving into a closed or runed door opens it."""
         hostiles = sorted(self.stub.active_hostiles(self.state), key=lambda m: self.state.distance(m.pos))
         for m in hostiles:
             key = step_toward(self.state, m.pos)
             if key:
-                return self.conn.act(key)
+                return self._onto_shop(key, self.conn.act(key))
         self.stub.ignored |= {m.id for m in hostiles}   # no known way to any of them
         return ActResult()
 

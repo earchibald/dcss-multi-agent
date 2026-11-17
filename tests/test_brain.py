@@ -2705,7 +2705,8 @@ def test_saved_models_still_load_and_choose_the_same_with_the_switches_on_or_off
         pytest.skip("no saved models in this checkout")
     for p in paths[:6]:
         net = load_model(str(p))
-        for style in (Style(kit=1, hand=1, throw=1, step=1), Style(kit=2), Style(kit=2, kitpart=1)):
+        for style in (Style(kit=1, hand=1, throw=1, step=1), Style(kit=2), Style(kit=2, kitpart=1), Style(save=1),
+                      Style(calm=1), Style(calm=2), Style(calm=2, save=1)):
             a = BrainTiers(net, Style(), rng=random.Random(0))
             b = BrainTiers(net, style, rng=random.Random(0))
             st = stairs_state()
@@ -3209,6 +3210,61 @@ def test_kit2_walks_into_a_shop_buys_and_leaves():
     assert poor.shop_target(st) is None
 
 
+def test_kit2_steps_off_a_visited_shop_at_once_and_only_once():
+    from ladder.interrupts import Before
+    shop_at, other_at = (6, 1), (7, 2)
+    st = kit_state(gold=300)
+    for sq in (shop_at, other_at):
+        st.cells[sq] = {**st.cells[sq], "mf": 15, "g": "∩"}
+    tiers = BrainTiers(style=Style(kit=2), rng=random.Random(0))
+    tiers.worn = {"body": "1"}
+    tiers.fenced = {(st.level_seq, shop_at), (st.level_seq, other_at)}
+    st.apply({"msg": "player", "pos": {"x": 6, "y": 1}})
+    st.cells[shop_at]["g"] = "@"
+    st.apply({"msg": "msgs", "messages": [{"text": "There is an entrance to Foo's General Store here."}]})
+
+    class ShopConn(ScriptedConn):
+        def open_menu(self, *keys):
+            self.sent.append((keys, {}))
+            return ActResult(blocking="menu", messages=[menu(*SHOP_MENU)])
+    tiers.shop_goal = (st.level_seq, shop_at)
+    assert tiers.next_action(st) == "kit_shop"
+    before = Before.capture(st)
+    tiers.perform(SimpleNamespace(state=st, conn=ShopConn([ActResult(blocking="yesno"), ActResult()])), "kit_shop")
+    # the visit took no game time, yet the next step isn't held back BLOCK_TURNS: explore is refused on the square
+    tiers.observe("kit_shop", before, st, [])
+    assert tiers.auto_step(st, []) == "kit_shop"
+    # another shop to visit: walk on to it (over the visited square if need be), not back off the one just seen
+    conn = ScriptedConn([ActResult(blocking="menu"), ActResult()])
+    tiers.perform(SimpleNamespace(state=st, conn=conn), "kit_shop")
+    assert [k for k, _ in conn.sent] == [(DIRECTIONS[(1, 1)],), ("Y",)]
+    # with nothing else to visit it steps off, once; standing there again later (a walk to the stairs across the
+    # square) is not stepped back from
+    tiers.shops_done.add((st.level_seq, other_at))
+    assert tiers.auto_step(st, []) == "kit_shop"
+    conn = ScriptedConn([ActResult()])
+    tiers.perform(SimpleNamespace(state=st, conn=conn), "kit_shop")
+    assert len(conn.sent) == 1 and conn.sent[0][0][0].startswith("key_dir")
+    assert tiers.auto_step(st, []) is None
+
+
+def test_reflex_walks_over_a_fenced_shop_on_the_way_to_the_stairs():
+    from ladder.reflex import EXCLUDED_PROMPT, Reflex
+    st = make_state(["#####", "#@∩>#", "#####"])
+    st.cells[(2, 1)] = {**st.cells[(2, 1)], "mf": 15, "g": "∩"}
+    asked = ActResult(blocking="menu", messages=[{"msg": "menu", "tag": "prompt",
+                                                  "title": {"text": f"<white>{EXCLUDED_PROMPT}"}}])
+    reflex = Reflex.__new__(Reflex)
+    reflex.state, reflex.conn = st, ScriptedConn([ActResult()])
+    out = reflex._onto_shop(DIRECTIONS[(1, 0)], asked)
+    assert reflex.conn.sent == [(("Y",), {"through_menu": True})] and out.blocking is None
+    # any other excluded square, or another menu, is left alone
+    reflex.conn = ScriptedConn()
+    assert reflex._onto_shop(DIRECTIONS[(0, 1)], asked) is asked and reflex.conn.sent == []
+    other = ActResult(blocking="menu", messages=[{"msg": "menu", "title": {"text": "Something else?"}}])
+    assert reflex._onto_shop(DIRECTIONS[(1, 0)], other) is other
+
+
 def test_kit2_never_opens_a_shop_that_was_a_mimic():
     shop_at = (4, 1)
     st = kit_state(gold=300)
@@ -3272,3 +3328,85 @@ def test_kit2_is_a_style_and_old_runs_still_match():
     assert _style(argparse.Namespace(style=["kit=2", "kitpart=4"])) == Style(kit=2, kitpart=4)
     old = {k: v for k, v in Style().to_dict().items() if k != "kitpart"}
     assert Style.saved(old) == Style()                  # added at 0, which is "all parts" only at kit 2: no entry needed
+
+
+# --- Style.save: potions kept as qw keeps them ---------------------------------------------------------------
+
+def test_save_is_off_by_default_and_off_drinks_at_half():
+    assert Style().save == 0
+    fight = obs(hp=8, hp_max=20, n_hostiles=1, mons=[mon(dx=1)],
+                inv={"heal": 1, "curing": 1, "heal_wounds": 0, "unknown_potions": 0, "unknown_scrolls": 0,
+                     "teleport": 0})
+    avail = available(fight, False, set(), False)
+    assert baseline(fight, avail, False) == baseline(fight, avail, False, heal_at=0.5) == "quaff_heal"
+    # save: at 40% it fights on; at a quarter or under it drinks (qw's hp_is_low(25))
+    assert baseline(fight, avail, False, heal_at=policy.SAVE_HEAL) == "fight"
+    low = {**fight, "hp": 5}
+    assert baseline(low, available(low, False, set(), False), False, heal_at=policy.SAVE_HEAL) == "quaff_heal"
+    # the cure for serious poison is not held back
+    sick = {**fight, "poison_survival": 1}
+    assert baseline(sick, available(sick, False, set(), False), False, heal_at=policy.SAVE_HEAL) == "quaff_heal"
+    # no healing potion known, at a quarter: an unknown potion, as qw's heal_general drinks one
+    gamble = {**low, "inv": {**low["inv"], "heal": 0, "curing": 0, "unknown_potions": 1}}
+    ga = available(gamble, False, set(), False)
+    assert baseline(gamble, ga, False, heal_at=policy.SAVE_HEAL, gamble=True) == "quaff_unknown"
+    assert baseline(gamble, ga, False) != "quaff_unknown"
+    assert baseline({**gamble, "hp": 8}, ga, False, heal_at=policy.SAVE_HEAL, gamble=True) == "fight"
+
+
+def test_save_drinks_an_unknown_potion_only_from_a_pair():
+    one = make_state(["@..."])
+    with_inv(one, s0=item("fizzy red potion", POTIONS, 1, 97), s1=item("bubbling blue potion", POTIONS, 1, 98))
+    for style, want in ((Style(), "quaff_unknown"), (Style(save=1), "explore")):
+        tiers = BrainTiers(style=style, rng=random.Random(0))
+        tiers.worn = {"body": "1"}
+        assert tiers.next_action(one) == want, style
+    two = make_state(["@..."])
+    with_inv(two, s0=item("fizzy red potion", POTIONS, 1, 97), s1=item("bubbling blue potion", POTIONS, 2, 98))
+    tiers = BrainTiers(style=Style(save=1), rng=random.Random(0))
+    tiers.worn = {"body": "1"}
+    assert tiers.next_action(two) == "quaff_unknown"
+    conn = ScriptedConn([ActResult(blocking="menu")])
+    tiers.perform(SimpleNamespace(state=two, conn=conn), "quaff_unknown")
+    assert [k for k, _ in conn.sent] == [("q",), ("b",)]              # the pair, not the first stack
+
+
+def test_save_is_a_style_and_old_runs_still_match():
+    import argparse
+    from ladder.brain.cli import _style
+    assert _style(argparse.Namespace(style=["save=1"])) == Style(save=1)
+    old = {k: v for k, v in Style().to_dict().items() if k != "save"}
+    assert Style.saved(old) == Style()                  # added off, still off: no STYLE_ADDED_AS entry
+
+
+# --- Style.calm 2: a step away from a disturbance -------------------------------------------------------------
+
+def test_calm2_steps_aside_from_a_disturbance_instead_of_setting_explore_aside():
+    for calm in (0, 1):
+        state = stairs_state()
+        tiers = BrainTiers(style=Style(calm=calm), rng=random.Random(0))
+        tiers.choice = "explore"
+        _refuse_explore(tiers, state, policy.DISTURBANCE)
+        _refuse_explore(tiers, state, policy.DISTURBANCE)
+        assert "explore" in tiers.blocked and tiers.auto_step(state, []) is None, calm
+    state = stairs_state()
+    tiers = BrainTiers(style=Style(calm=2), rng=random.Random(0))
+    tiers.worn = {"body": "1"}
+    for k in range(policy.DISTURB_MAX):
+        tiers.choice = "explore"
+        _refuse_explore(tiers, state, policy.DISTURBANCE)
+        assert "explore" not in tiers.blocked and tiers.next_action(state) == "disturb_step"
+        conn = ScriptedConn([ActResult()])
+        tiers.perform(SimpleNamespace(state=state, conn=conn), "disturb_step")
+        assert conn.sent[0][0][0] in (DIRECTIONS[(1, 0)], DIRECTIONS[(-1, 0)])     # the corridor's two ways
+        assert tiers.next_action(state) == "explore"
+    # after DISTURB_MAX steps on this level, refusals count again
+    tiers.choice = "explore"
+    _refuse_explore(tiers, state, policy.DISTURBANCE)
+    _refuse_explore(tiers, state, policy.DISTURBANCE)
+    assert "explore" in tiers.blocked
+    # another reason for a refusal is left as it was
+    other = BrainTiers(style=Style(calm=2), rng=random.Random(0))
+    other.choice = "explore"
+    _refuse_explore(other, stairs_state(), "You're confused, stopping explore.")
+    assert not other.disturbed
