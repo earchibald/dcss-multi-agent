@@ -59,6 +59,7 @@ def _play(job: dict, cfg: dict, log, beat) -> dict:
     from .net import load_model
     from .gear import KIT2_RC, KIT_RC, THROW_RC
     from .policy import BrainTiers, kit_parts
+    from .route import LAIR_RC
     from .steplog import StepLog
 
     seed, user = job["seed"], cfg["user"]
@@ -81,9 +82,9 @@ def _play(job: dict, cfg: dict, log, beat) -> dict:
     try:
         conn.login(user)
         # Style.kit also picks up tower shields (and at 2, "gear", better pieces of a kind carried); Style.throw picks up
-        # missiles and binds the throw key
+        # missiles and binds the throw key; Style.lair binds the key that finds the Lair's entrance
         conn.set_rc(crawlrc() + (KIT_RC if style.kit else "") + (KIT2_RC if "gear" in kit_parts(style) else "")
-                    + (THROW_RC if style.throw else ""))
+                    + (THROW_RC if style.throw else "") + (LAIR_RC if style.lair else ""))
         opening = conn.start_game(cfg["species"], cfg["background"], cfg["weapon"], seed=seed)
         if state.turn > 1:
             # The account still held a game (one that ended without a death and wasn't quit), and a

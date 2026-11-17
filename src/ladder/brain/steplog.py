@@ -10,7 +10,7 @@ import json
 from pathlib import Path
 
 from ..state import GameState
-from .features import progress_depth
+from .features import score_depth
 from .policy import BrainTiers
 
 
@@ -27,7 +27,7 @@ class StepLog:
         def sink(record: dict) -> None:
             self.steps += 1
             o = record["obs"]
-            self.best = max(self.best, progress_depth(o["place"], o["depth"]))
+            self.best = max(self.best, score_depth(o["place"], o["depth"]))
             self.file.write(json.dumps({"game": game, "step": self.steps, **record}) + "\n")
             self.file.flush()
 
@@ -36,7 +36,7 @@ class StepLog:
 
     def end(self, game, state: GameState, summary: dict, tiers: BrainTiers) -> dict:
         p = state.player
-        self.best = max(self.best, progress_depth(p.get("place", ""), p.get("depth", 0)))
+        self.best = max(self.best, score_depth(p.get("place", ""), p.get("depth", 0)))
         end = {"type": "end", "game": game, "died": state.dead, "turn": state.turn, "place": p.get("place", ""),
                "depth": p.get("depth", 0), "xl": p.get("xl", 1), "progress": p.get("progress", 0),
                "hp": state.hp, "hp_max": state.hp_max, "ended_by": summary["ended_by"],

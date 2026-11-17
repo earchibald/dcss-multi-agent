@@ -63,6 +63,19 @@ def progress_depth(place: str, depth: int) -> int:
     return BRANCH_BASE.get(place or "Dungeon", DEEP_BRANCH) + (depth or 0)
 
 
+# The Lair and the branches below it (webtiles' place names). `Style.lair` goes there and comes back; the score stays
+# the deepest Dungeon level.
+LAIR_BRANCHES = {"Lair", "Swamp", "Shoals", "Snake Pit", "Spider Nest", "Slime Pits"}
+
+
+def score_depth(place: str, depth: int) -> int:
+    """The number a game's `max_depth` (its score) is the largest of: `progress_depth`, except that a place in the Lair
+    or below it counts 0, so a game that dies in the Lair scores the deepest Dungeon level it reached. Every other place
+    counts as before the Lair detour existed (the Abyss, reached by banishment, still as DEEP_BRANCH + its depth), so
+    runs played without `Style.lair`, which never enter the Lair, score exactly as they did."""
+    return 0 if place in LAIR_BRANCHES else progress_depth(place, depth)
+
+
 def path(state: GameState, goal_mf: int) -> tuple[str | None, int]:
     """(first step key, length) of the shortest known walk to a cell with `goal_mf`; (None, -1) if none."""
     start, cells = state.pos, state.cells

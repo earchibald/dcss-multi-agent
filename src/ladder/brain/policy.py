@@ -18,13 +18,14 @@ import numpy as np
 
 from ..conn import ActResult, cancel_prompt
 from ..interrupts import Before, Interrupt
-from ..reflex import Escalation, StubTiers
+from ..reflex import EXCLUDED_PROMPT, Escalation, StubTiers
 from ..state import MF_DOOR, MF_FEATURE, MF_STAIR_UP, MF_TRAP, MF_WATER, NOT_WALKABLE, GameState, strip_tags
 from ..travel import DIRECTIONS, step_toward
 
 from . import gear, monsters
 from .features import ACTIONS, COMPONENTS, MDAM_LEFT, POTIONS, encode, inventory, observe, path
 from .net import Ensemble, TrainedNet
+from .route import LAIR_KEY, LAIR_NO_WAY, LairRoute, where
 
 # What a scroll can stop on (conn.classify_error's names). Anything else that comes up after using an
 # item, such as the level-up stat prompt when the potion's turn killed something, is Reflex's to answer.
@@ -151,6 +152,12 @@ class Style:
                               # with nothing in view, poison that leaves 1 HP or less, `plan_cure_poison`), besides the
                               # rules' own serious-poison cure; and never drink curing to heal: a healing potion for HP is
                               # heal wounds only (qw's `plan_heal_wounds`). 0 = off. Off by default.
+    lair: float = 0.0         # k > 0 = the Lair detour (`route.LairRoute`, as qw's goal list goes): once the Lair's entrance is
+                              # known (the rc's `ladder_find_lair`, `route.LAIR_RC`), where the rules of thumb would take the
+                              # stairs down, go to the entrance and in; explore Lair:1 down to Lair:4 (k = 1) or Lair:5 (k = 2)
+                              # with the rules as they are; then walk back up through the Lair and go on down the Dungeon from
+                              # the entrance's level. Automatic steps ("lair_scan", "lair"), no action, no observation change.
+                              # 0 = off. Off by default.
 
     def weights(self) -> np.ndarray:
         return np.asarray([getattr(self, c) for c in COMPONENTS], dtype=np.float32)
@@ -892,6 +899,7 @@ class BrainTiers(StubTiers):
         self.disturbed = False                 # Style.calm 2: explore was just refused for a disturbance
         self.disturb_steps = 0                 # ...steps taken away from one on this level visit (DISTURB_MAX)
         self.cure_now = False                  # Style.cure: `cure_wanted` held at the last choice (curing, not heal wounds)
+        self.route = LairRoute(int(self.style.lair)) if self.style.lair else None   # Style.lair
 
     # --- choosing ------------------------------------------------------
 
@@ -1002,13 +1010,18 @@ class BrainTiers(StubTiers):
           before any scroll so an enchantment lands on the piece kept), "read_kit" as above (with "acquire", a known
           acquirement scroll too), "put_on" by `gear.jewel2`, and "kit_shop" ("shop": a step toward, or into, a shop on
           this level not yet visited, with SHOP_GOLD or more and half HP or more).
+        - `lair`, nothing in view, after all of the above: "lair_scan" (a branch staircase not yet looked at is on the map
+          and the Lair's entrance isn't known: the rc's `ladder_find_lair`, no game time), then "lair" where the rules of
+          thumb would take the stairs down (`rules_now` gives "descend", or nothing at all) and the route wants other
+          stairs (`route.LairRoute.wants`): toward the Lair's entrance or the stairs up, or through them (`lair_step`).
         A step that used no game time is not tried again for BLOCK_TURNS turns (`observe`); a throw that found no clear
         shot, for THROW_RETRY."""
         if self.disturbed:
             self.disturbed = False
             if not hostiles and self.style.calm >= 2 and disturb_square(state, self.disturb_steps):
                 return "disturb_step"
-        if not (self.style.kit or self.style.hand or self.style.throw or self.style.step or self.style.ident):
+        if not (self.style.kit or self.style.hand or self.style.throw or self.style.step or self.style.ident or
+                self.route):
             return None
         status = state.statuses
 
@@ -1047,6 +1060,14 @@ class BrainTiers(StubTiers):
         if self.style.ident and not hostiles and "Berserk" not in status and ok("read_ident") and \
                 not any(x.startswith(("silenced", "Conf")) for x in status) and ident_scroll(state):
             return "read_ident"
+        if self.route and not hostiles:
+            if self.route.needs_scan(state):
+                return "lair_scan"
+            # where the rules of thumb would take the stairs down (or, on a level without any, have nothing left to do),
+            # the route's stairs instead
+            if ok("lair") and self.route.target(state) and self.rules_now(state, hostiles)[1] in ("descend", "") and \
+                    self.route.wants(state):
+                return "lair"
         return None
 
     @staticmethod
@@ -1295,6 +1316,14 @@ class BrainTiers(StubTiers):
             return self.throw(conn, state)
         if action == "kit_shop":
             return self.shop(conn, state)
+        if action == "lair_scan":
+            result = conn.act(LAIR_KEY)
+            texts = [strip_tags(m.get("text", "")) for batch in result.messages if batch.get("msg") == "msgs"
+                     for m in batch.get("messages", [])]
+            self.route.scanned_now(state, texts)
+            return result
+        if action == "lair":
+            return self.lair_step(conn, state)
         if action == "disturb_step":
             way = disturb_square(state, self.disturb_steps)
             self.disturb_steps += 1
@@ -1514,6 +1543,51 @@ class BrainTiers(StubTiers):
             return result
         return ActResult()
 
+    def lair_step(self, conn, state: GameState) -> ActResult:
+        """`Style.lair`: one step of the route (`LairRoute.target`). Toward the entrance, or `>` on it; toward the stairs
+        up, or `<` on them. A step onto a fenced shop square is asked about ("Really walk into a travel-excluded
+        area?") and answered yes, as the walk to the stairs down does. No known way to the entrance gives the route up;
+        no known way up counts as a step that failed (`LairRoute.failed`)."""
+        route = self.route
+        aim = route.target(state)
+        if aim is None:
+            return ActResult()
+        if aim == "up" and where(state)[0] == "Lair":
+            route.start_back(state)
+        if aim == "entrance":
+            goal = route.entrance[1]
+            if state.pos == goal:
+                self.count("lair_in")
+                return conn.act(">")
+            key = step_toward(state, goal)
+            if key is None:
+                # seen, but not yet reached on foot (across water, past a part left unexplored after a rage): let explore
+                # go on, LAIR_NO_WAY times, before giving the route up. Not a step that failed: nothing was sent.
+                route.no_way += 1
+                self.auto = None
+                if route.no_way > LAIR_NO_WAY:
+                    route.give_up("no known way to the entrance", state)
+                else:
+                    route.event("no_way", state)
+                    self.level_explored = False
+                    self.blocked.pop("explore", None)
+                return ActResult()
+        else:
+            if state.cells.get(state.pos, {}).get("mf") == MF_STAIR_UP:
+                self.count("lair_up")
+                return conn.act("<")
+            key, _ = path(state, MF_STAIR_UP)
+            if key is None:
+                route.failed(state, "no known way up")
+                return ActResult()
+        result = conn.act(key)
+        if result.blocking == "menu" and any(EXCLUDED_PROMPT in strip_tags((m.get("title") or {}).get("text", ""))
+                                             for m in result.messages if m.get("msg") == "menu"):
+            after = conn.act("Y", through_menu=True)
+            after.messages = result.messages + after.messages
+            result = after
+        return result
+
     def trogs_hand(self, conn) -> ActResult:
         """`Style.hand`: `a`, then the letter the ability menu shows for Trog's Hand; Esc if it isn't there."""
         behind = conn.catch_up()
@@ -1582,6 +1656,10 @@ class BrainTiers(StubTiers):
             # shop's menu takes no game time either, but went somewhere: held back, the step off the shop's square
             # waited BLOCK_TURNS, with explore refused there all the while
             self.auto_blocked[self.auto] = state.turn + (THROW_RETRY if self.auto == "throw" else BLOCK_TURNS)
+            if self.auto == "lair":
+                self.route.failed(state, "a step that went nowhere")
+        if self.route and any(i.kind == "level_change" for i in interrupts):
+            self.route.arrived(state, before.place)
         if any(i.kind == "level_change" for i in interrupts):
             self.blocked.clear()
             self.stalls.clear()
@@ -1627,4 +1705,6 @@ class BrainTiers(StubTiers):
         if self.style.kit or self.style.hand or self.style.throw or self.style.step or self.style.calm >= 2 or \
                 self.style.ident or self.style.cure:
             out["kit"] = dict(self.kit_counts)
+        if self.route:
+            out["lair"] = self.route.record()
         return out

@@ -9,7 +9,7 @@ from types import SimpleNamespace
 
 import numpy as np
 import pytest
-from helpers import add_monster, make_state, player
+from helpers import add_monster, make_state, map_message, player
 
 from ladder.brain import corpus, policy
 from ladder.brain.cli import compare
@@ -2707,10 +2707,19 @@ def test_saved_models_still_load_and_choose_the_same_with_the_switches_on_or_off
         net = load_model(str(p))
         for style in (Style(kit=1, hand=1, throw=1, step=1), Style(kit=2), Style(kit=2, kitpart=1), Style(save=1),
                       Style(calm=1), Style(calm=2), Style(calm=2, save=1), Style(ident=1), Style(stack=1),
-                      Style(cure=1), Style(ident=1, stack=1, cure=1)):
+                      Style(cure=1), Style(ident=1, stack=1, cure=1), Style(lair=1), Style(lair=2)):
             a = BrainTiers(net, Style(), rng=random.Random(0))
             b = BrainTiers(net, style, rng=random.Random(0))
             st = stairs_state()
+            assert a.next_action(st) == b.next_action(st), style
+            assert a.last["obs"] == b.last["obs"] and a.last.get("values") == b.last.get("values")
+        # Style.lair on a level with a branch staircase: once it has looked (no game time), the model chooses as without
+        for style in (Style(lair=1), Style(lair=2)):
+            a = BrainTiers(net, Style(), rng=random.Random(0))
+            b = BrainTiers(net, style, rng=random.Random(0))
+            st = make_state(["#######", "#@..B>#", "#######"], depth=9)
+            assert b.next_action(st) == "lair_scan" and b.last is None
+            b.perform(SimpleNamespace(state=st, conn=ScriptedConn([lair_said("Ladder_lair none")])), "lair_scan")
             assert a.next_action(st) == b.next_action(st), style
             assert a.last["obs"] == b.last["obs"] and a.last.get("values") == b.last.get("values")
 
@@ -3517,3 +3526,245 @@ def test_cure_drinks_curing_for_confusion_and_poison_and_never_for_hp():
         conn = ScriptedConn([ActResult(blocking="menu")])
         tiers.perform(SimpleNamespace(state=st, conn=conn), "quaff_heal")
         assert [k for k, _ in conn.sent] == [("q",), (letter,)], now
+
+
+# --- Style.lair: the Lair detour ------------------------------------------------------------------------------
+
+def lair_said(*texts):
+    """What the rc's `ladder_find_lair` key brings back: its messages (the game capitalises the first letter)."""
+    return ActResult(messages=[{"msg": "msgs", "messages": [{"text": t} for t in texts]}])
+
+
+def lair_level(rows, place="Dungeon", depth=9, **fields):
+    return make_state(rows, **{"place": place, "depth": depth, "xl": 9, "ac": 15, **fields})
+
+
+def test_lair_is_off_by_default_and_off_plays_as_before():
+    import argparse
+    from ladder.brain.cli import _style
+    assert Style().lair == 0
+    assert _style(argparse.Namespace(style=["lair=1"])) == Style(lair=1)
+    old = {k: v for k, v in Style().to_dict().items() if k != "lair"}
+    assert Style.saved(old) == Style()                  # added off, still off: no STYLE_ADDED_AS entry
+    st = lair_level(["#######", "#@..B>#", "#######"])
+    tiers = BrainTiers(rng=random.Random(0))
+    assert tiers.route is None and tiers.auto_step(st, []) is None
+    tiers.level_explored = True
+    assert tiers.next_action(st) == "travel" and tiers.last["action"] == "descend"     # the stairs down, as ever
+    assert "lair" not in tiers.describe()
+
+
+def test_lair_rc_is_sent_only_with_the_switch_on(tmp_path, monkeypatch):
+    import ladder.conn
+    from ladder.brain import selfplay
+    from ladder.brain.route import LAIR_RC
+    sent = []
+
+    class Records:
+        def __init__(self, url, on_message=None, record=None):
+            self.on_message = on_message
+
+        def login(self, user):
+            pass
+
+        def set_rc(self, rc):
+            sent.append(rc)
+
+        def start_game(self, *a, seed=None):
+            for m in RESUMED:
+                self.on_message(m)
+            return RESUMED
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(ladder.conn, "Connection", Records)
+    for on in (0, 1):
+        cfg = {"user": "ladderbrain1", "model": None, "style": {"lair": on}, "epsilon": 0.0, "server": "x",
+               "species": "b", "background": "f", "weapon": "b", "max_steps": 10, "max_turns": 10}
+        log = RunLog(tmp_path / f"g{on}")
+        with pytest.raises(selfplay.StaleSave):
+            selfplay._play({"seed": 650000}, cfg, log, lambda: None)
+        log.close()
+    assert "ladder_find_lair" not in sent[0]
+    assert sent[1].endswith(LAIR_RC) and "macros += M \\{9352} ===ladder_find_lair" in sent[1]
+
+
+def test_lair_scan_finds_the_entrance_and_the_descend_goes_there_instead():
+    from ladder.brain.route import LAIR_KEY
+    st = lair_level(["#######", "#@..B>#", "#######"])
+    tiers = BrainTiers(style=Style(lair=1), rng=random.Random(0))
+    tiers.worn = {"body": "1"}
+    # a branch staircase not yet looked at: the rc's key, which takes no game time; once only
+    assert tiers.next_action(st) == "lair_scan" and tiers.last is None
+    conn = ScriptedConn([lair_said("Ladder_lair 3 0")])
+    tiers.perform(SimpleNamespace(state=st, conn=conn), "lair_scan")
+    assert conn.sent == [((LAIR_KEY,), {})]
+    assert tiers.route.entrance == (9, (4, 1))
+    assert not tiers.route.needs_scan(st)
+    # still exploring: the rules explore; hurt, they rest first; done and rested, the "lair" step replaces the descend
+    assert tiers.next_action(st) == "explore"
+    tiers.level_explored = True
+    player(st, hp=10)
+    assert tiers.next_action(st) == "rest"
+    player(st, hp=20)
+    assert tiers.next_action(st) == "lair" and tiers.last is None
+    conn = ScriptedConn()
+    tiers.perform(SimpleNamespace(state=st, conn=conn), "lair")
+    assert conn.sent == [(("key_dir_e",), {})]                    # toward the entrance, not the stairs down
+    player(st, pos={"x": 4, "y": 1})
+    conn = ScriptedConn()
+    tiers.perform(SimpleNamespace(state=st, conn=conn), "lair")
+    assert conn.sent == [((">",), {})] and tiers.kit_counts.get("lair_in") == 1
+    # with a hostile in view the rules fight as ever
+    add_monster(st, (5, 1), 7, "orc")
+    assert tiers.next_action(st) in ("fight", "berserk")
+
+
+def test_lair_scan_without_the_entrance_marks_the_staircase_looked_at():
+    st = lair_level(["#######", "#@..B>#", "#######"])
+    tiers = BrainTiers(style=Style(lair=1), rng=random.Random(0))
+    tiers.worn = {"body": "1"}
+    assert tiers.next_action(st) == "lair_scan"
+    tiers.perform(SimpleNamespace(state=st, conn=ScriptedConn([lair_said("Ladder_lair none")])), "lair_scan")
+    assert tiers.route.entrance is None and not tiers.route.needs_scan(st)
+    tiers.level_explored = True
+    assert tiers.next_action(st) == "travel" and tiers.last["action"] == "descend"     # no Lair known: down as ever
+
+
+def test_lair_route_phases_survive_shafts_flight_and_the_way_back():
+    from ladder.brain.route import LAIR_CLIMB, LAIR_ENTRIES, LAIR_FAILS, LairRoute
+
+    def at(place, depth):
+        return lair_level(["#####", "#@.<#", "#####"], place=place, depth=depth)
+
+    r = LairRoute(1)
+    assert r.floors == 4 and LairRoute(2).floors == 5
+    # the scan only where the Lair can hang from (D:8-11): the Temple's staircase on D:5 is left alone
+    assert not r.needs_scan(lair_level(["####", "#@B#", "####"], depth=5))
+    assert r.needs_scan(lair_level(["####", "#@B#", "####"], depth=8))
+    assert not r.needs_scan(lair_level(["####", "#@B#", "####"], depth=12))
+    r.entrance, r.entrance_seq = (9, (4, 1)), 1          # found on this visit (every `at` state is visit 1)
+    assert r.target(at("Dungeon", 9)) == "entrance"
+    assert r.target(at("Dungeon", 8)) is None                     # above the entrance: the rules' own descend
+    assert r.target(at("Dungeon", 10)) == "up" and r.wants(at("Dungeon", 10))   # a shaft below it: climb back
+    # in: down the Lair with the rules' descend, until Lair:4
+    r.arrived(at("Lair", 1), "D:9")
+    assert r.phase == "in" and r.entries == 1 and r.levels == [1]
+    assert r.target(at("Lair", 1)) is None and r.target(at("Lair", 3)) is None
+    # fled up out of Lair:1: in again later
+    r.arrived(at("Dungeon", 9), "Lair:1")
+    assert r.phase == "seek" and r.target(at("Dungeon", 9)) == "entrance"
+    r.arrived(at("Lair", 1), "D:9")
+    r.arrived(at("Lair", 2), "Lair:1")
+    r.arrived(at("Lair", 4), "Lair:2")                           # a shaft
+    assert r.levels == [1, 2, 4] and r.entries == 2
+    assert r.target(at("Lair", 4)) == "up"
+    r.start_back(at("Lair", 4))
+    assert r.phase == "back" and r.target(at("Lair", 2)) == "up"
+    r.arrived(at("Lair", 3), "Lair:4")
+    r.arrived(at("Dungeon", 9), "Lair:1")
+    assert r.phase == "done" and r.target(at("Dungeon", 9)) is None
+    r.arrived(at("Dungeon", 10), "D:9")
+    assert [e["what"] for e in r.events] == ["enter", "arrive", "fled_out", "enter", "arrive", "arrive", "back",
+                                             "arrive", "out", "resume"]
+    assert r.events[-1]["xl"] == 9 and r.events[-1]["ac"] == 15
+    # a shaft past the last level turns back at once
+    r2 = LairRoute(1)
+    r2.entrance = (8, (1, 1))
+    r2.arrived(at("Lair", 3), "D:8")
+    r2.arrived(at("Lair", 5), "Lair:3")
+    assert r2.phase == "back"
+    # bounded: entries, failed steps, levels below the entrance
+    r3 = LairRoute(1)
+    r3.entrance = (9, (1, 1))
+    for _ in range(LAIR_ENTRIES):
+        r3.arrived(at("Lair", 1), "D:9")
+        r3.arrived(at("Dungeon", 9), "Lair:1")
+    assert r3.phase == "off" and r3.target(at("Dungeon", 9)) is None
+    r4 = LairRoute(1)
+    r4.entrance = (9, (1, 1))
+    for _ in range(LAIR_FAILS):
+        r4.failed(at("Dungeon", 9), "went nowhere")
+    assert r4.phase == "off"
+    r5 = LairRoute(1)
+    r5.entrance = (9, (1, 1))
+    assert not r5.wants(at("Dungeon", 10 + LAIR_CLIMB)) and r5.phase == "off"
+
+
+def test_lair_entrance_is_found_again_on_a_later_visit_in_that_visits_squares():
+    from ladder.brain.route import LairRoute
+    rows = ["#######", "#@..B>#", "#######"]
+    st = lair_level(rows)
+    r = LairRoute(1)
+    assert r.needs_scan(st)
+    r.scanned_now(st, ["Ladder_lair 3 0"])
+    assert r.entrance == (9, (4, 1)) and r.entrance_seq == st.level_seq and r.target(st) == "entrance"
+    # back on D:9 on another visit (fled up out of Lair:1): webtiles counts squares from where the visit began
+    r.arrived(lair_level(["###", "#@#", "###"], place="Lair", depth=1), "D:9")
+    st.apply({"msg": "map", "clear": True, "cells": []})
+    st.apply(map_message(rows)[0])
+    r.arrived(st, "Lair:1")
+    assert r.phase == "seek" and r.target(st) is None and r.needs_scan(st)
+    r.scanned_now(st, ["Ladder_lair 2 0"])
+    assert r.entrance == (9, (3, 1)) and r.target(st) == "entrance" and not r.needs_scan(st)
+    assert [e["what"] for e in r.events][-1] == "found_again"
+    # not printed again: given up rather than walking to a square from another visit
+    st.apply({"msg": "map", "clear": True, "cells": []})
+    r.scanned_now(st, ["Ladder_lair none"])
+    assert r.phase == "off" and r.why_off == "the entrance not found again"
+
+
+def test_lair_entrance_with_no_known_way_lets_explore_go_on_then_gives_up():
+    from ladder.brain.route import LAIR_NO_WAY
+    st = lair_level(["#########", "#@..#.B>#", "#########"])      # the entrance seen beyond a wall
+    tiers = BrainTiers(style=Style(lair=1), rng=random.Random(0))
+    tiers.worn = {"body": "1"}
+    tiers.route.scanned_now(st, ["Ladder_lair 5 0"])
+    for k in range(LAIR_NO_WAY):
+        tiers.level_explored = True
+        tiers.auto = "lair"
+        assert tiers.perform(SimpleNamespace(state=st, conn=ScriptedConn()), "lair").blocking is None
+        assert not tiers.level_explored and tiers.auto is None and tiers.route.phase == "seek"
+    tiers.level_explored = True
+    tiers.perform(SimpleNamespace(state=st, conn=ScriptedConn()), "lair")
+    assert tiers.route.phase == "off" and tiers.route.why_off == "no known way to the entrance"
+
+
+def test_lair_way_back_walks_up_and_takes_the_stairs_up():
+    st = lair_level(["#######", "#<..@.#", "#######"], place="Lair", depth=4)
+    tiers = BrainTiers(style=Style(lair=1), rng=random.Random(0))
+    tiers.worn = {"body": "1"}
+    tiers.route.entrance = (9, (1, 1))
+    tiers.route.arrived(st, "D:9")
+    tiers.level_explored = True
+    # on Lair:4, done: where the rules would go down (here there are no stairs down: nothing left to do), go up
+    assert tiers.next_action(st) == "lair"
+    conn = ScriptedConn()
+    tiers.perform(SimpleNamespace(state=st, conn=conn), "lair")
+    assert conn.sent == [(("key_dir_w",), {})] and tiers.route.phase == "back"
+    player(st, pos={"x": 1, "y": 1})
+    conn = ScriptedConn()
+    tiers.perform(SimpleNamespace(state=st, conn=conn), "lair")
+    assert conn.sent == [(("<",), {})]
+    rec = tiers.describe()["lair"]
+    assert rec["phase"] == "back" and rec["levels"] == [4] and rec["entrance_depth"] == 9
+
+
+def test_a_death_in_the_lair_scores_the_deepest_dungeon_level(tmp_path):
+    from ladder.brain.features import LAIR_BRANCHES, score_depth
+    from ladder.brain.steplog import StepLog
+    assert progress_depth("Lair", 3) == 12                     # what the model sees is unchanged
+    assert score_depth("Lair", 3) == 0 and score_depth("Dungeon", 9) == 9
+    assert score_depth("Abyss", 1) == progress_depth("Abyss", 1)   # every other place scores as it did
+    assert all(score_depth(b, 2) == 0 for b in LAIR_BRANCHES)
+    log = StepLog(tmp_path)
+    tiers = log.attach(BrainTiers(style=Style(lair=1), rng=random.Random(0)), 650001)
+    for place, depth in (("Dungeon", 8), ("Dungeon", 9), ("Lair", 1), ("Lair", 3)):
+        tiers.sink({"obs": obs(place=place, depth=depth), "action": "explore"})
+    dead = lair_level(["###", "#@#", "###"], place="Lair", depth=3)
+    dead.dead = True
+    end = log.end(650001, dead, {"ended_by": "died", "escalation": None, "steps": 4}, tiers)
+    log.close()
+    assert end["max_depth"] == 9 and end["place"] == "Lair" and end["depth"] == 3 and end["died"]
+    assert summarize([{**end}])["mean_depth"] == 9
