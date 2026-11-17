@@ -101,7 +101,7 @@ class Style:
                               # reach, and one of them awake and coming (`hold_ground`): wait for them, up to k waits
                               # in a row, as qw's `plan_melee_wait_for_enemy` does, instead of walking to them.
                               # 0 = off. Off by default.
-    kit: float = 1.0          # 1 = with nothing in view and no rage on, put on the rings and amulets worth wearing (by qw's
+    kit: float = 2.0          # (2 by default: both levels passed their tests on fresh dungeons.) 1 = with nothing in view and no rage on, put on the rings and amulets worth wearing (by qw's
                               # valuation, `gear.JEWEL_VALUES`), read known enchant armour, enchant weapon and brand weapon
                               # scrolls, answer those scrolls' prompts with the armour or weapon in use instead of cancelling
                               # them, and rank and pick up the tower shield (`gear.KIT_ARMOURS`). Automatic steps taken

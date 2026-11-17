@@ -2670,7 +2670,7 @@ def kit_state(*items, hostile=None, **player_fields):
 
 def test_kit_is_on_and_hand_off_by_default_and_off_plays_as_before():
     from ladder.brain import gear
-    assert Style().kit == 1 and Style().hand == 0
+    assert Style().kit == 2 and Style().hand == 0
     ring, scroll = jewel("+4 ring of protection", "c", plus=4), item("scroll of enchant armour", SCROLLS, 1, ord("c"))
     for st in (kit_state(ring, scroll), kit_state(ring, scroll, hostile="orc sorcerer", piety_rank=3)):
         tiers = BrainTiers(style=Style(kit=0), rng=random.Random(0))
@@ -3074,7 +3074,7 @@ def test_throw_and_step_are_styles_and_old_runs_still_match():
 
 def test_kit2_is_off_at_kit_1_and_kit_1_ranks_as_before():
     from ladder.brain import gear
-    assert Style().kit == 1 and policy.kit_parts(Style()) == set() and policy.kit_parts(Style(kit=0)) == set()
+    assert Style().kit == 2 and policy.kit_parts(Style(kit=1)) == set() and policy.kit_parts(Style(kit=0)) == set()
     assert policy.kit_parts(Style(kit=2)) == {"gear", "acquire", "shop"}
     assert policy.kit_parts(Style(kit=2, kitpart=1)) == {"gear"}
     assert policy.kit_parts(Style(kit=2, kitpart=6)) == {"acquire", "shop"}
