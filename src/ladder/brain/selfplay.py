@@ -57,8 +57,8 @@ def _play(job: dict, cfg: dict, log, beat) -> dict:
     from ..reflex import Hooks, Reflex
     from ..state import GameState
     from .net import load_model
-    from .gear import KIT_RC, THROW_RC
-    from .policy import BrainTiers
+    from .gear import KIT2_RC, KIT_RC, THROW_RC
+    from .policy import BrainTiers, kit_parts
     from .steplog import StepLog
 
     seed, user = job["seed"], cfg["user"]
@@ -80,8 +80,10 @@ def _play(job: dict, cfg: dict, log, beat) -> dict:
     conn = Connection(cfg["server"], on_message=state.apply, record=record)
     try:
         conn.login(user)
-        # Style.kit also picks up tower shields; Style.throw picks up missiles and binds the throw key
-        conn.set_rc(crawlrc() + (KIT_RC if style.kit else "") + (THROW_RC if style.throw else ""))
+        # Style.kit also picks up tower shields (and at 2, "gear", better pieces of a kind carried); Style.throw picks up
+        # missiles and binds the throw key
+        conn.set_rc(crawlrc() + (KIT_RC if style.kit else "") + (KIT2_RC if "gear" in kit_parts(style) else "")
+                    + (THROW_RC if style.throw else ""))
         opening = conn.start_game(cfg["species"], cfg["background"], cfg["weapon"], seed=seed)
         if state.turn > 1:
             # The account still held a game (one that ended without a death and wasn't quit), and a

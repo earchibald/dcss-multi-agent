@@ -2705,11 +2705,12 @@ def test_saved_models_still_load_and_choose_the_same_with_the_switches_on_or_off
         pytest.skip("no saved models in this checkout")
     for p in paths[:6]:
         net = load_model(str(p))
-        a = BrainTiers(net, Style(), rng=random.Random(0))
-        b = BrainTiers(net, Style(kit=1, hand=1, throw=1, step=1), rng=random.Random(0))
-        st = stairs_state()
-        assert a.next_action(st) == b.next_action(st)
-        assert a.last["obs"] == b.last["obs"] and a.last.get("values") == b.last.get("values")
+        for style in (Style(kit=1, hand=1, throw=1, step=1), Style(kit=2), Style(kit=2, kitpart=1)):
+            a = BrainTiers(net, Style(), rng=random.Random(0))
+            b = BrainTiers(net, style, rng=random.Random(0))
+            st = stairs_state()
+            assert a.next_action(st) == b.next_action(st), style
+            assert a.last["obs"] == b.last["obs"] and a.last.get("values") == b.last.get("values")
 
 
 def test_jewel_values_follow_qw_and_skip_artefacts_useless_and_worthless_pieces():
@@ -3067,3 +3068,207 @@ def test_throw_and_step_are_styles_and_old_runs_still_match():
     assert _style(argparse.Namespace(style=["throw=1", "step=2"])) == Style(throw=1, step=2)
     old = {k: v for k, v in Style().to_dict().items() if k not in ("throw", "step")}
     assert Style.saved(old) == Style()                  # added off, and still off by default: no STYLE_ADDED_AS entry
+
+
+# --- Style.kit 2: item names read right, acquirement answered, shops used -----------------------------------------
+
+def test_kit2_is_off_at_kit_1_and_kit_1_ranks_as_before():
+    from ladder.brain import gear
+    assert Style().kit == 1 and policy.kit_parts(Style()) == set() and policy.kit_parts(Style(kit=0)) == set()
+    assert policy.kit_parts(Style(kit=2)) == {"gear", "acquire", "shop"}
+    assert policy.kit_parts(Style(kit=2, kitpart=1)) == {"gear"}
+    assert policy.kit_parts(Style(kit=2, kitpart=6)) == {"acquire", "shop"}
+    ego = item("+2 chain mail {rF+}", ARMOUR, 1, ord("c"))
+    st = kit_state(ego)
+    # kit 1 still reads a brace as an artefact (as tested on fresh dungeons); kit 2 wears it
+    assert gear.upgrades(st, {"body": "1"}, kit=True)["wear"] is None
+    assert gear.upgrades(st, {"body": "1"}, kit=2)["wear"] == "c"
+    tiers = BrainTiers(style=Style(kit=1), rng=random.Random(0))
+    assert tiers.auto_step(st, []) is None and tiers.rank_kit is True
+    # and the model sees the same at kit 1 and 2: `observe` gets the kit-1 ranking either way
+    one, two = BrainTiers(style=Style(kit=1), rng=random.Random(0)), BrainTiers(style=Style(kit=2), rng=random.Random(0))
+    for t in (one, two):
+        t.worn = {"body": "1"}
+    assert one.next_action(kit_state(ego)) == "explore" and two.next_action(kit_state(ego)) == "equip"
+    two.auto_blocked["equip"] = 10 ** 9
+    assert two.next_action(kit_state(ego)) == "explore" and two.last["obs"] == one.last["obs"]
+
+
+def test_kit2_reads_egos_brands_and_artefacts_as_the_pack_names_them():
+    from ladder.brain import gear
+    assert gear.props("+2 chain mail {rF+}") == (125, False)
+    assert gear.props('ring "Basageg" {rElec rF- rC+ AC+4 Int+2}') == (75 - 150 + 125 + 200, False)
+    assert gear.props("scarf {Harm}")[1] and gear.props("+0 cloak {*Rage rF+}")[1]
+    assert gear.armour2(item("+2 chain mail {rF+}", ARMOUR, 1, 99)) == ("body", 8 + 2 + 125 / 50)
+    assert gear.armour2(item("+0 golden dragon scales", ARMOUR, 1, 99)) == ("body", 12)
+    assert gear.armour2(item("scarf {Harm}", ARMOUR, 1, 99)) is None
+    assert gear.weapon2(item("+1 flail (distort)", WEAPON, 1, 99)) is None
+    assert gear.weapon(item("+1 flail (distort)", WEAPON, 1, 99)) == (10, 1)          # kit 1 doesn't see the brand
+    assert gear.weapon2(item("+0 flail (flame)", WEAPON, 1, 99)) == (12, 1)
+    assert gear.weapon2(item("+0 flail (pain)", WEAPON, 1, 99)) == (10, 1)
+    assert gear.brand_of("+0 flail (flame)") == "flame" and gear.brand_of("+0 flail") is None
+    assert gear.brand_of("a +2 quarterstaff of rebuke") == "rebuke"
+    art = jewel('ring "Basageg" {rElec rF- rC+ AC+4 Int+2}', "c", flags=0x1000)
+    assert gear.jewel(art) is None and gear.jewel2(art) == ("ring", art["name"], 250)
+    assert gear.jewellery_choice([("c", art, False)]) is None
+    assert gear.jewellery_choice([("c", art, False)], kit=2) == "c"
+    # brand weapon only onto a weapon without a brand, as the pack names a brand
+    brand = item("scroll of brand weapon", SCROLLS, 1, ord("d"))
+    branded = kit_state(brand)
+    with_inv(branded, s0=item("+0 mace (flame)", WEAPON, 1, ord("a")))
+    assert policy.kit_scroll(branded) == "d" and policy.kit_scroll(branded, {"gear"}) is None
+
+
+def test_kit2_enchants_armour_in_qws_order():
+    from ladder.brain import gear
+    armour = gear.worn_from_menu([menu("c - a +0 cloak (worn)", "d - a +0 chain mail (worn)",
+                                       "e - a +0 kite shield (worn)")])
+    assert gear.enchant_target("enchant_item", armour) == "d"
+    assert gear.enchant_target("enchant_item", armour, kit=2) == "c"
+    heavy = gear.worn_from_menu([menu("d - a +0 plate armour (worn)", "e - a +0 kite shield (worn)")])
+    assert gear.enchant_target("enchant_item", heavy, kit=2) == "d"
+    light = gear.worn_from_menu([menu("d - a +0 chain mail (worn)", "e - a +0 kite shield (worn)")])
+    assert gear.enchant_target("enchant_item", light, kit=2) == "e"
+
+
+SHOP_MENU = ["a -   44 gold   a scroll of amnesia (unknown)", "c -   82 gold   a scroll of enchant armour (unknown)",
+             "d -   82 gold   a scroll of enchant weapon (unknown)", "f -   22 gold   a scroll of identify (unknown)",
+             "g -   30 gold   2 potions of curing", "h -   25 gold   a +0 pair of gloves"]
+
+
+def test_kit2_shop_and_acquirement_choices():
+    from ladder.brain import gear
+    st = kit_state(gold=35)
+    lines = gear.worn_from_menu([menu(*SHOP_MENU)])
+    assert gear.shop_choice(lines, st, {"body": "1"}, set()) == ["g"]
+    st = kit_state(gold=300)
+    assert gear.shop_choice(lines, st, {"body": "1"}, set()) == ["g", "c", "d", "h"]
+    full = kit_state(item("6 potions of curing", POTIONS, 6, ord("e")), gold=300)
+    assert "g" not in gear.shop_choice(lines, full, {"body": "1"}, set())
+    acq = gear.worn_from_menu([menu("a - a +2 quarterstaff of rebuke",
+                                    "b - the +0 pair of boots of Sunlight {rPois rN+ Dex+3 Slay+2}",
+                                    "c - a manual of Unarmed Combat", "d - 912 gold pieces (you have 0 gold)")])
+    assert gear.acquire_choice(acq, st, {"body": "1"}, set(), 0.5) == "b"
+    nothing = gear.worn_from_menu([menu("a - a manual of Polearms", "b - 900 gold pieces (you have 0 gold)")])
+    assert gear.acquire_choice(nothing, st, {"body": "1"}, set(), 0.5) == "b"
+
+
+def test_kit2_answers_acquirement_and_picks_up_what_appears():
+    state = kit_state(item("scroll labelled FOO", SCROLLS, 1, ord("c")))
+    acq = ActResult(blocking="acquirement", messages=[menu("a - a manual of Polearms", "b - a +0 kite shield",
+                                                           "c - 900 gold pieces (you have 0 gold)")])
+    for kit, keys in ((1, [("r",), ("c",), ("key_esc",), ("Y",)]), (2, [("r",), ("c",), ("b",), ("y",), ("g",)])):
+        conn = ScriptedConn([ActResult(blocking="menu"), acq, ActResult(blocking="yesno"), ActResult()])
+        tiers = BrainTiers(style=Style(kit=kit))
+        tiers.perform(SimpleNamespace(state=state, conn=conn), "read_unknown")
+        assert [k for k, _ in conn.sent] == keys, kit
+    assert tiers.kit_counts == {"acquire": 1}
+    # a known acquirement scroll is read with nothing in view (kit 2 "acquire" only)
+    known = kit_state(item("scroll of acquirement", SCROLLS, 1, ord("d")))
+    assert policy.kit_scroll(known) is None and policy.kit_scroll(known, {"acquire"}) == "d"
+
+
+def test_kit2_walks_into_a_shop_buys_and_leaves():
+    shop_at = (6, 1)
+    st = kit_state(gold=300)
+    st.cells[shop_at] = {**st.cells[shop_at], "mf": 15, "g": "∩"}
+    tiers = BrainTiers(style=Style(kit=2), rng=random.Random(0))
+    tiers.worn = {"body": "1"}
+    assert tiers.next_action(st) == "fence_shops"
+    assert tiers.next_action(st) == "kit_shop"
+    conn = ScriptedConn([ActResult(blocking="menu"), ActResult()])        # "Really walk into a travel-excluded area?"
+    tiers.perform(SimpleNamespace(state=st, conn=conn), "kit_shop")
+    assert [k for k, _ in conn.sent] == [(DIRECTIONS[(1, 0)],), ("Y",)]
+    # on it (its glyph now hidden under the character's): open, mark, Enter, yes and leave
+    st.apply({"msg": "player", "pos": {"x": 6, "y": 1}})
+    st.cells[shop_at]["g"] = "@"
+    assert tiers.shop_target(st) == shop_at
+    st.apply({"msg": "msgs", "messages": [{"text": "There is an entrance to Foo's General Store here."}]})
+
+    class ShopConn(ScriptedConn):
+        def open_menu(self, *keys):
+            self.sent.append((keys, {}))
+            return ActResult(blocking="menu", messages=[menu(*SHOP_MENU)])
+    conn = ShopConn([ActResult(blocking="yesno"), ActResult()])
+    tiers.perform(SimpleNamespace(state=st, conn=conn), "kit_shop")
+    assert [k for k, _ in conn.sent] == [("<",), ("g", "c", "d", "h", "key_enter"), ("y", "key_esc")]
+    assert tiers.kit_counts["bought_items"] == 4 and tiers.shop_target(st) is None       # visited once
+    # then off its square, back the way it came: explore won't start on a travel-excluded square
+    assert tiers.auto_step(st, []) == "kit_shop"
+    conn = ScriptedConn([ActResult()])
+    tiers.perform(SimpleNamespace(state=st, conn=conn), "kit_shop")
+    assert [k for k, _ in conn.sent] == [(DIRECTIONS[(-1, 0)],)]
+    # not without the part, nor short of gold
+    other = BrainTiers(style=Style(kit=2, kitpart=3), rng=random.Random(0))
+    other.worn = {"body": "1"}
+    st.apply({"msg": "player", "pos": {"x": 3, "y": 1}})
+    other.fenced = {(st.level_seq, shop_at)}
+    assert other.auto_step(st, []) is None
+    poor = BrainTiers(style=Style(kit=2))
+    st.player["gold"] = 5
+    assert poor.shop_target(st) is None
+
+
+def test_kit2_never_opens_a_shop_that_was_a_mimic():
+    shop_at = (4, 1)
+    st = kit_state(gold=300)
+    st.cells[shop_at] = {**st.cells[shop_at], "mf": 15, "g": "∩"}
+    tiers = BrainTiers(style=Style(kit=2), rng=random.Random(0))
+    tiers.worn = {"body": "1"}
+    tiers.fenced = {(st.level_seq, shop_at)}
+    assert tiers.shop_target(st) == shop_at
+    # "The shop is a mimic!": it vanishes, and the square is floor again
+    st.apply({"msg": "msgs", "messages": [{"text": "The shop is a mimic!"}]})
+    st.cells[shop_at] = {**st.cells[shop_at], "mf": 1, "g": "."}
+    assert tiers.shop_target(st) is None and tiers.auto_step(st, []) is None
+    # standing on a shop square with no word of its entrance: nothing is pressed (`<` would wait for ever)
+    st2 = kit_state(gold=300)
+    st2.cells[(3, 1)] = {**st2.cells[(3, 1)], "mf": 15, "g": "@"}
+    t2 = BrainTiers(style=Style(kit=2), rng=random.Random(0))
+    t2.shop_goal = (st2.level_seq, (3, 1))
+    conn = ScriptedConn()
+    t2.perform(SimpleNamespace(state=st2, conn=conn), "kit_shop")
+    assert conn.sent == [] and (st2.level_seq, (3, 1)) in t2.shops_done
+
+
+def test_kit2_rc_is_sent_only_with_the_gear_part(monkeypatch, tmp_path):
+    import ladder.conn
+    from ladder.brain import gear, selfplay
+    sent = []
+
+    class Records:
+        def __init__(self, url, on_message=None, record=None):
+            self.on_message = on_message
+
+        def login(self, user):
+            pass
+
+        def set_rc(self, rc):
+            sent.append(rc)
+
+        def start_game(self, *a, seed=None):
+            for m in RESUMED:
+                self.on_message(m)
+            return RESUMED
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(ladder.conn, "Connection", Records)
+    for i, style in enumerate(({"kit": 1}, {"kit": 2}, {"kit": 2, "kitpart": 6})):
+        cfg = {"user": "ladderbrain1", "model": None, "style": style, "epsilon": 0.0, "server": "x",
+               "species": "b", "background": "f", "weapon": "b", "max_steps": 10, "max_turns": 10}
+        log = RunLog(tmp_path / f"g{i}")
+        with pytest.raises(selfplay.StaleSave):
+            selfplay._play({"seed": 650000}, cfg, log, lambda: None)
+        log.close()
+    assert gear.KIT2_RC not in sent[0] and gear.KIT2_RC in sent[1] and gear.KIT2_RC not in sent[2]
+    assert all(gear.KIT_RC in s for s in sent)
+
+
+def test_kit2_is_a_style_and_old_runs_still_match():
+    import argparse
+    from ladder.brain.cli import _style
+    assert _style(argparse.Namespace(style=["kit=2", "kitpart=4"])) == Style(kit=2, kitpart=4)
+    old = {k: v for k, v in Style().to_dict().items() if k != "kitpart"}
+    assert Style.saved(old) == Style()                  # added at 0, which is "all parts" only at kit 2: no entry needed

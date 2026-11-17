@@ -3238,6 +3238,349 @@ A + C: pooled interval mostly above zero, both blocks positive. None qualifies. 
   - copies: `arms.py`, `seeds.py`, `verify.py`, `mindex.py`, `same.py`, `kitstats.py`, `probe.py` (now takes
     `$EXTRA_RC`), `chain.sh` and `refresh.sh`.
 
+#### The kit gap item by item, and `kit=2`: item names read right, acquirement, shops (2026-11-16, late afternoon)
+
+Of twelve things tried since the comparison with qw, only equipment paid (`kit=1`, now a default). This section
+measures what is still missing, item by item, against qw on the same dungeons, and builds the largest parts that are
+equipment or resources as a new level, `kit=2`. **Result: the largest single fault was ours, not a missing habit:
+the bot read the game's item names wrongly, so no ego armour was ever worn and weapon brands were never seen. The
+rest of qw's lead is mostly consumables found on levels our bot leaves half explored after a rage, then heavier
+armour, shops and acquirement. `kit=2` reads the names right, answers acquirement and buys in shops. On A + C it is
++0.38 [+0.07, +0.71] levels; no part alone is clearly ahead ("gear" +0.17, "acquire" −0.01, "shop" +0.07). Fresh
+test on 690600–691199, pre-registered: +0.41 [+0.12, +0.69] over 599 dungeons, so the rule passes.** No default was
+changed.
+
+**Data.** Block A (500000–500199): our `runs/brain/v6h/A-kit` (today's defaults) against qw's `runs/qw/zk-heldout-200`.
+- qw: its state lines (`QWS`: AC, EV, SH, gold, potions and scrolls held) and its morgue notes, each with its turn:
+  `WEARING`, `WIELDING`, `REMOVING`, `ENCHANTING`, `BRANDING`, `ACQUIRING`, "Bought … for N gold pieces",
+  "Received a gift". What qw had on at a moment is its last `WEARING`/`WIELDING` of each slot before it, with the
+  plus counted up by its `ENCHANTING` notes since.
+- Ours: each game's protocol replayed (the inventory), and its messages: "You finish putting on|taking off your …",
+  "x - … (worn)", "You remove your …", "You see here …", the "Things that are here:" lists, the acquirement menu.
+- "Arrival" is the first moment on D:3, D:5, D:7, D:9; every comparison is over the dungeons both bots reached.
+- Scripts (job's `brain-v6j/`): `gap.py` (both bots' snapshots), `gapstats.py` (the tables), `gapcause.py` (causes
+  summed over slots), `qwbuy.py` (qw's purchases), `egos.py` (ego and branded pieces in our packs), `shops.py` (shops
+  and acquirement menus our bot met), `explored.py` (levels left before explore was done).
+
+**On first arrival** (means over the dungeons both reached; qw / ours; `gapstats.py`):
+
+| measure | D:3 (167) | D:5 (118) | D:7 (77) | D:9 (38) |
+| --- | --- | --- | --- | --- |
+| AC | 7.4 / 7.0 | 10.5 / 10.1 | 13.5 / 12.0 | 17.7 / 14.3 |
+| EV | 9.1 / 9.4 | 8.5 / 8.8 | 8.2 / 9.1 | 9.3 / 10.0 |
+| SH | 0.7 / 0.6 | 1.6 / 1.0 | 2.7 / 1.8 | 3.6 / 2.2 |
+| XL | 3.5 / 3.3 | 6.3 / 5.7 | 8.3 / 7.5 | 10.2 / 8.7 |
+| turn of arrival | 1,770 / 1,342 | 3,507 / 2,527 | 5,425 / 3,648 | 8,394 / 4,860 |
+| body armour, base AC | 6.4 / 5.8 | 7.8 / 7.5 | 8.7 / 8.0 | 9.0 / 8.5 |
+| body armour, plus | 0.06 / 0.14 | 0.20 / 0.34 | 0.34 / 0.39 | 0.71 / 0.58 |
+| shield worn (buckler, kite, tower) | 11% / 8% | 16% / 12% | 25% / 19% | 39% / 18% |
+| orb worn (qw only) | 8% | 14% | 17% | 16% |
+| cloak / gloves / boots / helmet or hat worn | 16 / 17 / 12 / 1% against 10 / 13 / 8 / 2% | 28 / 36 / 29 / 3% against 19 / 31 / 21 / 5% | 43 / 36 / 42 / 4% against 29 / 31 / 25 / 5% | 58 / 58 / 68 / 18% against 32 / 50 / 37 / 8% |
+| rings / amulets worn | 0.53 / 0.48, 11% / 5% | 1.03 / 0.96, 22% / 13% | 1.31 / 1.10, 30% / 19% | 1.82 / 1.47, 47% / 24% |
+| weapon plus | 0.15 / 0.27 | 0.72 / 0.52 | 1.40 / 0.60 | 1.79 / 0.76 |
+| weapon branded | 6% / 9% | 17% / 15% | 26% / 14% | 32% / 21% |
+| heal wounds / curing held | 0.26 / 0.66 against 0.11 / 0.32 | 0.71 / 1.40 against 0.23 / 0.59 | 1.09 / 2.35 against 0.35 / 0.77 | 1.71 / 3.61 against 0.53 / 0.79 |
+| teleportation held | 0.37 / 0.28 | 1.16 / 0.69 | 2.10 / 0.83 | 3.45 / 1.16 |
+| unknown potion stacks held | 1.63 / 0.00 | 1.58 / 0.00 | 1.56 / 0.00 | 1.29 / 0.00 |
+| gold held / spent | 96 + 4 / 85 + 0 | 179 + 26 / 161 + 0 | 266 + 66 / 226 + 0 | 466 + 99 / 307 + 0 |
+| qw's purchases / acquirements / enchant and brand scrolls read, per dungeon so far | 0.11 / 0.04 / 0.52 | 0.59 / 0.11 / 1.21 | 1.22 / 0.17 / 1.69 | 1.29 / 0.21 / 3.16 |
+
+- **The gap is mostly consumables, then armour.** At D:7 qw holds 3.3 more healing potions and teleport scrolls
+  between them (curing +1.6, heal wounds +0.7, teleportation +1.3), 1.5 more AC and 0.85 more SH. EV is the same.
+- **qw has more of everything because it has seen more.** It arrives on each level later (5,425 turns against 3,648
+  at D:7) and has picked up 47% more gold by then (332 against 226, held plus spent). Our bot leaves 43% of the
+  Dungeon levels it passes through before explore has finished (529 of 1,242 levels on A, 510 of 1,181 on C,
+  `explored.py`), in every case after a rage there: explore is refused during the rage ("Calm down first"), the
+  refusal sets explore aside for 50 turns, the bot rests the rage off, and then takes the stairs. With `calm=1` it
+  is 13%. This is how the bot explores, not its kit; `calm=1` was tested (level, +0.07 [−0.32, +0.47]) and is not
+  taken up again here.
+- **Shops gave qw little armour.** Of the 282 weapon and armour pieces qw had on at D:7 (77 dungeons), 263 came
+  from the floor, 8 from a shop, 9 from acquirement and 2 were its starting kit. Trog gave it no gift before D:7 (3 by
+  D:9). What qw bought by D:7 (136 games that reached it,
+  `qwbuy.py`): 147 items for 8,283 gold in 54 games; scrolls of identify 27, potions of curing 21, scrolls of
+  teleportation 9, body armour 7, shields 5, weapons 5, potions of might 5, enchant armour 4, heal wounds 4,
+  jewellery 4.
+
+**Each slot where qw's piece ranks higher than ours, by where qw got it and why ours didn't have it**
+(`gapcause.py`; weapon and armour slots compared by qw's own scale, rings and amulets by kind; a piece counts once per
+dungeon and depth):
+
+| cause | D:3 (167) | D:5 (118) | D:7 (77) | D:9 (38) |
+| --- | --- | --- | --- | --- |
+| weapon/armour slots where qw's is better | 97 | 145 | 140 | 109 |
+| floor: never in our pack, never stood on ("not seen") | 44 | 44 | 44 | 51 |
+| floor: same kind in use, qw's has a higher plus or an ego/brand | 14 | 52 | 53 | 36 |
+| floor: an ego piece of that kind was in our pack, never worn (braces read as an artefact) | 7 | 15 | 13 | 7 |
+| floor: in our pack, not worn or wielded (ranked lower, or worn then replaced) | 11 | 20 | 11 | 6 |
+| floor: stood on, not picked up (the rc takes one of each kind) | 13 | 2 | 2 | 2 |
+| floor: an artefact, left alone | 1 | 0 | 1 | 2 |
+| shop (fenced off for us) | 5 | 4 | 7 | 2 |
+| acquirement (ours cancelled the menu / had none) | 2 / 0 | 5 / 3 | 5 / 4 | 2 / 1 |
+| rings and amulets of a kind ours lacks | 26 | 41 | 51 | 39 |
+| …never in our pack | 11 | 24 | 31 | 25 |
+| …in our pack, not put on (ranked below what was on) or an artefact | 8 | 5 | 12 | 10 |
+| …worn earlier, then replaced | 3 | 7 | 4 | 2 |
+| …acquirement | 4 | 5 | 4 | 2 |
+
+- "Same kind in use, higher plus" is mostly qw's enchant scrolls: at D:7 its weapon is +1.40 against our +0.60 and
+  26% branded against 14%, and its small pieces carry its armour enchantments (see 8 below).
+- Weapons by D:7 (77): qw wields a morningstar in 16, a dire flail in 9, a demon whip in 3; ours a morningstar in 7,
+  a dire flail in 3 and still a mace in 12.
+
+**Where our ranking (`gear.py`) and qw's (`runs/qw/build-zk/qw.lua`) disagree**, read side by side:
+
+1. **Egos.** The pack names an armour's ego as a property list in braces ("+2 chain mail {rF+}"). `gear.ARTEFACT`
+   treats any brace as an artefact, so no ego armour is ever ranked or worn. qw values each property
+   (`total_property_value`, `absolute_property_value` 2764–2878: rPois 225, SInv and flight 200, rF/rC 125…).
+   Measured: 59 ego pieces came into our packs in `A-kit`'s 200 games and none was ever put on (`egos.py`).
+2. **Weapon brands.** The pack names a brand tersely in brackets ("+0 flail (flame)"). `gear.weapon` looks for
+   " of ", so the +2 brand bonus never applies, `BAD_BRANDS` never matches ("(distort)", "(chaos)"), and
+   `kit_scroll`'s "brand weapon only onto an unbranded weapon" never holds. qw ranks brands and never wields
+   distortion or chaos.
+3. **Artefacts.** We leave every artefact alone (weapons, armour, jewellery). qw ranks them by their properties and
+   wears them unless a property is bad (`-Tele`, `*Rage`, `Harm`…). The item flags say which is an artefact
+   (`ISFLAG_ARTEFACT_MASK`); the name is not reliable.
+4. **Body armour weight.** Ours: base AC + plus. qw: 2 × 50 per base AC + 50 per plus (`armour_base_value` 2068–2178,
+   `expected_armour_multiplier` 2 for its "heavy" plan), minus 100 for encumbrance 20 or more. So qw prefers chain
+   mail +0 to scale mail +2, where ours ties. No body armour is too heavy by our rule (we have none).
+5. **Base AC table.** Ours has "gold dragon scales" (the game says "golden"), so golden, ice, quicksilver, pearl,
+   storm and shadow dragon scales all rank at 8; troll leather armour at 4 (the game's 3).
+6. **Shields against body armour.** qw: 270 + 60 per base SH = 450 / 750 / 1050 for buckler / kite / tower, against
+   100 per body AC; ours 3 / 5 / 7 against 1 per body AC. qw also wears an orb (270) for nothing else.
+7. **Small pieces.** qw: 100 per AC (cloak, gloves, boots, helmet 100; hat and scarf 0) plus properties; ours
+   1 / 0.5 the same way, with no properties.
+8. **Where enchant armour goes.** Ours: body armour first. qw (`get_enchantable_armour` 13631–13680): a worn cloak,
+   gloves, boots or helmet first; the body armour only if it is plate or dragon scales; then the shield. Our body
+   armour is later swapped for a heavier one and its plus is lost.
+9. **What is picked up.** Ours (`crawlrc.txt`'s `ladder_gear`): one piece of each kind, so a +2 cloak or an ego
+   chain mail is left lying when one of that kind is carried. qw picks up whatever its valuation says is better.
+10. **Acquirement.** Ours cancels the menu; qw takes the best offer (`best_acquirement_index` 2587–2641).
+11. **Shops.** Ours are fenced off; qw buys what its autopickup wants whenever it can pay (`plan_shop` 13831–13873).
+12. **Unknown potions.** Ours drinks them to identify them; qw keeps them (1.3–1.6 unknown stacks on arrival) and
+    reads identify scrolls, which it also buys.
+
+**What `kit=2` is.** A new level of the existing `Style.kit` key, plus a new key `kitpart` that picks its parts (a sum
+of 1 "gear", 2 "acquire", 4 "shop"; 0, the default, is all three). `kit=1` and the default (`kit=1`) are unchanged:
+every new rule is behind `kit >= 2` (`policy.kit_parts`), and `kitpart` does nothing below it. Every part is an
+automatic step before the brain's choice (`BrainTiers.auto_step`), never an action. `features.ACTIONS`, the
+observation and the input vector are unchanged: `observe` still gets the kit-1 ranking at `kit=2`, so a state looks
+the same to the model at `kit=1` and `kit=2`.
+
+- **"gear": item names read as the pack writes them** (`gear.weapon2`, `armour2`, `jewel2`, `props`, `brand_of`,
+  `is_artefact`).
+  - An artefact is what the item flags say (`ARTEFACT_FLAGS`), not any name with a brace.
+  - An ego's or artefact's properties in braces add qw's value for them, in armour plus points (qw's value / 50:
+    rF+ 2.5, rPois 4.5, SInv 4, Will+ 2, AC+3 3, Slay+2 2…). A piece with `Harm`, `Ponderous`, `*Tele`, `*Rage`,
+    `*Slow`, `*Corrode`, `-Tele` or `Fragile` is never worn, wielded or bought. A shop's long names ("+2 robe of
+    willpower") are read the same way (`VERBOSE_EGOS`).
+  - A weapon's brand is read from its brackets: a good brand adds 2 (as `weapon` meant to); distortion and chaos rule
+    it out; pain adds nothing.
+  - Rings and amulets that are artefacts are worth what their properties are worth, and are put on like the others.
+  - The real base AC of every dragon armour and of troll leather armour.
+  - "equip": with nothing in view and no rage, wear or wield the better piece by this ranking (`gear.upgrades` at
+    kit 2), before any scroll, so an enchantment lands on the piece kept. The brain's own `wear` and `wield` also
+    use it at kit 2.
+  - Enchant armour in qw's order (`gear.enchant_target` at kit 2): a worn cloak, gloves, boots or helmet first, then
+    plate or dragon armour, then the shield, then any body armour.
+  - Brand weapon only onto a weapon whose name shows no brand.
+  - Pick up a piece of a kind already carried when it is an artefact, has an ego, or has a higher plus than every
+    one of its kind carried (`gear.KIT2_RC`, sent only with this part).
+- **"acquire"** (`gear.acquire_choice`, `BrainTiers.answer_acquire`): answer "Choose an item to acquire." with the
+  offer that adds most over what is in use, in the same units (a better weapon or armour by its rank, a ring or amulet
+  by qw's value if it would go on, a manual of Maces & Flails or Fighting 2, Armour 1.5, Shields 1 with a shield on),
+  else the gold (worth 0.5, or 3 with "shop" on). Then "y", and `g` for what appears at the character's feet. A known
+  acquirement scroll is read with nothing in view.
+- **"shop"** (`gear.shop_choice`, `BrainTiers.shop`, step `kit_shop`): with nothing in view, no rage, half HP or
+  more and 20 gold or more, walk to the nearest shop on the level not yet visited, one step per automatic step,
+  answering yes to "Really walk into a travel-excluded area?" (the bot fences shops off from explore). On it: `<`,
+  mark the wanted lines, Enter, `y`, Esc. Wanted, most valuable first while the gold lasts: acquirement 6, heal
+  wounds 5 (to 5 held), teleportation 4 (to 4), curing 3 (to 6), enchant armour 2, enchant weapon 1.5, brand weapon
+  1.5 (weapon unbranded), and any weapon, armour or jewellery by its gain as for acquirement. One of each consumable
+  per visit. A shop is visited once per visit to the level; one 80 steps away or more is given up. After the visit it
+  steps off the shop's square (explore won't start on a travel-excluded square: "You're in a travel-excluded area,
+  stopping explore."), and it never presses `<` on a square that is no longer a shop ("The shop is a mimic!").
+
+**The menus, seen in the real game** (`laddertest`; job's `brain-v6j/probe3.py`, a seeded real game, 500020, whose
+D:1 has a scroll shop; `probe4.py` with `probe/acq.yaml`, a scenario game with acquirement scrolls).
+- Stepping onto a fenced shop: a menu "Really walk into a travel-excluded area?" (tag `prompt`), answered `Y`.
+- `<` on the shop opens the menu (tag `shop`) "Welcome to Dolleogu's Magic Scroll Shoppe! What would you like to
+  do?", lines " a -   44 gold   a scroll of amnesia (unknown)". A letter marks a line and sends no `input_mode`, so
+  `Connection.act` would wait for ever on it alone; the letters and Enter go together, and Enter brings the yes/no
+  (mode 8) "Purchase items for 22 gold? (y/N)". `y` again sends no `input_mode`, so `y` and Esc go together. The
+  purchase shows as "c -> i - 2 scrolls of identify (gained 1)" and "Thank you for shopping at …". It takes no game
+  time.
+- Acquirement: reading it brings the menu (tag `acquirement`, the bot's blocking reason "acquirement") "Choose an item
+  to acquire.", lines " a - a +2 quarterstaff of rebuke", " b - the +0 pair of boots of Sunlight {rPois rN+ Dex+3
+  Slay+2}", " c - a manual of Unarmed Combat", " d - 912 gold pieces (you have 0 gold)". A letter brings a yes/no
+  ("Acquire a +2 quarterstaff of rebuke? (y/N)"); `y` gives "Something appears at your feet!", and `g` picks it up.
+  Cancelled, the scroll stays, now known (the kit-1 bot then re-opened and cancelled the same menu at each later read).
+- Two faults the first tuning run found, both fixed before the runs below (`v6j/A-k2` and a C run cut off part-way
+  were played without the fixes and are not used): 27 of 200 games ended standing on a visited shop, explore refusing
+  to start there; 2 hung on a shop mimic, `<` pressed on a square that was no longer a shop.
+
+**`kit=1` play is unchanged.** With the finished tree, 500000–500008 with no `--style` (`v6j/A-off4`) and
+500009–500017 with `kit=1 kitpart=7` (`v6j/A-off5`) are identical to `v6h/A-kit` choice by choice (`same.py`): the
+same deepest level, final turn and death, and the same choices step by step, 18 of 18 (296 to 1,739 choices a game).
+(The same check on the tree before the two shop fixes, `A-off`/`A-off1` and `A-off2` begun, gave 18 of 18 too.)
+Tests in `tests/test_brain.py`:
+- `test_kit2_is_off_at_kit_1_and_kit_1_ranks_as_before` (and the model sees the same observation at `kit=1` and 2)
+- `test_kit2_reads_egos_brands_and_artefacts_as_the_pack_names_them`
+- `test_kit2_enchants_armour_in_qws_order`
+- `test_kit2_shop_and_acquirement_choices`
+- `test_kit2_answers_acquirement_and_picks_up_what_appears`
+- `test_kit2_walks_into_a_shop_buys_and_leaves`
+- `test_kit2_never_opens_a_shop_that_was_a_mimic`
+- `test_kit2_rc_is_sent_only_with_the_gear_part`
+- `test_kit2_is_a_style_and_old_runs_still_match`
+- `test_saved_models_still_load_and_choose_the_same_with_the_switches_on_or_off`, now also with `kit=2` and
+  `kit=2 kitpart=1`; `test_kit_and_hand_add_no_action_and_change_no_input` still pins the action list.
+
+**Tuning, `kit=2` with all parts** (this tree, no model, epsilon 0, 9 workers, all 9 played; A then C, 16:14–16:42;
+`chain.sh`, `jobs-tune3.txt`). Each arm minus `v6h/{A,C}-kit` (today's defaults), paired by dungeon over games both
+finished and neither stale nor off its seed (`arms.py`, `verify.py`); 95% bootstrap over dungeons, 10,000 resamples.
+Description only: these blocks are spent.
+
+| arm | A: mean depth | C: mean depth | − defaults, A | − defaults, C | **pooled** | deeper / same / shallower | died D:1–3 / 4–6 / 7+ |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| defaults (`v6h/*-kit`) | 7.42 | 7.09 | | | | | 50 / 106 / 225 |
+| `kit=2` | 7.75 | 7.54 | +0.34 [−0.12, +0.81] | +0.43 [−0.03, +0.88] | **+0.38 [+0.07, +0.71]** (399) | 119 / 175 / 105 | 53 / 96 / 227 |
+
+Seed checks: every game of both runs on its seed (no "Welcome back", no protocol without its seed, no first step
+after turn 1, a morgue on its seed for every finished game). One game hung, 540052, as in every C reference run.
+
+**Pre-registration of the fresh test** (written into this file before any game on these seeds was played).
+- **Configuration**: `--style kit=2` (all three parts; `kitpart` left at 0). Everything else is today's defaults
+  (`recover=1 retreat=2 teleport=3 unseen=2 kit=1` but for `kit`), no model, epsilon 0.
+  - Why this one: on A + C its pooled interval is wholly above zero and both blocks are positive. The parts are being
+    tuned separately on A and C to learn which part pays, but the fresh test is of `kit=2` as built, chosen now,
+    before any part's result is in, so no part is picked by its tuning result.
+- **Baseline**: today's defaults (no `--style`), played fresh with this same tree on the same seeds.
+- **Seeds**: 690600–691199, once each per arm, in three blocks of 200. The arm order alternates per block:
+  - 690600–690799: defaults, then `kit=2`;
+  - 690800–690999: `kit=2`, then defaults;
+  - 691000–691199: defaults, then `kit=2`.
+- **Analysis**, done once, after all six runs have finished: `kit=2` − defaults in deepest Dungeon level reached,
+  paired by dungeon over the dungeons both arms finished and neither is stale nor off its seed (`arms.py`,
+  `verify.py`); 95% bootstrap over dungeons, 10,000 resamples, pooled over the three blocks.
+- **Pass rule**: the pooled interval's lower end is above zero. If it passes, `kit=2` is a candidate for a default;
+  this section changes no default either way.
+
+**The parts tuned one at a time** (after the pre-registration above was written; 16:42–18:03, same method, arm order
+C-gear, A-gear, A-acq, C-acq, C-shop, A-shop). Each is `kit=2 kitpart=k`, minus today's defaults:
+
+| arm | A: mean depth | C: mean depth | − defaults, A | − defaults, C | **pooled** | deeper / same / shallower | died D:1–3 / 4–6 / 7+ |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| "gear" (`kitpart=1`) | 7.61 | 7.24 | +0.19 [−0.19, +0.58] | +0.14 [−0.17, +0.46] | **+0.17 [−0.08, +0.41]** (400) | 99 / 216 / 85 | 53 / 108 / 211 |
+| "acquire" (`kitpart=2`) | 7.49 | 7.00 | +0.07 [−0.07, +0.23] | −0.10 [−0.28, +0.08] | **−0.01 [−0.13, +0.10]** (400) | 21 / 361 / 18 | 48 / 107 / 226 |
+| "shop" (`kitpart=4`) | 7.48 | 7.18 | +0.07 [−0.28, +0.42] | +0.07 [−0.30, +0.44] | **+0.07 [−0.19, +0.32]** (399) | 85 / 238 / 76 | 53 / 106 / 221 |
+| all three (`kit=2`, above) | 7.75 | 7.54 | +0.34 | +0.43 | **+0.38 [+0.07, +0.71]** (399) | 119 / 175 / 105 | 53 / 96 / 227 |
+
+- No part is clearly ahead alone. "gear" carries most of it; all three minus "gear" alone is +0.22 [−0.07, +0.49]
+  (A +0.15, C +0.28). The three parts' separate gains (+0.17, −0.01, +0.07) add up to less than the whole (+0.38):
+  either they help each other (gold from acquirement spent in shops, a shop's armour ranked and worn by "gear") or it
+  is noise; these runs can't tell which (inferred).
+- "acquire" can change only the games that read acquirement (on A the defaults met the menu in 26 of 200); 361 of
+  400 dungeons end at the same depth. What it took: A 18 weapons or armour, 6 rings or amulets, 2 gold, 1 manual (27
+  in all); C 18, 10, 2, 2 (32).
+- Seed checks: every game of the six runs on its seed; one hung, 540052 in `C-shop`, as in every C reference.
+
+**What `kit=2` did** (`k2stats.py`, `kitstats.py`; whole games, 200 dungeons each, A / C):
+- equip: 713 / 764 armour changes and 192 / 178 weapon changes by the kit-2 ranking (the defaults' `wear` and `wield`
+  choices are not counted here);
+- enchant armour 142 / 125, enchant weapon 130 / 123, brand weapon 41 / 46 landed; rings and amulets put on 284 / 252;
+- acquirement answered 32 / 29 times (16 / 14 weapons or armour, 9 / 7 rings or amulets, 7 / 8 gold);
+- shops entered 182 / 207 times in 100 / 106 games, something bought 59 / 55 times (77 / 65 items). Bought most:
+  potions of curing 12 / 12, heal wounds 12 / 3, scrolls of teleportation 11 / 13; then cheap armour (leather
+  armour, boots, helmets, cloaks, chain mail) and a few flails, shields and rings.
+
+**Kit on arrival after the change.**
+- Against the defaults, paired by dungeon (`kitstats.py`): AC on D:5–8 rises 0.2–1.0 (A: D:5 9.9 → 10.1, D:7 12.1 →
+  12.3, D:8 13.1 → 13.2; C: D:5 9.8 → 10.1, D:7 11.8 → 12.5, D:8 12.6 → 13.6). SH is about the same (A D:7 1.9 → 1.6,
+  C 1.6 → 2.0).
+- Against qw on block A (`gapstats.py` over `v6j/A-k2b`, the dungeons both reached; qw / ours):
+
+| measure | D:5 (115) | D:7 (82) | D:9 (47) |
+| --- | --- | --- | --- |
+| AC | 10.6 / 10.3 | 13.5 / 12.6 | 17.6 / 14.4 |
+| SH | 1.7 / 0.9 | 2.6 / 1.5 | 4.2 / 1.5 |
+| weapon plus, branded | 0.68, 17% / 0.68, 25% | 1.71, 29% / 1.48, 43% | 2.62, 53% / 2.09, 62% |
+| body armour base AC, plus | 7.7, 0.33 / 7.3, 0.16 | 8.6, 0.52 / 7.9, 0.15 | 9.1, 0.98 / 8.3, 0.19 |
+| cloak / gloves / boots worn | 29 / 36 / 28% against 18 / 28 / 17% | 38 / 40 / 44% against 27 / 29 / 22% | 55 / 62 / 62% against 34 / 45 / 38% |
+| shield worn (not an orb) | 18% / 13% | 23% / 13% | 38% / 11% |
+| heal wounds / curing / teleportation | 0.70 / 1.41 / 1.22 against 0.23 / 0.66 / 0.70 | 1.20 / 2.45 / 2.27 against 0.45 / 0.76 / 1.07 | 1.98 / 3.53 / 3.21 against 0.68 / 0.74 / 1.36 |
+| gold held | 181 / 155 | 280 / 206 | 463 / 266 |
+
+  - The weapon gap is closed: by D:7 ours is about as enchanted as qw's and more often branded.
+  - The AC gap at D:7 is 0.9 (it was 1.5 for the defaults, over a slightly different set of dungeons); at D:9 it is
+    still 3.2. What is left is the body armour's base AC (0.7–0.8 lighter), its plus (our enchantments now go to the
+    small pieces first), and fewer small pieces worn.
+  - SH is further behind than before, and fewer of ours carry a shield (13% against 19% at D:7 for the defaults over
+    their own set). A branded two-hander or a better-ranked one-hander without a shield now wins more often under
+    the kit-2 ranking (inferred, not separated).
+  - Potions and teleportation scrolls are still a third to a half of qw's. Shops added about one of them per 6 games (63 in 400);
+    the rest of qw's lead is in what it finds on levels our bot leaves unexplored after a rage.
+
+**The fresh test** (played 18:03–19:41, after the pre-registration above was written into this file; analysed once,
+by `arms.py` over the three block pairs, after all six runs had finished; runs `v6j/F{1,2,3}-{def,k2}`).
+
+| block | defaults: mean depth | `kit=2`: mean depth | `kit=2` − defaults | deeper / same / shallower | dungeons |
+| --- | --- | --- | --- | --- | --- |
+| 690600–690799 (defaults first) | 7.30 | 7.83 | +0.54 [+0.06, +1.04] | 70 / 71 / 58 | 199 |
+| 690800–690999 (`kit=2` first) | 6.96 | 7.61 | +0.65 [+0.16, +1.15] | 69 / 80 / 51 | 200 |
+| 691000–691199 (defaults first) | 7.80 | 7.85 | +0.04 [−0.46, +0.56] | 64 / 77 / 59 | 200 |
+| **pooled** | | | **+0.41 [+0.12, +0.69]** | 203 / 228 / 168 | 599 |
+
+- **The pre-registered rule passes.** The pooled interval's lower end, +0.12, is above zero. Two blocks have intervals
+  above zero on their own; the third is level.
+- **Deaths** (defaults → `kit=2`, three blocks together): on D:1–3 74 → 75; on D:4–6 154 → 144; on D:7 and below
+  349 → 343.
+- **Dungeons left out of the pairs.** One of the 600 hung in both arms, 690659. Every game verifies as on its seed
+  (`verify.py`): no "Welcome back", no protocol without its seed, no first step after turn 1, and a morgue on its seed
+  for every finished game.
+- **On the fresh seeds the parts fired as on the tuning blocks.** Per 200 dungeons: acquirement answered 24–43 times;
+  shops entered 179–223 times in 95–116 games, something bought in 41–54 games (64–82 items); 645–805 armour and
+  182–194 weapon changes by the kit-2 ranking. One thing to look at: in 690600–690799 the step off a visited shop was
+  taken 131 times in 40 games (53 and 66 in the other blocks), so the bot's own walking crosses visited shop squares
+  again and steps off them each time (inferred from the counts; not looked into).
+- **AC on arrival**, paired by dungeon (`kitstats.py`): D:7 12.0 → 12.2, 11.7 → 12.0 and 11.9 → 12.7 in the three
+  blocks; SH at D:7 1.5 → 1.4, 1.9 → 1.3, 2.1 → 2.4 (all over each arm's own games).
+- **Seeds spent**: 690600–691199, once each per arm, as pre-registered. Unspent fresh seeds now start at 691200.
+
+**No default was changed.** `kit=2` passed its pre-registered test and is a candidate for a default; making it one
+is a separate decision. If it is made one, `STYLE_ADDED_AS` needs no entry for `kitpart` (added at 0), but `kit`'s
+entry (0, the value it was added at) stays as it is: runs saved before `kit` existed were played without it.
+
+**Summary of the section.**
+- Measured:
+  - every count, mean and interval above, and the qw comparison on the same 200 dungeons;
+  - that 59 ego armour pieces in the defaults' packs were never worn, and why (the brace read as an artefact);
+  - the shop and acquirement menus, their keys and replies, in the real game (the probes);
+  - that `kit=1` play is the same game, choice for choice, on 18 block A dungeons, with the finished tree;
+  - that saved models load and choose the same at `kit=2` (unit test);
+  - that every tuning and fresh game was played on its seed;
+  - the tests: `uv run pytest -q` 520 passed, 5 deselected; `uv run ruff check` clean.
+- Inferred:
+  - that qw's lead in potions, scrolls and gold comes mostly from exploring whole levels (our bot leaves 43% of
+    levels after a rage); the "not seen" pieces are ones our bot never stood on, which is not proof it never saw them;
+  - that the parts help each other (the whole is more than the parts' sum); it may be noise;
+  - why fewer of our characters carry a shield at `kit=2`.
+- Not done:
+  - wearing an orb (qw wears one in 17% of its D:7 arrivals; it gives no SH);
+  - keeping unknown potions (qw holds 1.3–1.6 unknown stacks; ours drinks them to identify them) and reading
+    identify scrolls;
+  - qw's heavier-armour weighting (2 per base AC point against 1 per plus) and its shield weighting;
+  - returning to a shop later with more gold, and qw's shopping list;
+  - exploring levels fully after a rage (that is `calm`, tested before and level);
+  - changing any default.
+- Runs: `runs/brain/v6j/smoke-k2*` (smoke), `A-off`, `A-off1`, `A-off4`, `A-off5` (the `kit=1` checks; `A-off2` was
+  cut off), `A-k2` and `C-k2` (before the two shop fixes; `C-k2` cut off; not used), `{A,C}-{k2b,gear,acq,shop}`
+  (tuning), `F{1,2,3}-{def,k2}` (fresh). The server's disk stayed at 52%.
+- Scripts in the job's `brain-v6j/` scratch directory:
+  - new: `gap.py`, `gapstats.py`, `gapcause.py`, `qwbuy.py`, `egos.py`, `shops.py`, `explored.py`, `notseen.py`,
+    `pick.py`, `k2stats.py`, `dbgshop.py`, `probe3.py` (a shop in a real seeded game), `probe4.py` and
+    `probe/acq.yaml` (acquirement in a scenario), `jobs-*.txt`;
+  - copies: `arms.py`, `seeds.py`, `verify.py`, `mindex.py`, `same.py`, `kitstats.py`, `chain.sh` and `refresh.sh`.
+
 ## What carried over from s1-battle, and what couldn't
 
 | s1-battle | here |

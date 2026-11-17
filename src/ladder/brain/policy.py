@@ -11,6 +11,7 @@ time, so changing the style needs no retraining (the same split as s1-battle's t
 from __future__ import annotations
 
 import random
+import re
 from dataclasses import asdict, dataclass
 
 import numpy as np
@@ -18,8 +19,8 @@ import numpy as np
 from ..conn import ActResult, cancel_prompt
 from ..interrupts import Before, Interrupt
 from ..reflex import Escalation, StubTiers
-from ..state import MF_DOOR, MF_STAIR_UP, MF_TRAP, MF_WATER, NOT_WALKABLE, GameState, strip_tags
-from ..travel import DIRECTIONS
+from ..state import MF_DOOR, MF_FEATURE, MF_STAIR_UP, MF_TRAP, MF_WATER, NOT_WALKABLE, GameState, strip_tags
+from ..travel import DIRECTIONS, step_toward
 
 from . import gear, monsters
 from .features import ACTIONS, COMPONENTS, MDAM_LEFT, encode, inventory, observe, path
@@ -106,6 +107,13 @@ class Style:
                               # them, and rank and pick up the tower shield (`gear.KIT_ARMOURS`). Automatic steps taken
                               # before the brain's choice (`BrainTiers.auto_step`), not actions. 0 = off. On by default
                               # since it passed its test on fresh dungeons (docs/trained-brain.md).
+                              # 2 = all of 1, plus the parts `kitpart` picks (`kit_parts`), also automatic steps:
+                              # "gear" (item names read right: ego armour and artefacts ranked by their properties, weapon
+                              # brands, `gear.weapon2`/`armour2`/`jewel2`; wear and wield by that ranking; enchant armour in
+                              # qw's order; pick up a better piece of a kind already carried, `gear.KIT2_RC`), "acquire"
+                              # (answer acquirement with the best offer, `gear.acquire_choice`, and read a known one) and
+                              # "shop" (walk into the shops on the level and buy, `gear.shop_choice`). Off by default.
+    kitpart: float = 0.0      # with kit=2: which parts, as a sum of 1 ("gear"), 2 ("acquire") and 4 ("shop"); 0 = all.
     hand: float = 0.0         # 1 = invoke Trog's Hand when a monster on qw's `hand_monsters` list is in view (`hand_wanted`),
                               # as an automatic step before the brain's choice. 0 = off. Off by default.
     throw: float = 0.0        # 1 = pick up javelins, boomerangs and large rocks (`gear.THROW_RC`) and throw them at a hostile in
@@ -481,6 +489,20 @@ def throw_wanted(obs: dict, missiles: int) -> bool:
     return True
 
 
+KIT_PARTS = {1: "gear", 2: "acquire", 4: "shop"}
+SHOP_GOLD = 20            # `Style.kit` 2 "shop": gold below this isn't worth a walk to a shop
+SHOP_STEPS = 80           # ...and a shop more steps away than this is given up for this visit to the level
+ACQUIRE_GOLD = (0.5, 3.0)  # what the acquirement's gold is worth (armour plus points) without and with "shop"
+
+
+def kit_parts(style: Style) -> set[str]:
+    """The parts of `Style.kit` 2 that are on (none below 2)."""
+    if style.kit < 2:
+        return set()
+    bits = int(style.kitpart) or sum(KIT_PARTS)
+    return {name for bit, name in KIT_PARTS.items() if bits & bit}
+
+
 STEP_MAX = 3              # `Style.step`: steps per fight at most (the count starts again once nothing is in view)
 STEP_INTO = {MF_DOOR, MF_WATER, MF_TRAP}   # not stepped into: a door may be shut (opening it is no step), shallow
                                            # water slows (qw's `a.slow`), a trap isn't safe (qw's `is_safe_at`)
@@ -534,19 +556,25 @@ def step_square(state: GameState, hostiles: list, need: float) -> tuple[int, int
 KIT_SCROLLS = ("enchant armour", "enchant weapon", "brand weapon")
 
 
-def kit_scroll(state: GameState) -> str | None:
+def kit_scroll(state: GameState, parts: set[str] = frozenset()) -> str | None:
     """`Style.kit`: the letter of a known enchant armour, enchant weapon or brand weapon scroll worth reading now, else
     None. A weapon scroll only with a ranked weapon in hand (`gear.weapon`), and brand weapon only onto one without a
-    brand (a new brand replaces the old at random)."""
+    brand (a new brand replaces the old at random). With kit 2's "gear" part the weapon is ranked and its brand read as
+    the pack names them (`gear.weapon2`, `gear.brand_of`); with "acquire", a known acquirement scroll is read too."""
     inv = state.player.get("inv") or {}
     wielded = inv.get(str(state.player.get("weapon_index", -1)))
-    ranked = bool(wielded and gear.weapon(wielded))
+    if "gear" in parts:
+        ranked = bool(wielded and gear.weapon2(wielded))
+        branded = bool(wielded and gear.brand_of(wielded.get("name", "")))
+    else:
+        ranked = bool(wielded and gear.weapon(wielded))
+        branded = bool(wielded and " of " in wielded.get("name", ""))
     for item in inv.values():
         name = item.get("name", "")
         if item.get("base_type") != gear.SCROLLS or (item.get("quantity", 1) or 0) <= 0 or "{unknown}" in name:
             continue
         if "enchant armour" in name or (ranked and "enchant weapon" in name) or \
-                (ranked and "brand weapon" in name and " of " not in wielded.get("name", "")):
+                (ranked and "brand weapon" in name and not branded) or ("acquire" in parts and "acquirement" in name):
             return chr(item.get("letter", ord("a")))
     return None
 
@@ -692,6 +720,12 @@ class BrainTiers(StubTiers):
         self.kit_counts: dict[str, int] = {}   # what the automatic steps did, for the end of game record
         self.steps_taken = 0                   # Style.step: steps out of a surround in this fight (STEP_MAX)
         self.step_way: tuple[int, int] = (0, 0)   # Style.step: the direction `auto_step` chose
+        self.parts = kit_parts(self.style)     # Style.kit 2's parts that are on
+        self.rank_kit = 2 if "gear" in self.parts else bool(self.style.kit)   # the ranking wield and wear use
+        self.shops_done: set = set()           # Style.kit 2 "shop": (level_seq, shop square) visited or given up
+        self.shop_steps = 0                    # ...steps walked toward the shop being visited
+        self.shop_goal: tuple | None = None    # ...(level_seq, shop square) being walked to
+        self.shop_back: tuple[int, int] | None = None   # ...the direction of the last step taken toward it
 
     # --- choosing ------------------------------------------------------
 
@@ -709,12 +743,12 @@ class BrainTiers(StubTiers):
             # Before explore can walk into one (see crawlrc.txt). The brain has no action that buys,
             # so unlike StubTiers it never visits a shop: stepping onto a fenced square asks "really?".
             return "fence_shops"
+        if self.worn is None:                  # joining a game part-way: found out by trying
+            self.worn = gear.initial_worn(state) if state.turn <= 1 else {}
         if (auto := self.auto_step(state, hostiles)):
             self.auto = auto                   # not a choice: no step log line, nothing the model sees
             return auto
         frac = state.hp / state.hp_max
-        if self.worn is None:                  # joining a game part-way: found out by trying
-            self.worn = gear.initial_worn(state) if state.turn <= 1 else {}
         obs = observe(state, hostiles, {
             "worn": self.worn, "kit": bool(self.style.kit),
             "level_explored": self.level_explored, "level_steps": self.level_steps, "level_turn": self.level_turn,
@@ -793,6 +827,10 @@ class BrainTiers(StubTiers):
           and before its rage: `set_plan_emergency`, qw.lua 12594-12644).
         - "throw" (`throw`): when `throw_wanted` holds and the rules of thumb would walk up to the hostiles or wait for
           them (qw's `plan_throw` is in its attack plans, after all of the emergency ones).
+        - kit 2, nothing in view and no rage: "equip" ("gear": a better weapon or armour by `gear.upgrades` at kit 2,
+          before any scroll so an enchantment lands on the piece kept), "read_kit" as above (with "acquire", a known
+          acquirement scroll too), "put_on" by `gear.jewel2`, and "kit_shop" ("shop": a step toward, or into, a shop on
+          this level not yet visited, with SHOP_GOLD or more and half HP or more).
         A step that used no game time is not tried again for BLOCK_TURNS turns (`observe`); a throw that found no clear
         shot, for THROW_RETRY."""
         if not (self.style.kit or self.style.hand or self.style.throw or self.style.step):
@@ -820,11 +858,50 @@ class BrainTiers(StubTiers):
                     if rules in ("fight", "wait") and throw_wanted(obs, held):
                         return "throw"
         if self.style.kit and not hostiles and "Berserk" not in status:
+            if "gear" in self.parts and ok("equip"):
+                up = gear.upgrades(state, self.worn or {}, kit=2)
+                if up["wield"] or up["wear"]:
+                    return "equip"
             readable = not any(x.startswith(("silenced", "Conf")) for x in status)
-            if readable and ok("read_kit") and kit_scroll(state):
+            if readable and ok("read_kit") and kit_scroll(state, self.parts):
                 return "read_kit"
-            if ok("put_on") and gear.jewellery_choice(self.jewel_pieces(state)):
+            if ok("put_on") and gear.jewellery_choice(self.jewel_pieces(state), kit=self.rank_kit or 1):
                 return "put_on"
+            if "shop" in self.parts and ok("kit_shop") and (self.on_visited_shop(state) or self.shop_target(state)):
+                return "kit_shop"             # not "shop": that name is Reflex's own walk into a shop
+        return None
+
+    @staticmethod
+    def still_a_shop(state: GameState, pos: tuple[int, int]) -> bool:
+        """The square is still a shop's: a feature on the map (the glyph hides under the character's), and no "The shop
+        is a mimic!" among the latest messages. `<` anywhere else opens no menu, and the read for it would never end."""
+        if state.cells.get(pos, {}).get("mf") != MF_FEATURE:
+            return False
+        return not any("is a mimic" in m for m in state.recent_messages(5))
+
+    def on_visited_shop(self, state: GameState) -> bool:
+        """`Style.kit` 2 "shop": standing on a shop already visited. Its square is travel-excluded (the fence), and
+        explore refuses to start from one ("You're in a travel-excluded area, stopping explore."), so step off first."""
+        return (state.level_seq, state.pos) in self.shops_done
+
+    def shop_target(self, state: GameState) -> tuple[int, int] | None:
+        """`Style.kit` 2 "shop": the nearest shop on this level not yet visited (nor given up), when there is gold to
+        spend (SHOP_GOLD), HP is at half or more, and a known way leads there. Once picked it stays the goal until it
+        is visited or given up: standing on a shop hides its glyph under the character's."""
+        if (state.player.get("gold", 0) or 0) < SHOP_GOLD or state.hp * 2 < state.hp_max:
+            return None
+        goal = self.shop_goal if self.shop_goal and self.shop_goal[0] == state.level_seq else None
+        if goal and not self.still_a_shop(state, goal[1]):
+            self.shops_done.add(goal)                   # a shop mimic, gone in a puff of smoke
+            goal = None
+        if goal and goal not in self.shops_done and (state.pos == goal[1] or step_toward(state, goal[1])):
+            return goal[1]
+        for shop in sorted(state.shops(), key=state.distance):
+            if (state.level_seq, shop) in self.shops_done:
+                continue
+            if state.pos == shop or step_toward(state, shop):
+                self.shop_goal = (state.level_seq, shop)
+                return shop
         return None
 
     def rules_now(self, state: GameState, hostiles: list) -> tuple[dict, str]:
@@ -967,6 +1044,8 @@ class BrainTiers(StubTiers):
             result = self.through_menu(conn, verb, letters[kind])
             if self.style.kit and result.blocking in ENCHANT_PROMPTS:
                 return self.answer_enchant(conn, result)
+            if "acquire" in self.parts and result.blocking == "acquirement":
+                return self.answer_acquire(conn, state, result)
             if result.blocking in ITEM_PROMPTS:
                 # The scroll wants a target or an item (blinking, identify, enchant...). There is no
                 # action for that yet: cancel, and say yes to "really abort and waste the scroll?",
@@ -978,12 +1057,14 @@ class BrainTiers(StubTiers):
         if action == "fence_shops":
             return conn.act(FENCE_KEY)
         if action == "read_kit":
-            letter = kit_scroll(state)
+            letter = kit_scroll(state, self.parts)
             if not letter:
                 return ActResult()
             result = self.through_menu(conn, "r", letter)
             if result.blocking in ENCHANT_PROMPTS:
                 return self.answer_enchant(conn, result)
+            if "acquire" in self.parts and result.blocking == "acquirement":
+                return self.answer_acquire(conn, state, result)
             if result.blocking in ITEM_PROMPTS:
                 after = cancel_prompt(conn)
                 after.messages = result.messages + after.messages
@@ -1001,8 +1082,14 @@ class BrainTiers(StubTiers):
             return conn.act(DIRECTIONS[self.step_way])
         if action == "throw":
             return self.throw(conn, state)
+        if action == "kit_shop":
+            return self.shop(conn, state)
+        if action == "equip":
+            up = gear.upgrades(state, self.worn or {}, kit=2)
+            action = "wield" if up["wield"] else "wear"
+            self.count("equip_" + action)
         if action in ("wield", "wear"):
-            kit = bool(self.style.kit)
+            kit = self.rank_kit
             letter = gear.upgrades(state, self.worn or {}, kit=kit)[action]
             if not letter:
                 return ActResult()
@@ -1036,7 +1123,7 @@ class BrainTiers(StubTiers):
     def answer_enchant(self, conn, result: ActResult) -> ActResult:
         """`Style.kit`: answer an enchant armour, enchant weapon or brand weapon scroll's item menu with the armour or
         weapon in use (`gear.enchant_target`) instead of cancelling it; cancel when nothing in it fits."""
-        target = gear.enchant_target(result.blocking, gear.worn_from_menu(result.messages))
+        target = gear.enchant_target(result.blocking, gear.worn_from_menu(result.messages), kit=self.rank_kit or 1)
         if target is None:
             after = cancel_prompt(conn)
         else:
@@ -1063,7 +1150,7 @@ class BrainTiers(StubTiers):
         if opened.blocking != "menu":
             return opened
         self.jewels = {letter for letter, _, on in gear.worn_from_menu(opened.messages) if on}
-        letter = gear.jewellery_choice(self.jewel_pieces(state))
+        letter = gear.jewellery_choice(self.jewel_pieces(state), kit=self.rank_kit or 1)
         if letter is None:
             after = conn.act("key_esc", through_menu=True)
             after.messages = opened.messages + after.messages
@@ -1083,6 +1170,105 @@ class BrainTiers(StubTiers):
             self.count("jewel_on")
         result.messages = opened.messages + result.messages
         return result
+
+    def answer_acquire(self, conn, state: GameState, result: ActResult) -> ActResult:
+        """`Style.kit` 2 "acquire": answer the acquirement menu ("Choose an item to acquire.") with the offer that adds
+        most (`gear.acquire_choice`; the gold when nothing does), say yes, and pick up what appears at the character's
+        feet ("Something appears at your feet!"). A pick-up menu (other things lie there too) is answered with the line
+        naming it. Cancelled as before if the menu can't be read."""
+        menu = gear.worn_from_menu(result.messages)
+        letter = gear.acquire_choice(menu, state, self.worn or {}, self.jewels, ACQUIRE_GOLD["shop" in self.parts])
+        if letter is None:
+            after = cancel_prompt(conn)
+            after.messages = result.messages + after.messages
+            return after
+        chosen = next((text for k, text, _ in menu if k == letter), "")
+        picked = conn.act(letter, through_menu=True)
+        if picked.blocking != "yesno":
+            more = cancel_prompt(conn) if picked.blocking else ActResult()
+            more.messages = result.messages + picked.messages + more.messages
+            return more
+        made = conn.act("y", through_menu=True)
+        self.count("acquire")
+        self.note(conn, auto="acquire", chosen=chosen, turn=state.turn)
+        got = conn.act("g", through_menu=True)
+        if got.blocking == "menu":
+            name = re.sub(r"^\s*\w - (an?|the) ", "", chosen)[:24]
+            pick = next((k for k, text, _ in gear.worn_from_menu(got.messages) if name and name in text), None)
+            more = conn.act(*([pick, "key_enter"] if pick else ["key_esc"]), through_menu=True)
+            got.messages += more.messages
+            got.blocking = more.blocking
+        got.messages = result.messages + picked.messages + made.messages + got.messages
+        return got
+
+    def shop(self, conn, state: GameState) -> ActResult:
+        """`Style.kit` 2 "shop": one step toward the shop `shop_target` picks (answering yes to "Really walk into a
+        travel-excluded area?": the bot fences shops off from explore), or, on it, open it (`<`), mark what
+        `gear.shop_choice` picks, buy (Enter, then yes) and leave (Esc). Buying takes no game time. A shop is visited
+        once per level visit; one SHOP_STEPS or more steps away is given up."""
+        if self.on_visited_shop(state):
+            return self.leave_shop(conn, state)
+        shop = self.shop_target(state)
+        if shop is None:
+            return ActResult()
+        key = (state.level_seq, shop)
+        if state.pos != shop:
+            self.shop_steps += 1
+            step = step_toward(state, shop)
+            if step is None or self.shop_steps > SHOP_STEPS:
+                self.shops_done.add(key)
+                self.shop_steps = 0
+                return ActResult()
+            self.shop_back = next((k for k, v in DIRECTIONS.items() if v == step), None)
+            result = conn.act(step)
+            if result.blocking in ("menu", "yesno"):          # the question comes as a menu, read with it or not
+                after = conn.act("Y", through_menu=True)
+                after.messages = result.messages + after.messages
+                result = after
+            return result
+        self.shops_done.add(key)
+        self.shop_steps = 0
+        behind = conn.catch_up()
+        if behind.blocking or not self.still_a_shop(state, shop) or not any(
+                "entrance to" in m for m in state.recent_messages(8)):
+            return behind                          # nothing to open here (a mimic): never press `<` blind
+        opened = conn.open_menu("<")
+        opened.messages = behind.messages + opened.messages
+        menu = gear.worn_from_menu(opened.messages)
+        letters = gear.shop_choice(menu, state, self.worn or {}, self.jewels)
+        self.count("shop_visit")
+        if not letters:
+            done = conn.act("key_esc", through_menu=True)
+        else:
+            asked = conn.act(*letters, "key_enter", through_menu=True)
+            done = conn.act("y" if asked.blocking == "yesno" else "N", "key_esc", through_menu=True)
+            done.messages = asked.messages + done.messages
+            bought = [text for k, text, _ in menu if k in letters]
+            self.count("bought")
+            self.kit_counts["bought_items"] = self.kit_counts.get("bought_items", 0) + len(letters)
+            self.note(conn, auto="shop", bought=bought, gold=state.player.get("gold", 0), turn=state.turn)
+        done.messages = opened.messages + done.messages
+        return done
+
+    def leave_shop(self, conn, state: GameState) -> ActResult:
+        """One step off a visited shop's square: back the way the character came if that square is free, else to the
+        first free walkable neighbour (no monster, no trap, not a shop)."""
+        taken = {m.pos for m in state.monsters()}
+        px, py = state.pos
+        ways = ([(-self.shop_back[0], -self.shop_back[1])] if self.shop_back else []) + list(DIRECTIONS)
+        for dx, dy in ways:
+            sq = (px + dx, py + dy)
+            cell = state.cells.get(sq)
+            if cell is None or sq in taken or cell.get("mf", 0) in NOT_WALKABLE | {MF_TRAP} or sq in state.shops():
+                continue
+            self.count("shop_leave")
+            result = conn.act(DIRECTIONS[(dx, dy)])
+            if result.blocking in ("menu", "yesno"):
+                after = conn.act("Y", through_menu=True)
+                after.messages = result.messages + after.messages
+                result = after
+            return result
+        return ActResult()
 
     def trogs_hand(self, conn) -> ActResult:
         """`Style.hand`: `a`, then the letter the ability menu shows for Trog's Hand; Esc if it isn't there."""
