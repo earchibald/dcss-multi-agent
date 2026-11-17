@@ -3864,6 +3864,301 @@ fresh-tested.
   - copies: `arms.py`, `seeds.py`, `verify.py`, `mindex.py`, `same.py`, `kitstats.py`, `k2stats.py`, `explored.py`,
     `gap.py`, `gapstats.py`, `tail.py`, `chain.sh` and `refresh.sh`.
 
+#### `save=1` split into its parts (`ident`, `stack`, `cure`), and what kills from D:7 down against qw (2026-11-17, small hours)
+
+`save=1` (qw's potion rules, all at once) was −0.23 in tuning, and `calm=1` failed its fresh test. This section builds
+the parts of qw's way with potions and scrolls as separate switches, without the lower healing threshold, tunes each
+alone and the best two together, and compares the deaths from D:7 down with qw's on the same dungeons. **Result: no
+part helps. `ident=1` (read identify scrolls as qw does) is level, −0.10 [−0.41, +0.21]; `cure=1` (curing only for
+confusion and poison) is behind, −0.19 [−0.42, +0.03], because our bot then dies holding the curing it no longer
+drinks for HP; `stack=1` (drink an unknown potion only from a pair) is the part that costs, −0.39 [−0.84, +0.08]: the
+unknown potions it keeps are never drunk in a fight. The best two together (`ident=1 cure=1`) are −0.16 [−0.49, +0.17]. From D:7 down we die on 17.7% of the levels we reach, qw
+on 6.1%. qw holds healing potions and teleport scrolls in almost every fatal fight and we in few; it arrives
+stronger; and from D:8–11 it goes to the Lair for experience and kit, which we never do. That is a route change; it is
+described below and not built. No fresh test was played: no configuration is ahead. Seeds 691800 onward are unspent.**
+
+**The three switches** (`src/ladder/brain/policy.py`, `Style`; each off by default; none adds an action or changes the
+observation or the feature vector; none lowers the healing threshold, which stays `save`'s alone).
+- **`ident=1`**: an automatic step, "read_ident" (`BrainTiers.auto_step`, after the kit's steps). With nothing in view,
+  no rage, and able to read, it reads a known scroll of identify while an unknown potion or scroll is held
+  (`ident_scroll`; qw's `plan_use_identify_scrolls`, `qw.lua` 13796–13812). It answers the prompt with the line qw's
+  `get_unidentified_item` (13983–14003, the later of its two definitions; `c_choose_identify` 14005) would pick: a
+  potion before a scroll, the smallest stack first (`ident_choice`). An unknown scroll that turns out to be identify
+  has its prompt answered the same way instead of cancelled (`answer_identify`).
+- **`stack=1`**: with nothing in view, an unknown potion is drunk to identify it only from a stack of two or more, the
+  largest (`save`'s `unknown_pair` and `save_blocked`, qw's `plan_quaff_unided_potions`: `quaff_unided_potion(2)`,
+  13757–13775). Nothing else of `save=1`.
+- **`cure=1`**: curing is drunk when qw would (`cure_wanted`): confused (`plan_cure_confusion` 12430–12455), poison that
+  would kill (`plan_cure_bad_poison` 11768–11786), 60 HP or more of poison to come with hostiles in view (the same),
+  or with nothing in view poison that leaves 1 HP or less (`plan_cure_poison` 14288–14300). It comes first, as the
+  rules' own cure for serious poison does, which stays. A potion for HP is heal wounds only: with no heal wounds held,
+  none is drunk for HP (qw's `plan_heal_wounds` never drinks curing to heal). `BrainTiers.perform` drinks curing for a
+  cure and heal wounds otherwise. qw skips its confusion cure in noxious fumes; nothing in the observation says so, so
+  this doesn't.
+
+**The identify prompt, seen in the real game** (`laddertest`, a scenario game: job's `brain-v6l/probe5.py` with
+`probe/ident.yaml`, three identify scrolls and three unknown potion stacks next to the start).
+- An unknown identify scroll names itself as it is read ("It is a scroll of identify.") and opens a menu, tag
+  `use_item`, "Identify which item? (\ to view known items)", listing only unknown items under "Scrolls" and "Potions"
+  headings (" d - a fizzy dark potion", " f - 2 clear potions"). `Connection.act` reports it as the blocking reason
+  `identify`.
+- A letter closes the menu and names the item at once: "d -> c - a potion of curing", "f -> w - 2 potions of heal
+  wounds". The item moves to a new letter. Reading a known scroll takes a turn; Esc on a known one says "Okay, then."
+  and keeps the scroll.
+- **A fault the first tuning run found, fixed before the runs used below.** After an identify, webtiles sends the
+  moved item's new letter and flags but not its new name, so the pack kept "cyan potion" for what was now a potion of
+  brilliance. The rules then tried to drink it to identify it: 808 unknown-potion drinks in `v6l/A-ident` passed no
+  game time (none in the reference), each then blocked for the level. Now the name in the game's message is written
+  into the pack (`rename_identified`). `v6l/A-ident` and the cut-off `C-ident` were played before the fix and are not
+  used; after it, `A-ident2` and `C-ident2` have no unknown drink or read that passed no game time (0 of 801 checked
+  on C).
+
+**Play with the new switches off is unchanged** (`same.py`): 500000–500008 with no `--style` (`v6l/A-off`) and
+500009–500017 with `ident=0 stack=0 cure=0` (`v6l/A-off0`) are identical to `v6k/A-ref`, 18 of 18: the same deepest
+level, final turn and end, and the same choices step by step (391 to 1,980 a game). (They were played before the
+rename fix, which acts only with `ident` on.) Tests in `tests/test_brain.py`:
+- `test_ident_stack_and_cure_are_off_by_default_and_old_runs_still_match`
+- `test_ident_reads_a_known_identify_scroll_and_answers_as_qw_would` (and the rename after it)
+- `test_stack_drinks_an_unknown_potion_only_from_a_pair_and_keeps_the_heal_threshold`
+- `test_cure_drinks_curing_for_confusion_and_poison_and_never_for_hp`
+- `test_saved_models_still_load_and_choose_the_same_with_the_switches_on_or_off`, now also with `ident=1`, `stack=1`,
+  `cure=1` and all three.
+- No `STYLE_ADDED_AS` entry: the three keys were added off.
+
+**Tuning.**
+- **Method.** This tree, no model, epsilon 0, A (500000–500199) and C (540000–540199) only, 9 workers. Each arm minus
+  `v6k/{A,C}-ref` (today's defaults), paired by dungeon over games both finished and neither stale nor off its seed
+  (`arms.py`, `verify.py`); 95% bootstrap over dungeons, 10,000 resamples. Description only: these blocks are spent.
+- **Arm order.** C-stack, A-stack, A-cure, C-cure, C-ident2, A-ident2 (01:00–02:22), then the combination, chosen after
+  the single arms: C-ic, A-ic.
+- **Seed checks.** Every game of every run was on its seed (no "Welcome back", no protocol without its seed, no first
+  step after turn 1, a morgue on its seed for every finished game). 540052 hung in every C run, as in every C reference.
+
+| arm (`--style`) | A: mean depth | C: mean depth | − ref, A | − ref, C | **− ref, pooled** (dungeons) | deeper / same / shallower | died D:1–3 / 4–6 / 7+ (A + C) |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| reference (`v6k/*-ref`) | 7.84 | 7.51 | | | | | 51 / 106 / 217 |
+| `ident=1` | 7.86 | 7.30 | +0.01 [−0.45, +0.48] | −0.21 [−0.64, +0.22] | **−0.10 [−0.41, +0.21]** (399) | 99 / 196 / 104 | 50 / 108 / 215 |
+| `stack=1` | 7.39 | 7.20 | −0.46 [−1.12, +0.22] | −0.32 [−0.96, +0.30] | **−0.39 [−0.84, +0.08]** (399) | 144 / 99 / 156 | 68 / 90 / 219 |
+| `cure=1` | 7.51 | 7.47 | −0.34 [−0.63, −0.06] | −0.05 [−0.40, +0.30] | **−0.19 [−0.42, +0.03]** (399) | 44 / 287 / 68 | 58 / 110 / 207 |
+| `ident=1 cure=1` (the best two) | 7.79 | 7.26 | −0.06 [−0.53, +0.41] | −0.26 [−0.71, +0.20] | **−0.16 [−0.49, +0.17]** (399) | 103 / 177 / 119 | 57 / 101 / 217 |
+
+- **The combination** against `ident=1` alone: −0.06 [−0.25, +0.13] (A −0.07, C −0.05). `cure=1` takes off what `ident=1` adds, as it does alone.
+- **No arm meets the rule for a fresh test** (pooled interval mostly above zero and both blocks positive). None has a positive pooled difference.
+
+**What each switch did** (`armstats.py`; per game, A / C; held on first arrival, over the dungeons every arm reached).
+- **`ident=1`** read or answered 2.58 / 2.29 identify scrolls a game (qw reads 4.47 by D:7). On A, 240 went on potions
+  and 275 on scrolls (the bot drinks unknown potions as soon as nothing is in view, so often only scrolls are left
+  unknown); on C 198 and 257. Unknown potions drunk fell from 6.76 to 5.53 (C 6.45 → 5.28). Held on arrival at D:7:
+  heal wounds 0.37 → 0.48 (C 0.29 → 0.40), curing 0.70 → 0.80 (0.87 → 1.03), teleportation 1.06 → 1.13 (0.87 → 1.06).
+  The extra potions do not show in depth.
+- **`stack=1`** drank 3.1 unknown potions a game against 6.5–6.8, and arrived on D:5–9 with 3.7–4.4 unknown potions.
+  Its known healing potions on arrival are about the reference's. It died holding unknown potions and no known healing
+  potion in 147 of 187 deaths on A and 149 of 190 on C. Deaths on D:1–3 rose from 21 to 29 (A) and from 30 to 39 (C),
+  as with `save=1`. So the early deaths `save=1` was charged with are this part's, not (only) the lower threshold's
+  (measured: `stack=1` alone has them; that the unused unknown potions cause them is inferred). qw drinks an unknown
+  potion when it wants to heal and heal wounds is not known (`heal_general` 11887–11903) and when confused and curing
+  is not known (`plan_cure_confusion`); our rules with `stack=1` keep them to the end.
+- **`cure=1`** drank curing for confusion or poison 0.38 / 0.34 times a game and heal wounds for HP 0.77 / 0.83 times;
+  healing-potion choices fell from 1.65 to 1.15 (C 1.51 → 1.17). Curing held on arrival rose little (D:7 0.70 → 0.85,
+  C 0.87 → 1.05). It died holding curing and no heal wounds in 46 of 185 deaths on A (reference 6 of 186) and 47 of 190
+  on C (21 of 188): the curing it no longer drinks at half HP was the potion that kept those characters alive. qw can
+  afford the rule: it holds 3.5 curing and 1.9 heal wounds on arrival at D:9; we hold 1.1 and 0.6.
+
+**Part 2: what kills from D:7 down, against qw** (block A; our reference `v6k/A-ref` against qw's `zk-heldout-200`,
+the 199 dungeons both finished; `d7.py` for routes, arrivals and fatal fights, `d7stats.py`, `fights.py` and
+`fstats.py` for every fight, `touched.py` for the ranking). The fatal fight is the run of choices (ours: the step log;
+qw: its `QWS` state lines) from the first one after the last with nothing in view, to the death. Killers are from the
+morgue (ours) and qw's own record. A killer's class is from `docs/data/monsters-0.34.json`: unique (a capitalised
+name), caster (wizard or priest spells), ranged (an archer, or other spells), big melee (40 HP or more, or 20 damage a
+round), melee.
+
+*Routes.* Ours goes straight down the Dungeon: in 200 games it never took a branch staircase (Reflex walks only to
+`MF_STAIR_DOWN`, never `MF_STAIR_BRANCH`); 4 games went to the Abyss by banishment. qw follows its goal list
+(`qw.lua` 3948–3975): explore D:1–11, but enter the Lair as soon as it is found and the current level is explored
+(`ready_for_lair` 4571–4586 is always true for a Trog worshipper), then the rest of D:1–11, D:12, the Orcish Mines,
+the rest of the Dungeon, then the Lair branches. Measured:
+- qw entered the Lair in 99 of its 199 games, 99 of the 122 that reached D:8; it entered from D:8 (23 games), D:9
+  (32), D:10 (21), D:11 (20) or deeper (3), at a median XL 11. It entered the Orcish Mines in 54.
+- Our bot entered the Lair in none.
+
+*Deaths per level reached* (a death counts on the level it happened on; measured):
+
+| level | ours: reached | died there | rate | qw: reached | died there | rate |
+| --- | --- | --- | --- | --- | --- | --- |
+| D:7 | 110 | 16 | 14.5% | 135 | 11 | 8.1% |
+| D:8 | 95 | 16 | 16.8% | 122 | 7 | 5.7% |
+| D:9 | 80 | 15 | 18.8% | 108 | 9 | 8.3% |
+| D:10 | 63 | 14 | 22.2% | 94 | 4 | 4.3% |
+| D:11 | 46 | 7 | 15.2% | 77 | 3 | 3.9% |
+| D:12 | 36 | 8 | 22.2% | 69 | 3 | 4.3% |
+| **D:7–12** | 430 | **76** | **17.7%** | 605 | **37** | **6.1%** |
+| Lair:1–5 (qw only) | | | | 459 | 29 (17 on Lair:5) | 6.3% |
+| Orc:1–2 (qw only) | | | | 107 | 7 | 6.5% |
+
+- qw's rate on D:9–12 depends on whether it had been in the Lair first. Arriving before the Lair: D:9 9 of 93
+  (9.7%), D:10 4 of 53 (7.5%), D:11 2 of 25, D:12 0 of 3. Arriving after it: D:9 0 of 15, D:10 0 of 41, D:11 1 of
+  52, D:12 3 of 66. Over D:7–12, qw dies on 7.7% of the levels it reaches before its Lair visit (33 of 431) and 2.3%
+  after (4 of 174). Ours: 17.7%.
+
+*Kit on first arrival, on the dungeons both reached* (qw / ours; measured):
+
+| level | dungeons | XL | AC | SH | HP max | turn of arrival | heal wounds | curing | teleportation | qw had been in the Lair |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| D:7 | 78 | 8.4 / 7.6 | 13.5 / 12.8 | 2.8 / 1.8 | 74 / 67 | 5,516 / 3,659 | 1.19 / 0.42 | 2.40 / 0.78 | 2.35 / 1.18 | 0 |
+| D:8 | 63 | 9.2 / 8.4 | 15.1 / 14.0 | 3.3 / 1.8 | 82 / 74 | 6,477 / 4,475 | 1.54 / 0.57 | 2.78 / 0.78 | 2.49 / 1.25 | 0 |
+| D:9 | 48 | 10.2 / 9.1 | 17.2 / 15.0 | 4.6 / 2.7 | 94 / 80 | 8,541 / 5,272 | 1.94 / 0.79 | 3.52 / 1.00 | 3.17 / 1.56 | 6 |
+| D:10 | 31 | 11.7 / 9.7 | 19.7 / 16.2 | 6.8 / 3.0 | 112 / 87 | 11,584 / 5,946 | 1.90 / 0.55 | 4.58 / 0.87 | 3.58 / 1.68 | 13 |
+| D:11 | 21 | 13.0 / 10.0 | 21.4 / 17.6 | 7.4 / 5.0 | 128 / 90 | 14,506 / 6,685 | 2.62 / 0.71 | 6.19 / 1.10 | 4.95 / 2.10 | 15 |
+| D:12 | 16 | 14.0 / 10.6 | 25.2 / 18.4 | 7.4 / 4.7 | 141 / 95 | 17,756 / 7,476 | 2.25 / 0.38 | 6.94 / 0.94 | 5.75 / 1.75 | 16 |
+
+- qw arrives on D:9 after the Lair at XL 13.2, AC 24.5, HP 133 (15 games), and before it at XL 9.7, AC 16.6, HP 88
+  (93 games). On D:10: 13.6 / 23.5 / 136 after (41), 10.2 / 18.0 / 93 before (53).
+- **So qw does go to the Lair for experience and kit, and we go straight down.** On D:8–10 we arrive 0.8–2.0 XL,
+  1.1–3.5 AC and 8–26 HP behind on the same dungeons, with a third of its healing potions and half its teleport
+  scrolls, after two-thirds to half of its turns. Before D:8 the gap is pace (qw explores every level; we leave half
+  of them after a rage, the `calm` work); from D:9 it is mostly the Lair.
+
+*The fatal fights, D:7–12* (76 of ours, 37 of qw's on D:7–12 plus 36 in its Lair and Mines; measured):
+
+| measure | ours (76) | qw (73, Lair and Orc included) |
+| --- | --- | --- |
+| killer's class | melee 27, unique 16, caster 15, ranged 9, big melee 8, other 1 | unique 17, melee 17, big melee 15, ranged 13, caster 11 |
+| most hostiles in view at once | 3 or more 52, two 10, one 14 | 3 or more 50, two 7, one 16 |
+| commonest killers | yak 6, orc wizard 4, gnoll sergeant 4, deep elf pyromancer 4, wight 3, vampire 3, killer bee 3, kobold demonologist 3 | Nessos 5, Erica 4, death yak 4, blink frog 3, Jeremiah 3, killer bee 3 |
+| XL at the start (median) | 9 | 11 |
+| AC / HP max (mean) | 13.9 / 85 | 19.3 / 112 |
+| HP at the start (median share) | 94% | 100% |
+| exhausted after a rage at the start / raging | 22 / 9 | 11 / 5 |
+| heal wounds held (share with one or more) | 7% (mean 0.14) | 68% (1.60) |
+| curing held | 14% (0.46) | 92% (3.93) |
+| teleportation held in the fight | 37 (49%) | 65 (89%) |
+| teleportation read in it / held and not read | 18 / 19 | 28 / 37 |
+| went for the stairs up in it (ours `flee_up`; qw `flee`, `stairdance_up`) | 16 | 16 |
+| healing potion drunk in it | 6 | 5 |
+| rage started in it | 44 | 45 |
+| turns from the start to death (median) | 14 | 19 |
+
+**Every fight on D:7–12** (2,416 of ours, 3,628 of qw's, Dungeon only; `fstats.py`; measured):
+
+| measure | ours | qw |
+| --- | --- | --- |
+| fatal | 78 (3.2%) | 37 (1.0%) |
+| began exhausted after a rage (fatal) | 213 (17, 8.0%) | 17 (3) |
+| three or more hostiles at once (fatal) | 887 (59, 6.7%) | 1,599 (27, 1.7%) |
+| a unique in it (fatal) | 136 (23, 16.9%) | 341 (22, 6.5%) |
+| rage started | 70% of fights | 16% |
+| waited for the hostiles to come | 1% | 33% (`attack>melee_wait_for_enemy`) |
+| stepped tactically / threw | — | 56% / 45% |
+| went for the stairs up | 10% (`flee_up`; 7.1% of those fatal) | 12% `flee` (2.0% fatal), 5% `stairdance_up` |
+| read teleportation / drank a healing potion | 4% / 3% | 1% / 1% |
+
+*The same monsters when qw meets them* (fights on D:7–12 with that monster in view; what share of them saw each
+action; measured):
+
+| monster | ours: fights, fatal | XL | rage / wait / stairs up / teleport | qw: fights, fatal | XL | rage / wait / flee or stairs / teleport / tactical step / throw |
+| --- | --- | --- | --- | --- | --- | --- |
+| orc wizard | 293, 17 (6%) | 9.1 | 73 / 4 / 12 / 6% | 556, 8 (1%) | 10.7 | 21 / 31 / 22 / 3 / 82 / 49% |
+| yak | 149, 13 (9%) | 9.6 | 91 / 1 / 6 / 13% | 337, 7 (2%) | 11.6 | 26 / 60 / 21 / 2 / 85 / 53% |
+| killer bee | 128, 14 (11%) | 9.1 | 82 / 2 / 8 / 13% | 232, 4 (2%) | 10.5 | 31 / 53 / 28 / 4 / 74 / 50% |
+| gnoll | 115, 11 (10%) | 8.9 | 87 / 1 / 5 / 6% | 199, 6 (3%) | 10.0 | 34 / 32 / 23 / 3 / 79 / 50% |
+| centaur | 148, 13 (9%) | 9.1 | 90 / 1 / 7 / 7% | 326, 4 (1%) | 10.9 | 23 / 25 / 24 / 3 / 78 / 34% |
+| troll | 93, 11 (12%) | 9.9 | 88 / 4 / 13 / 14% | 254, 2 (1%) | 12.4 | 22 / 37 / 20 / 3 / 63 / 57% |
+| manticore | 36, 8 (22%) | 10.5 | 78 / 36 / 39 / 31% | 97, 2 (2%) | 13.0 | 28 / 44 / 20 / 4 / 75 / 37% |
+| wolf | 28, 7 (25%) | 9.4 | 89 / 4 / 11 / 14% | 43, 1 (2%) | 10.8 | 42 / 35 / 28 / 2 / 84 / 60% |
+| deep elf pyromancer | 11, 5 (45%) | 10.5 | 82 / 9 / 9 / 18% | 51, 1 (2%) | 13.4 | 35 / 20 / 16 / 6 / 71 / 41% |
+| Erica | 7, 4 | 9.0 | 71 / 0 / 0 / 0% | 13, 3 | 9.8 | 54 / 23 / 31 / 0 / 46 / 38% |
+
+What qw does against them, in `runs/qw/build-zk/qw.lua`:
+- It rages late (`want_to_berserk` 12339–12360): at half HP with a berserkable enemy, or when the threat in view
+  reaches `high_threat_level` (7925), or against a "scary" enemy whose best answer is the rage; not at the first
+  threat-2 monster as ours does. It meets these monsters 1–2 XL higher, so fewer of them are high threat.
+- It waits for melee enemies to come (`plan_melee_wait_for_enemy` 11209), steps out of a surround or away from a
+  ranged enemy (`choose_tactical_step` 9941–10005) and throws (`plan_throw` 11189).
+- It walks to the stairs up whenever it has a reason to rest (HP under 90%, berserk cooldown, slowed, confused:
+  `reason_to_rest` 14339) and no melee enemy within two (`want_to_flee` 8701–8760, `plan_flee` 11657), and goes up
+  from them (`want_to_stairdance_up` 14688).
+- It drinks heal wounds only at a quarter HP (`want_to_heal_wounds` 12229) and reads teleportation only against an
+  extreme threat or summons (`want_to_teleport` 12187): with 1.6 heal wounds and 3.9 curing held in its fatal fights,
+  it drank in 5 of 73.
+Each of these habits was built as a switch for our bot earlier (`rage`, `hold`, `step`, `throw`, `retreat=3`,
+`stairs`, `teleport` levels, `unique`, `escape`) and none gained depth on A + C.
+
+**The differences ranked by our D:7–12 deaths they touch** (present in the fatal fight; an upper bound, not shown to
+have caused the death; qw's 37 D:7–12 deaths for contrast; `touched.py`):
+
+| rank | difference | our deaths touched (of 76) | qw's (of 37) | measured or inferred | a bounded fix? |
+| --- | --- | --- | --- | --- | --- |
+| 1 | no heal wounds held when the fatal fight began | 71 | 13 | measured; its effect inferred (qw drank in 5 of its 73) | yes, in part: keep potions (Part 1's `stack`, `ident`, `cure`); the rest is finding them |
+| 2 | no curing held | 65 | 4 | as above | as above |
+| 3 | three or more hostiles at once | 52 | 20 | measured; per fight 6.7% fatal against 1.7% | qw's answers (wait, step, throw, rage late) were each built and level |
+| 4 | no teleportation scroll in the fight | 39 | 5 | measured; effect inferred (each bot reads in about half of the fatal fights it holds one) | finding (pace, route) |
+| 5 | arrived on that level with a lower XL than qw on the same dungeon | 31 of the 40 where qw got there too | 0 of 16 | measured gap; effect inferred | no: pace and route |
+| 6 | lower AC on arrival than qw | 27 of 40 | 7 of 16 | as above | no: route; `kit=2` took the part kit could |
+| 7 | began below 70% HP | 27 | 13 | measured | — |
+| 8 | a caster or ranged killer | 24 | 6 | measured | — |
+| 9 | began exhausted after a rage | 22 | 5 | measured; 213 fights against qw's 17; 162 of the 213 began while resting the exhaustion off, a median 13 turns after the fight before (`prevact.py`) | tried: `recover=2`, `retreat=3` level |
+| 10 | killed by a unique | 16 | 13 | measured | tried: `unique=1` behind |
+
+- **The top difference is resources, then strength.** At the fatal fight's start qw held heal wounds in 68% and
+  curing in 92%; ours in 7% and 14%. Part of this is how potions are used (Part 1). Most is how many are found:
+  before D:7 qw gains 2.7 curing, 1.3 heal wounds and 2.5 teleportation scrolls per dungeon against our 1.2, 0.5 and
+  1.4 (previous section), because it explores every level, and from D:9 on it has also cleared the Lair.
+- **No Part 2 switch was built.** The top difference's bounded part is Part 1's switches, tuned below. The rest of it,
+  and ranks 4–6, come from where and how long the bot plays before D:9: exploring every level (tested as `calm=1`,
+  +0.32 [−0.05, +0.69] fresh, failed) and the Lair. That is a route change.
+
+**What a Lair route would need** (not built):
+- A goal list as qw's (`qw.lua` 3948–3975): D:1–11 with the Lair as soon as its entrance is known and the current level
+  explored; then Lair:1–5; then back up to the Dungeon and on. The rules would need a goal state across levels (today
+  there is only "this level explored or not").
+- A way down a branch staircase. Reflex's `travel` and the brain's `descend` go only to `MF_STAIR_DOWN`; the Lair's
+  entrance is `MF_STAIR_BRANCH`. A new target (or a mode of `descend`) and its key, without a new action if the
+  feature vector is to stay as it is.
+- A way back up through the Lair to the Dungeon: walking to the up stairs on purpose (today `flee_up` exists only
+  with a hostile in view or an unseen attacker).
+- Lair:5 is where qw dies most in the Lair (17 of the 85 that reached it); qw's Lair deaths are uniques and big
+  animals (Nessos, death yaks, hydras). A rule for leaving Lair:5 early, or skipping its end, would likely be needed.
+- Measurement: the score is the deepest Dungeon level, so turns in the Lair count only through what they bring.
+  Games would run about twice as long (qw: 14,553 turns on average, ours 4,525), within the 40,000-turn limit but
+  closer to the 4,000-step and 1,500-choices-per-level limits.
+
+**No fresh test was played.** No configuration of Part 1 is ahead, and no Part 2 switch was built. Seeds 691800–692399
+are unspent.
+
+**No default was changed.**
+
+**Summary of the section.**
+- Measured:
+  - the identify prompt and its keys in the real game; that webtiles does not resend an identified item's name;
+  - that play with the new switches off is the same game, choice for choice, on 18 block A dungeons;
+  - every tuning mean, interval and count above; that every game was played on its seed;
+  - that `stack=1` alone has `save=1`'s extra early deaths (D:1–3: 51 → 68 on A + C);
+  - that `cure=1` dies holding unused curing and no heal wounds (A 6 → 46, C 21 → 47 deaths);
+  - deaths per level reached, routes, kit on arrival, fatal fights and every fight on D:7–12, ours against qw on the
+    same 199 dungeons; that qw enters the Lair in 99 of the 122 games that reach D:8 and ours never does;
+  - the tests: `uv run pytest -q` 530 passed, 5 deselected; `uv run ruff check` clean. The server's disk stayed at
+    52%.
+- Inferred:
+  - that `stack=1` loses because the unknown potions it keeps are never drunk in a fight;
+  - that the resource and strength gaps cause the D:7+ deaths they are present in (the ranking counts presence);
+  - that qw's lower death rate on D:9–12 comes from the Lair visit (arrivals after it die far less, but they are also
+    the games that went on longer);
+  - that a Lair route would pay for our bot.
+- Not done:
+  - qw's emergency use of unknown potions (`heal_general`, `plan_cure_confusion`'s fallback), which `stack=1` would
+    need;
+  - the confusion cure's noxious-fumes exception;
+  - a Part 2 switch (the top difference's bounded part is Part 1's); the Lair route;
+  - changing any default.
+- Runs: `runs/brain/v6l/A-off`, `A-off0` (switches-off checks), `{A,C}-{ident2,stack,cure,ic}` (tuning); `A-ident` and
+  a cut-off `C-ident` (before the rename fix; not used).
+- Scripts in the job's `brain-v6l/` scratch directory:
+  - new: `probe5.py` and `probe/ident.yaml` (the identify prompt), `armstats.py` (what each switch did), `d7.py` (routes,
+    arrivals, fatal fights, both bots), `d7stats.py`, `fights.py` and `fstats.py` (every fight on D:7–12, per monster),
+    `touched.py` (the ranking), `prevact.py` (what came before fights begun exhausted), `jobs-*.txt`;
+  - copies: `arms.py`, `seeds.py`, `verify.py`, `mindex.py`, `same.py`, `chain.sh`, `refresh.sh` and others from
+    `brain-v6k/`.
+
 ## What carried over from s1-battle, and what couldn't
 
 | s1-battle | here |

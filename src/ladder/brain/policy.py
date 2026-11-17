@@ -135,6 +135,22 @@ class Style:
                               # `quaff_unided_potion(2)`), nothing in view as before; at that HP in a fight with no healing
                               # potion known, drink an unknown one (qw's `heal_general`). Rules only: no action, no
                               # observation changes. 0 = off. Off by default.
+    # The three parts of qw's way with potions and scrolls, one at a time (none lowers the healing threshold, which
+    # is `save`'s alone). Each is off by default; none adds an action or changes the observation.
+    ident: float = 0.0        # 1 = with nothing in view, no rage, able to read: read a known scroll of identify while an
+                              # unknown potion or scroll is held (qw's `plan_use_identify_scrolls`), an automatic step
+                              # ("read_ident", `BrainTiers.auto_step`); and answer the identify prompt, from that read or
+                              # from an unknown scroll that turns out to be identify, with the item qw's
+                              # `get_unidentified_item` picks (`ident_choice`: a potion before a scroll, the smallest
+                              # stack first) instead of cancelling it. 0 = off. Off by default.
+    stack: float = 0.0        # 1 = with nothing in view, drink an unknown potion to identify it only from a stack of two or
+                              # more, the largest (qw's `plan_quaff_unided_potions`: `quaff_unided_potion(2)`); `save`'s
+                              # `unknown_pair` part alone. 0 = off. Off by default.
+    cure: float = 0.0         # 1 = drink curing when confused (qw's `plan_cure_confusion`) or badly poisoned as qw counts it
+                              # (`cure_wanted`: lethal poison, or 60 HP or more of it with hostiles in view, `plan_cure_bad_poison`;
+                              # with nothing in view, poison that leaves 1 HP or less, `plan_cure_poison`), besides the
+                              # rules' own serious-poison cure; and never drink curing to heal: a healing potion for HP is
+                              # heal wounds only (qw's `plan_heal_wounds`). 0 = off. Off by default.
 
     def weights(self) -> np.ndarray:
         return np.asarray([getattr(self, c) for c in COMPONENTS], dtype=np.float32)
@@ -211,6 +227,28 @@ def heal_potion(obs: dict) -> str | None:
 def needs_cure(obs: dict) -> bool:
     """Seriously poisoned, with curing in the pack: drink it before anything else, a rage above all."""
     return poison_share(obs) > SERIOUS_POISON and obs["inv"].get("curing", 0) > 0
+
+
+QW_BAD_POISON = 60        # `Style.cure`: poison still to come, in HP, that qw cures with danger in view
+
+
+def cure_wanted(obs: dict) -> bool:
+    """`Style.cure`: curing held, and qw would drink it now (runs/qw/build-zk/qw.lua).
+    - Confused (`plan_cure_confusion` 12430-12455: whenever confused, in effect, since its other conditions include
+      "autopickup on"). qw skips this standing in noxious fumes; nothing in the observation says so, so this doesn't.
+    - Poison that would kill (`plan_cure_bad_poison` 11768-11786: `poison_survival() <= 0`), or with hostiles in view
+      poison that will take QW_BAD_POISON HP or more (`survival <= hp - 60`); with nothing in view, poison that leaves
+      1 HP or less (`plan_cure_poison` 14288-14300)."""
+    if obs["inv"].get("curing", 0) <= 0:
+        return False
+    if _has(obs, "Conf"):
+        return True
+    hp, survival = obs["hp"], obs.get("poison_survival", obs["hp"])
+    if survival >= hp:
+        return False                                    # not poisoned, or regeneration outpaces it
+    if survival <= 0:
+        return True
+    return survival <= hp - QW_BAD_POISON if obs["n_hostiles"] else survival <= 1
 
 
 RECOVERING = ("Berserk", "-Berserk", "Slow")     # a rage, the exhaustion after it, the slowness it leaves
@@ -599,6 +637,69 @@ def unknown_pair(state: GameState) -> str | None:
     return best[1] if best else None
 
 
+def _unknown(item: dict) -> bool:
+    """An unidentified potion or scroll, as `features.inventory` tells one."""
+    name = item.get("name", "")
+    return item.get("base_type") in (POTIONS, gear.SCROLLS) and (item.get("quantity", 1) or 0) > 0 and \
+        bool(name) and not (" of " in name and "{unknown}" not in name)
+
+
+def ident_scroll(state: GameState) -> str | None:
+    """`Style.ident`: the letter of a known scroll of identify, when an unknown potion or scroll is held (qw's
+    `plan_use_identify_scrolls` with `get_unidentified_item`, qw.lua 13796-13812, 13983-14003), else None."""
+    inv = (state.player.get("inv") or {}).values()
+    if not any(_unknown(item) for item in inv):
+        return None
+    for item in inv:
+        name = item.get("name", "")
+        if item.get("base_type") == gear.SCROLLS and (item.get("quantity", 1) or 0) > 0 and \
+                "identify" in name and not _unknown(item):
+            return chr(item.get("letter", ord("a")))
+    return None
+
+
+IDENT_QTY = re.compile(r"^\s*\w - (\d+) ")
+
+
+def ident_choice(menu: list[tuple[str, str, bool]]) -> str | None:
+    """`Style.ident`: the line of the identify prompt ("Identify which item?", which lists only unknown items) that qw's
+    `get_unidentified_item` (qw.lua 13983-14003, the later of its two definitions; `c_choose_identify` 14005) would pick: a potion before a scroll, the smallest stack first, the
+    first of equal stacks; nothing else (qw identifies only potions and scrolls). None: nothing fits."""
+    best = None
+    for letter, text, _ in menu:
+        kind = 0 if "potion" in text else 1 if "scroll" in text else None
+        if kind is None:
+            continue
+        m = IDENT_QTY.match(text)
+        key = (kind, int(m.group(1)) if m else 1)
+        if best is None or key < best[0]:
+            best = (key, letter)
+    return best[1] if best else None
+
+
+RENAMED = re.compile(r"^(?:\w -> )?(\w) - (.+)$")
+
+
+def rename_identified(state: GameState, messages: list[dict]) -> None:
+    """`Style.ident`: after an identify, write the item's new name into the pack as the game's message gives it
+    ("d -> b - a potion of brilliance"). Webtiles sends the moved item's new letter and flags but not its new name (seen
+    in `v6l/A-ident`: the pack kept "cyan potion" at `b`, and the rules tried to drink it to identify it, 808 times
+    with no game time passing), so without this an identified potion stays unknown to the rules."""
+    inv = state.player.get("inv") or {}
+    for batch in messages:
+        if batch.get("msg") != "msgs":
+            continue
+        for m in batch.get("messages", []):
+            for part in strip_tags(m.get("text", "")).split("; "):
+                hit = RENAMED.match(part.strip())
+                if not hit:
+                    continue
+                letter, name = ord(hit.group(1)), re.sub(r"^(a|an) ", "", hit.group(2).strip())
+                for item in inv.values():
+                    if item.get("letter") == letter and item.get("base_type") in (POTIONS, gear.SCROLLS):
+                        item["name"] = name
+
+
 KIT_SCROLLS = ("enchant armour", "enchant weapon", "brand weapon")
 
 
@@ -629,7 +730,7 @@ def baseline(obs: dict, avail: list[str], level_explored: bool, wiki: bool = Fal
              recover: int = 0, calm: bool = False, retreat: bool = False, rest_out: bool = False,
              to_stairs: bool = False, assailed: str | None = None, avoid: float = 0.0, escape: float = 0.0,
              unique: float = 0.0, rage: float = 0.0, hold: bool = False, heal_at: float = 0.5,
-             gamble: bool = False) -> str:
+             gamble: bool = False, cure: bool = False) -> str:
     """Rules of thumb: the stub's behaviour, plus drinking a healing potion instead of giving up.
 
     `wiki` plays the variant that follows the DCSS wiki's strategy guides instead (`Style.wiki`).
@@ -656,11 +757,18 @@ def baseline(obs: dict, avail: list[str], level_explored: bool, wiki: bool = Fal
     lowers it to SAVE_HEAL); the cure for serious poison is drunk whatever the HP. `gamble` (`Style.save`): at that
     HP with no healing potion known, drink an unknown potion (qw's `heal_general`: `quaff_unided_potion()` when heal
     wounds is not identified); a fifth of the unknown potions the rules drank were curing or heal wounds.
+    `cure` (`Style.cure`): curing also when `cure_wanted` holds (confusion, poison as qw counts it), first as the
+    serious-poison cure is; and a potion for HP only with heal wounds held (`BrainTiers.perform` then drinks that).
     """
     if wiki:
         return baseline_wiki(obs, avail, level_explored)
     frac = obs["hp"] / max(obs["hp_max"], 1)
-    cure = ["quaff_heal"] if needs_cure(obs) else []      # serious poison: curing first, before any rage
+    sick = needs_cure(obs) or (cure and cure_wanted(obs))
+    gamble_at = heal_at
+    if cure:
+        # Style.cure: curing is never drunk for HP, so a potion for HP waits for heal wounds
+        heal_at = heal_at if obs["inv"].get("heal_wounds", 0) > 0 else -1.0
+    cure = ["quaff_heal"] if sick else []                 # serious poison: curing first, before any rage
     if obs["n_hostiles"]:
         near = [m for m in obs["mons"] if max(abs(m["dx"]), abs(m["dy"])) <= 2]
         if rage > 0:
@@ -678,7 +786,7 @@ def baseline(obs: dict, avail: list[str], level_explored: bool, wiki: bool = Fal
             away = away + (["quaff_heal"] if frac <= heal_at else []) + ["flee_up", "wait"]
         order = cure + away + (["read_teleport"] if now else []) + (["berserk"] if go and near else []) + \
                 (["quaff_heal"] if frac <= heal_at else []) + \
-                (["quaff_unknown"] if gamble and frac <= heal_at and not obs["inv"]["heal"] else []) + \
+                (["quaff_unknown"] if gamble and frac <= gamble_at and not obs["inv"]["heal"] else []) + \
                 (["read_teleport"] if crowded else []) + \
                 (["wait"] if hold else []) + ["fight", "descend", "flee_up", "wait"]
     else:
@@ -783,6 +891,7 @@ class BrainTiers(StubTiers):
         self.shop_opened = False               # ...the step just taken opened a shop (it takes no game time)
         self.disturbed = False                 # Style.calm 2: explore was just refused for a disturbance
         self.disturb_steps = 0                 # ...steps taken away from one on this level visit (DISTURB_MAX)
+        self.cure_now = False                  # Style.cure: `cure_wanted` held at the last choice (curing, not heal wounds)
 
     # --- choosing ------------------------------------------------------
 
@@ -837,7 +946,9 @@ class BrainTiers(StubTiers):
                         recover=int(self.style.recover), calm=self.calm_now, retreat=retreat,
                         rest_out=rest_out, to_stairs=to_stairs, assailed=assailed, avoid=self.style.avoid,
                         escape=self.style.escape, unique=self.style.unique, rage=self.style.rage, hold=hold,
-                        heal_at=SAVE_HEAL if self.style.save else 0.5, gamble=bool(self.style.save))
+                        heal_at=SAVE_HEAL if self.style.save else 0.5, gamble=bool(self.style.save),
+                        cure=bool(self.style.cure))
+        self.cure_now = bool(self.style.cure) and cure_wanted(obs)
         choice, source, extra = base, "baseline", {}
         if self.fork_turn is not None and self.horizon and state.turn > self.fork_turn + self.horizon:
             raise Escalation(FORK_DONE)
@@ -885,6 +996,8 @@ class BrainTiers(StubTiers):
           and before its rage: `set_plan_emergency`, qw.lua 12594-12644).
         - "throw" (`throw`): when `throw_wanted` holds and the rules of thumb would walk up to the hostiles or wait for
           them (qw's `plan_throw` is in its attack plans, after all of the emergency ones).
+        - "read_ident" (`ident`): nothing in view, no rage, able to read: a known identify scroll while something is
+          unknown (`ident_scroll`), after the kit's steps (qw's `plan_use_identify_scrolls`).
         - kit 2, nothing in view and no rage: "equip" ("gear": a better weapon or armour by `gear.upgrades` at kit 2,
           before any scroll so an enchantment lands on the piece kept), "read_kit" as above (with "acquire", a known
           acquirement scroll too), "put_on" by `gear.jewel2`, and "kit_shop" ("shop": a step toward, or into, a shop on
@@ -895,7 +1008,7 @@ class BrainTiers(StubTiers):
             self.disturbed = False
             if not hostiles and self.style.calm >= 2 and disturb_square(state, self.disturb_steps):
                 return "disturb_step"
-        if not (self.style.kit or self.style.hand or self.style.throw or self.style.step):
+        if not (self.style.kit or self.style.hand or self.style.throw or self.style.step or self.style.ident):
             return None
         status = state.statuses
 
@@ -931,6 +1044,9 @@ class BrainTiers(StubTiers):
                 return "put_on"
             if "shop" in self.parts and ok("kit_shop") and (self.on_visited_shop(state) or self.shop_target(state)):
                 return "kit_shop"             # not "shop": that name is Reflex's own walk into a shop
+        if self.style.ident and not hostiles and "Berserk" not in status and ok("read_ident") and \
+                not any(x.startswith(("silenced", "Conf")) for x in status) and ident_scroll(state):
+            return "read_ident"
         return None
 
     @staticmethod
@@ -995,14 +1111,15 @@ class BrainTiers(StubTiers):
                           recover=int(self.style.recover), calm=calm, retreat=retreat, assailed=None,
                           avoid=self.style.avoid, escape=self.style.escape, unique=self.style.unique,
                           rage=self.style.rage, hold=bool(self.style.hold) and hold_ground(obs),
-                          heal_at=SAVE_HEAL if self.style.save else 0.5, gamble=bool(self.style.save))
+                          heal_at=SAVE_HEAL if self.style.save else 0.5, gamble=bool(self.style.save),
+                          cure=bool(self.style.cure))
         return obs, choice
 
     def save_blocked(self, state: GameState, hostiles: list) -> set[str]:
-        """`Style.save`: {"quaff_unknown"} with nothing in view and no unknown potion stack of two or more (qw drinks
-        one to identify it only from such a stack, so a kind costs at most half of what was found), else nothing. With
-        hostiles in view the rules drink one only as a last healing potion (`baseline`'s `heal_at`)."""
-        if not self.style.save or hostiles or unknown_pair(state):
+        """`Style.save` or `Style.stack`: {"quaff_unknown"} with nothing in view and no unknown potion stack of two or
+        more (qw drinks one to identify it only from such a stack, so a kind costs at most half of what was found), else
+        nothing. With hostiles in view the rules drink one only as a last healing potion (`baseline`'s `heal_at`)."""
+        if not (self.style.save or self.style.stack) or hostiles or unknown_pair(state):
             return set()
         return {"quaff_unknown"}
 
@@ -1107,12 +1224,18 @@ class BrainTiers(StubTiers):
                 "read_unknown": ("r", "unknown_scrolls"), "read_teleport": ("r", "teleport")}
         if action in item:
             verb, kind = item[action]
-            if action == "quaff_unknown" and self.style.save and unknown_pair(state):
+            if action == "quaff_unknown" and (self.style.save or self.style.stack) and unknown_pair(state):
                 letters = {**letters, kind: unknown_pair(state)}
             if action == "quaff_heal":
                 # which of the two, by what is needed now (heal_potion)
-                kind = heal_potion({"hp": state.hp, "hp_max": state.hp_max, "status": state.statuses, "inv": inv,
-                                    "poison_survival": state.player.get("poison_survival", state.hp)}) or kind
+                now = {"hp": state.hp, "hp_max": state.hp_max, "status": state.statuses, "inv": inv,
+                       "poison_survival": state.player.get("poison_survival", state.hp)}
+                kind = heal_potion(now) or kind
+                if self.style.cure:
+                    # Style.cure: curing for confusion and poison, heal wounds for HP, never curing for HP
+                    cures = (self.cure_now or needs_cure(now)) and inv.get("curing", 0) > 0
+                    kind = "curing" if cures else "heal_wounds" if inv.get("heal_wounds", 0) > 0 else kind
+                    self.count("cure" if cures else "heal_wounds")
             if kind not in letters:
                 return ActResult()
             result = self.through_menu(conn, verb, letters[kind])
@@ -1120,6 +1243,8 @@ class BrainTiers(StubTiers):
                 return self.answer_enchant(conn, result)
             if "acquire" in self.parts and result.blocking == "acquirement":
                 return self.answer_acquire(conn, state, result)
+            if self.style.ident and result.blocking == "identify":
+                return self.answer_identify(conn, state, result)
             if result.blocking in ITEM_PROMPTS:
                 # The scroll wants a target or an item (blinking, identify, enchant...). There is no
                 # action for that yet: cancel, and say yes to "really abort and waste the scroll?",
@@ -1139,6 +1264,18 @@ class BrainTiers(StubTiers):
                 return self.answer_enchant(conn, result)
             if "acquire" in self.parts and result.blocking == "acquirement":
                 return self.answer_acquire(conn, state, result)
+            if result.blocking in ITEM_PROMPTS:
+                after = cancel_prompt(conn)
+                after.messages = result.messages + after.messages
+                return after
+            return result
+        if action == "read_ident":
+            letter = ident_scroll(state)
+            if not letter:
+                return ActResult()
+            result = self.through_menu(conn, "r", letter)
+            if result.blocking == "identify":
+                return self.answer_identify(conn, state, result)
             if result.blocking in ITEM_PROMPTS:
                 after = cancel_prompt(conn)
                 after.messages = result.messages + after.messages
@@ -1216,6 +1353,28 @@ class BrainTiers(StubTiers):
                 after = more
             else:
                 self.count("enchant_" + result.blocking)
+        after.messages = result.messages + after.messages
+        return after
+
+    def answer_identify(self, conn, state: GameState, result: ActResult) -> ActResult:
+        """`Style.ident`: answer the identify prompt ("Identify which item?", tag `use_item`; seen in the real game, job
+        `brain-v6l/probe5.py`) with the line `ident_choice` picks; cancel when nothing in it fits. The letter closes the
+        menu and the item is named at once ("f -> w - 2 potions of heal wounds"); a known scroll's read takes a turn."""
+        menu = gear.worn_from_menu(result.messages)
+        letter = ident_choice(menu)
+        if letter is None:
+            after = cancel_prompt(conn)
+        else:
+            after = conn.act(letter, through_menu=True)
+            if after.blocking in ITEM_PROMPTS | {"yesno", "menu"}:
+                more = cancel_prompt(conn)                   # anything more it asks: no
+                more.messages = after.messages + more.messages
+                after = more
+            else:
+                self.count("identify")
+                self.note(conn, auto="identify", chosen=next((t for k, t, _ in menu if k == letter), ""),
+                          turn=state.turn)
+                rename_identified(state, after.messages)
         after.messages = result.messages + after.messages
         return after
 
@@ -1465,6 +1624,7 @@ class BrainTiers(StubTiers):
 
     def describe(self) -> dict:
         out = {"model": self.net.name if self.net else None, "epsilon": self.epsilon, "style": asdict(self.style)}
-        if self.style.kit or self.style.hand or self.style.throw or self.style.step or self.style.calm >= 2:
+        if self.style.kit or self.style.hand or self.style.throw or self.style.step or self.style.calm >= 2 or \
+                self.style.ident or self.style.cure:
             out["kit"] = dict(self.kit_counts)
         return out

@@ -2706,7 +2706,8 @@ def test_saved_models_still_load_and_choose_the_same_with_the_switches_on_or_off
     for p in paths[:6]:
         net = load_model(str(p))
         for style in (Style(kit=1, hand=1, throw=1, step=1), Style(kit=2), Style(kit=2, kitpart=1), Style(save=1),
-                      Style(calm=1), Style(calm=2), Style(calm=2, save=1)):
+                      Style(calm=1), Style(calm=2), Style(calm=2, save=1), Style(ident=1), Style(stack=1),
+                      Style(cure=1), Style(ident=1, stack=1, cure=1)):
             a = BrainTiers(net, Style(), rng=random.Random(0))
             b = BrainTiers(net, style, rng=random.Random(0))
             st = stairs_state()
@@ -3410,3 +3411,109 @@ def test_calm2_steps_aside_from_a_disturbance_instead_of_setting_explore_aside()
     other.choice = "explore"
     _refuse_explore(other, stairs_state(), "You're confused, stopping explore.")
     assert not other.disturbed
+
+
+# --- Style.ident, Style.stack, Style.cure: save=1's parts, and qw's cures, one at a time --------------------------
+
+def test_ident_stack_and_cure_are_off_by_default_and_old_runs_still_match():
+    import argparse
+    from ladder.brain.cli import _style
+    assert Style().ident == Style().stack == Style().cure == 0
+    assert _style(argparse.Namespace(style=["ident=1", "stack=1", "cure=1"])) == Style(ident=1, stack=1, cure=1)
+    old = {k: v for k, v in Style().to_dict().items() if k not in ("ident", "stack", "cure")}
+    assert Style.saved(old) == Style()                  # added off, still off: no STYLE_ADDED_AS entry
+    # off, a known identify scroll is never read
+    st = kit_state(item("scroll of identify", SCROLLS, 2, ord("c")), item("fizzy red potion", POTIONS, 1, ord("d")))
+    tiers = BrainTiers(rng=random.Random(0))
+    tiers.worn = {"body": "1"}
+    assert tiers.auto_step(st, []) is None
+
+
+def test_ident_reads_a_known_identify_scroll_and_answers_as_qw_would():
+    from ladder.brain import gear
+    two_kinds = [menu("e - a scroll labelled FOO", "j - 3 fuming silvery potions", "f - 2 clear potions",
+                      "d - a fizzy dark potion")]
+    assert policy.ident_choice(gear.worn_from_menu(two_kinds)) == "d"          # a potion first, the smallest stack
+    scrolls = [menu("e - 2 scrolls labelled FOO", "g - a scroll labelled BAR")]
+    assert policy.ident_choice(gear.worn_from_menu(scrolls)) == "g"
+    assert policy.ident_choice(gear.worn_from_menu([menu("k - a wand of flame")])) is None
+    # read with nothing in view while something is unknown; not with only known things, not in a fight
+    st = kit_state(item("scroll of identify", SCROLLS, 2, ord("c")), item("fizzy dark potion", POTIONS, 1, ord("d")))
+    assert policy.ident_scroll(st) == "c"
+    assert policy.ident_scroll(kit_state(item("scroll of identify", SCROLLS, 2, ord("c")))) is None
+    tiers = BrainTiers(style=Style(ident=1), rng=random.Random(0))
+    tiers.worn = {"body": "1"}
+    assert tiers.next_action(st) == "read_ident"
+    fight = kit_state(item("scroll of identify", SCROLLS, 2, ord("c")), item("fizzy dark potion", POTIONS, 1, ord("d")),
+                      hostile="orc")
+    assert tiers.auto_step(fight, fight.hostiles()) is None
+    # the prompt (tag use_item, "Identify which item?") is answered with the line qw would pick
+    prompt = ActResult(blocking="identify", messages=two_kinds)
+    named = ActResult(messages=[{"msg": "msgs", "messages": [{"text": "d - a potion of curing; c -> i - a scroll of identify"}]}])
+    conn = ScriptedConn([ActResult(blocking="menu"), prompt, named])
+    tiers.perform(SimpleNamespace(state=st, conn=conn), "read_ident")
+    assert [k for k, _ in conn.sent] == [("r",), ("c",), ("d",)]
+    assert tiers.kit_counts == {"identify": 1}
+    # webtiles moves the item to its new letter without its new name: the message's name is written into the pack
+    from ladder.brain.features import inventory
+    assert inventory(st)["curing"] == 1 and inventory(st)["unknown_potions"] == 0
+    # an unknown scroll that turns out to be identify: answered with ident, cancelled without
+    unk = kit_state(item("scroll labelled FOO", SCROLLS, 1, ord("c")), item("fizzy dark potion", POTIONS, 1, ord("d")))
+    for style, keys in ((Style(), [("r",), ("c",), ("key_esc",)]), (Style(ident=1), [("r",), ("c",), ("d",)])):
+        conn = ScriptedConn([ActResult(blocking="menu"), ActResult(blocking="identify", messages=two_kinds),
+                             ActResult()])
+        BrainTiers(style=style).perform(SimpleNamespace(state=unk, conn=conn), "read_unknown")
+        assert [k for k, _ in conn.sent] == keys, style
+
+
+def test_stack_drinks_an_unknown_potion_only_from_a_pair_and_keeps_the_heal_threshold():
+    one = make_state(["@..."])
+    with_inv(one, s0=item("fizzy red potion", POTIONS, 1, 97), s1=item("bubbling blue potion", POTIONS, 1, 98))
+    tiers = BrainTiers(style=Style(stack=1), rng=random.Random(0))
+    tiers.worn = {"body": "1"}
+    assert tiers.next_action(one) == "explore"
+    two = make_state(["@..."])
+    with_inv(two, s0=item("fizzy red potion", POTIONS, 1, 97), s1=item("bubbling blue potion", POTIONS, 2, 98))
+    tiers = BrainTiers(style=Style(stack=1), rng=random.Random(0))
+    tiers.worn = {"body": "1"}
+    assert tiers.next_action(two) == "quaff_unknown"
+    conn = ScriptedConn([ActResult(blocking="menu")])
+    tiers.perform(SimpleNamespace(state=two, conn=conn), "quaff_unknown")
+    assert [k for k, _ in conn.sent] == [("q",), ("b",)]
+    # not save=1's lower healing threshold: at 40% in a fight it still drinks
+    fight = obs(hp=8, hp_max=20, n_hostiles=1, mons=[mon(dx=1)],
+                inv={"heal": 1, "curing": 0, "heal_wounds": 1, "unknown_potions": 0, "unknown_scrolls": 0,
+                     "teleport": 0})
+    assert baseline(fight, available(fight, False, set(), False), False) == "quaff_heal"
+
+
+def test_cure_drinks_curing_for_confusion_and_poison_and_never_for_hp():
+    inv = {"heal": 1, "curing": 1, "heal_wounds": 0, "unknown_potions": 0, "unknown_scrolls": 0, "teleport": 0}
+    fight = obs(hp=8, hp_max=20, n_hostiles=1, mons=[mon(dx=1)], inv=inv)
+    avail = available(fight, False, set(), False)
+    assert baseline(fight, avail, False) == "quaff_heal"                  # the defaults drink curing for HP
+    assert baseline(fight, avail, False, cure=True) == "fight"           # cure=1 doesn't
+    both = {**fight, "inv": {**inv, "heal": 2, "heal_wounds": 1}}
+    assert baseline(both, available(both, False, set(), False), False, cure=True) == "quaff_heal"
+    # confused, curing held: drink it, in a fight and out of one, at any HP
+    for o in ({**fight, "hp": 20, "status": ["Conf"]}, obs(status=["Conf"], inv=inv)):
+        assert policy.cure_wanted(o)
+        a = available(o, False, set(), False)
+        assert baseline(o, a, False, cure=True) == "quaff_heal"
+        assert baseline(o, a, False) != "quaff_heal"
+    # poison as qw counts it: 60 HP or more to come with hostiles in view, 1 HP left or less out of a fight
+    big = obs(hp=100, hp_max=100, poison_survival=39, n_hostiles=1, mons=[mon(dx=1)], inv=inv)
+    assert policy.cure_wanted(big) and not policy.needs_cure(big)
+    assert not policy.cure_wanted({**big, "poison_survival": 41})
+    assert policy.cure_wanted(obs(hp=10, poison_survival=1, inv=inv))
+    assert not policy.cure_wanted(obs(hp=10, poison_survival=2, inv=inv))
+    assert not policy.cure_wanted(obs(status=["Conf"], inv={**inv, "curing": 0, "heal": 0}))
+    # perform: heal wounds for HP; curing when the cure rule held at the choice
+    st = kit_state(item("potion of curing", POTIONS, 1, ord("c")), item("potion of heal wounds", POTIONS, 1, ord("d")),
+                   hostile="orc")
+    for now, letter in ((False, "d"), (True, "c")):
+        tiers = BrainTiers(style=Style(cure=1), rng=random.Random(0))
+        tiers.cure_now = now
+        conn = ScriptedConn([ActResult(blocking="menu")])
+        tiers.perform(SimpleNamespace(state=st, conn=conn), "quaff_heal")
+        assert [k for k, _ in conn.sent] == [("q",), (letter,)], now
