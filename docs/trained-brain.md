@@ -4159,6 +4159,222 @@ are unspent.
   - copies: `arms.py`, `seeds.py`, `verify.py`, `mindex.py`, `same.py`, `chain.sh`, `refresh.sh` and others from
     `brain-v6k/`.
 
+#### The Lair detour (`lair=1`, `lair=2`), built and measured: it costs depth (2026-11-17, morning)
+
+The previous section found that qw goes into the Lair as soon as it finds it and comes back stronger, and that our bot
+never takes a branch staircase. This section builds that route as an opt-in switch, `lair=k`, and tunes it. **Result:
+the detour loses depth. `lair=1` is −0.30 [−0.43, −0.17], `lair=2` −0.39 [−0.52, −0.26], both against the defaults on
+A + C. `lair=1 calm=1` is level with the defaults, +0.01 [−0.44, +0.45], but −0.30 [−0.46, −0.15] against `calm=1`
+alone, so the Lair's own part is a loss there too. The games that come back out of the Lair do go deeper than without
+it, and die much less from D:7 down afterwards, but more games die in the Lair than come out, and each of those loses
+about three and a half Dungeon levels. No configuration qualified for a fresh test; seeds 691800 onward are unspent.**
+
+**The route** (`src/ladder/brain/route.py`, `LairRoute`; `Style.lair`, off by default). It adds no action and changes
+neither the observation nor the feature vector; it changes only where a "descend" goes.
+- **Finding the entrance.** The rc gets a Lua function, `ladder_find_lair` (`route.LAIR_RC`, bound to `chr(9352)`, sent
+  only with the switch on). It reads the game's map knowledge (`view.feature_at`, the feature names qw reads) for
+  `"enter_lair"` and prints where it is, relative to the character, or that there is none. Pressing it takes no game
+  time. An automatic step, "lair_scan", presses it on D:8–11 (the Lair's range in crawl's `branch-data.h`) when a branch
+  staircase not yet looked at is on the map, and again on each later visit to the entrance's level (below).
+- **Going in.** Where the rules of thumb would take the stairs down (`rules_now` gives "descend", or nothing at all on a
+  level with no stairs down), an automatic step, "lair", takes a step toward the entrance instead, or `>` on it. So the
+  rules still decide when a level is done (explored, or cut short by a rage), when to rest or wait out a rage first, and
+  when to fight; the route decides only which stairs. On a Dungeon level below the entrance's (a shaft) it climbs back
+  up, at most 3 levels.
+- **In the Lair.** The rules' own descend goes on down to Lair:4 (`lair=1`) or Lair:5 (`lair=2`). There, once the rules
+  would leave the level, the way back begins: on every Lair level a step toward the stairs up, or `<` on them, until
+  the Dungeon. Back on the entrance's level the rules go on as without the switch (explore says "Done exploring", then
+  down). The `calm` behaviour is not part of the switch (one switch, one change): a rage still ends a Lair level as it
+  ends a Dungeon level, and `lair=1 calm=1` is the arm that explores fully.
+- **Bookkeeping.** Phases seek, in, back, done and off move on at every level change from the game's own place and
+  depth, so teleports, shafts, stairs taken in a fight and flights up out of Lair:1 land in the right phase (a flight
+  out of Lair:1 before the way back means going in again later, 3 entries at most).
+- **Bounds.** The route is given up, and the bot descends as it would without it, after 5 "lair" steps that went
+  nowhere, after the entrance had no known way to it 3 times (explore is let go on the first two), when the entrance
+  isn't found again on a later visit, or more than 3 levels below it. The existing 1,500 choices per level and the
+  step limit still apply.
+- **qw's way, for comparison** (`runs/qw/build-zk/qw.lua`): `goal_normal_next` (3912–3990) makes the Lair the goal as
+  soon as `branch_found("Lair")` and the level in hand is explored, `ready_for_lair` (4571–4586) always holds for Trog,
+  `explored_level_range("Lair")` keeps it there until Lair:1–5 are explored, and the next goal (D:12) takes it back up
+  with interlevel travel (`plan_go_command` 12715–12735, `send_travel` 12681–12690: `G`, the branch letter, the depth,
+  Enter, `Y`). Ours walks stairs one square at a time instead, as its descend already does.
+
+**The keys and messages, seen in real seeded games** (`laddertest`, training seeds; the job's `brain-v6m/probe1.py` and
+`probe2.py`).
+- `ladder_find_lair` prints "Ladder_lair none" or "Ladder_lair dx dy": the game capitalises a message's first letter, so
+  it is read without case. Its squares match the map cells webtiles sends (the exit staircase at −3, 5 in both).
+- Stepping onto the entrance: "There is a staircase to the Lair here." `>` there enters Lair:1 at once, no prompt; the
+  place becomes "Lair", depth 1.
+- `<` on Lair:1's stairs up lands on the Dungeon level of the entrance, on "a staircase back to the Dungeon", no prompt.
+  Escape hatches up are stairs up too ("A mysterious force pulls you upwards. The hatch slams shut behind you.").
+- `G` opens a menu (tag `travel`, "Where to? (? - help)", a line per known branch: " D - Dungeon"); looked at, not used.
+- The whole route in one game (seed 130183, `lair=1`): the entrance found on D:11 at XL 11, AC 19; Lair:1 to Lair:4
+  explored; out again on D:11 at turn 12,093 with XL 13, AC 25, HP max 125; on down to D:15.
+
+**A fault found in the first tuning run, and fixed before the runs used below.** Webtiles counts map squares from where
+each visit to a level began (a game starts at (0, 0)), so the entrance's square, kept from one visit, pointed somewhere
+else on the next. In `v6m/C-lair1`, 10 of the 28 games that found the entrance fled up out of Lair:1 (or left the
+level) and then gave the route up for "no known way" to a square that was no longer the entrance. Now the entrance
+keeps the visit it was found on (`level_seq`) and is looked for again on a later one. That run, and the cut-off
+`v6m/A-lair1`, are not used.
+
+**The score: a death in the Lair counts as the deepest Dungeon level reached.** A game's `max_depth` was the largest
+`progress_depth` it saw, which counts Lair:n as 9 + n: a death on Lair:3 would have scored 12. It is now the largest
+`features.score_depth`, which counts the Lair and the branches below it (Swamp, Shoals, Snake Pit, Spider Nest, Slime
+Pits) as 0 and every other place as before. So a game that dies in the Lair scores the deepest Dungeon level it
+reached before going in (or after coming out); its end row still names the Lair and the level it died on. Test:
+`test_a_death_in_the_lair_scores_the_deepest_dungeon_level`. What the model sees is unchanged (`progress_depth`, the
+"in the Dungeon" input 0 in the Lair). Found on the way and left as it was, so that the references stay comparable:
+the Abyss still scores 14 + its depth (4 games of `v6k/A-ref` and 6 of `C-ref` score 15 from it). The Dungeon-only
+depth (`ddepth.py`) gives the same answers as the score here: `lair=1` −0.29 [−0.42, −0.17], `lair=1 calm=1` +0.02
+[−0.41, +0.45], `lair=2` −0.40 [−0.53, −0.27].
+
+**Play with the switch off is unchanged** (`same.py`, all at the step limit used below): 500000–500008 with no
+`--style` (`v6m/A-off`), 500009–500017 with `lair=0` (`A-off0`) and, after the fix, 500018–500026 with no `--style`
+(`A-off2`) are identical to `v6k/A-ref`, 27 of 27: the same deepest level, final turn and end, and the same choices step
+by step. Tests in `tests/test_brain.py`: the switch is off by default and old styles still match (added off: no
+`STYLE_ADDED_AS` entry); the rc is sent only with it on; the scan, the walk and `>` where the rules would descend
+(resting first when hurt); a scan that finds nothing; the phases through shafts, flights and the way back, and every
+bound; the entrance found again on a later visit; no known way; the walk up and `<`;
+`test_saved_models_still_load_and_choose_the_same_with_the_switches_on_or_off`, now also with `lair=1` and `lair=2` on a
+D:9 level with a branch staircase.
+
+**Turn and step limits.** Games with the detour run longer, and some passed the old 4,000-step limit (most steps:
+`A-l1` 4,193, `C-lc` 4,028, `A-l2` 4,058; one `A-lc` game, 500045, stopped at 12,000 steps on turn 31,608). Every run
+here used `--max-steps 12000 --max-turns 40000`. No reference game reached 4,000 steps (most 3,506) or came near
+40,000 turns, so the references, played at 4,000, are what they would have been at 12,000 (and the switches-off checks
+above were played at 12,000).
+
+**The smoke run** (`v6m/smoke-lair1`, 500000–500019, before the fix and before the scan was kept to D:8–11). Of 12
+games that reached D:8, only 2 found the entrance (500005 and 500016 passed D:8–11 without seeing it: our bot leaves a
+level half explored after a rage). Both went in, at XL 10 with AC 8 and 15, and both died on Lair:1, to a yak herd and a
+komodo dragon (the reference reached D:13 and D:14 on them). 17 of 20 games were identical to the reference; the third
+that differed never entered: a scan on D:5 (the Temple's staircase), a command although it takes no game time, had
+changed what followed. Since then the scan is kept to D:8–11; in the tuning runs below, the 336 `lair=1` games that
+never found the entrance all scored as the reference did.
+
+**Tuning.**
+- **Method.** This tree, no model, epsilon 0, A (500000–500199) and C (540000–540199) only, 9 workers; each arm minus
+  `v6k/{A,C}-ref` (today's defaults), paired by dungeon over games both finished and neither stale nor off its seed
+  (`arms.py`, `verify.py`); 95% bootstrap over dungeons, 10,000 resamples. Description only: these blocks are spent.
+- **Arm order.** C-l1, A-l1, A-lc, C-lc, C-l2, A-l2 (04:01–06:37).
+- **Seed checks.** Every game of every run was on its seed (no "Welcome back", no protocol without its seed, no first
+  step after turn 1, a morgue on its seed for every finished game). 540052 hung in `C-l1` and `C-l2`, as in every C
+  reference; in `C-lc` it finished.
+
+| arm (`--style`) | A: mean depth | C: mean depth | − ref, A | − ref, C | **− ref, pooled** (dungeons) | deeper / same / shallower |
+| --- | --- | --- | --- | --- | --- | --- |
+| reference (`v6k/*-ref`) | 7.84 | 7.51 | | | | |
+| `lair=1` | 7.49 | 7.28 | −0.35 [−0.56, −0.17] | −0.24 [−0.39, −0.10] | **−0.30 [−0.43, −0.17]** (399) | 9 / 349 / 41 |
+| `lair=1 calm=1` | 7.64 | 7.72 | −0.20 [−0.84, +0.42] | +0.21 [−0.42, +0.83] | **+0.01 [−0.44, +0.45]** (399) | 152 / 102 / 145 |
+| `lair=2` | 7.41 | 7.18 | −0.44 [−0.67, −0.23] | −0.34 [−0.49, −0.21] | **−0.39 [−0.52, −0.26]** (399) | 9 / 339 / 51 |
+| `lair=1 calm=1` − `calm=1` (`v6k/{A,C}-calm`) | | | −0.30 [−0.54, −0.07] | −0.30 [−0.51, −0.10] | **−0.30 [−0.46, −0.15]** (400) | 29 / 302 / 69 |
+
+- For reference, `calm=1` alone (`v6k/*-calm`) against the defaults on the same blocks: +0.31 [−0.16, +0.77]; it failed
+  its fresh test (+0.32 [−0.05, +0.69]).
+- **No arm meets the rule for a fresh test** (pooled interval mostly above zero, both blocks positive; with `calm=1`,
+  also clearly ahead of `calm=1` alone). None has a pooled difference above zero to speak of, and the Lair's own part is
+  negative in every comparison.
+
+**What the route did** (`lairstats.py`, `split.py`; A + C; measured).
+
+| | `lair=1` | `lair=1 calm=1` | `lair=2` | qw (block A, `zk-heldout-200`) |
+| --- | --- | --- | --- | --- |
+| games that found the entrance | 63 of 399 | 119 of 400 | 64 of 399 | — |
+| went in | 51 | 107 | 51 | 99 of 199 (99 of the 122 reaching D:8) |
+| on entering: XL / AC / HP max (mean) | 9.7 / 16.1 / 86 | 10.4 / 17.9 / 92 | 9.7 / 16.1 / 86 | 10.6 / 19.0 (median XL 11) |
+| died in the Lair | 33 | 56 | 42 | 29 |
+| came back out, and went on down | 15 | 47 | 7 | — |
+| on coming out: XL / AC / HP max (mean) | 11.9 / 21.0 / 109 | 12.8 / 21.1 / 119 | 13.0 / 25.4 / 121 | 13.8 / 24.3 / 137 (first new D level after the Lair, 49 games) |
+| routes given up | 4 (no known way 2, way up 1, step went nowhere 1) | 1 (no known way) | 5 | — |
+
+Deaths in the Lair per game reaching that level:
+
+| level | `lair=1` | `lair=1 calm=1` | `lair=2` | qw |
+| --- | --- | --- | --- | --- |
+| Lair:1 | 15 / 51 (29%) | 19 / 107 (18%) | 15 / 51 | 3 / 99 (3%) |
+| Lair:2 | 9 / 34 (26%) | 15 / 88 (17%) | 9 / 34 | 3 / 96 (3%) |
+| Lair:3 | 6 / 27 (22%) | 13 / 72 (18%) | 5 / 27 | 5 / 92 (5%) |
+| Lair:4 | 2 / 21 (10%) | 5 / 59 (8%) | 2 / 21 | 1 / 87 (1%) |
+| Lair:5 | 1 / 3 (a shaft) | 4 / 10 | 11 / 18 (61%) | 17 / 85 (20%) |
+
+The paired difference split by what happened in the arm's game (against the defaults; for `lair=1 calm=1`, against
+`calm=1` alone, so that only the Lair's part shows):
+
+| group | `lair=1` − ref | `lair=1 calm=1` − `calm=1` |
+| --- | --- | --- |
+| never found the entrance | 336 games, +0.00 (all the same as the reference) | 281, +0.02 |
+| found it, never went in (died on the way, or gave it up) | 12, −1.50 [−2.67, −0.42] | 12, −0.42 |
+| went in and died there | 33, −3.55 [−4.18, −2.91] | 56, −2.95 [−3.43, −2.48] |
+| went in and came out | 15, +1.33 [+0.40, +2.40] | 47, +1.04 [+0.51, +1.57] |
+
+Deaths per level visit on D:7–12 (`lairstats.py`; a visit is a game's arrival on a level, once per side of the detour):
+
+| | before the Lair, or never in it | after coming out of it |
+| --- | --- | --- |
+| reference (`v6k/*-ref`) | 163 / 840 (19.4%) | — |
+| `calm=1` (`v6k/*-calm`) | 167 / 972 (17.2%) | — |
+| `lair=1` | 147 / 717 (20.5%) | 2 / 58 (3.4%) |
+| `lair=1 calm=1` | 117 / 757 (15.5%) | 5 / 160 (3.1%) |
+| `lair=2` | 146 / 718 (20.3%) | 0 / 24 |
+| qw (previous section) | 33 / 431 (7.7%) | 4 / 174 (2.3%) |
+
+- **What it comes to.** The characters that come back out of the Lair are as strong as qw's nearly (XL 12–13, AC 21–25)
+  and die on D:7–12 afterwards as rarely as qw's do (3% of visits against qw's 2.3%), and they go 1–1.3 levels deeper
+  than the same dungeon without the detour. But we go in a level weaker than qw (XL 9.7–10.4 against 10.6, AC 16–18
+  against 19, a third of its healing potions, the previous section), and in the Lair we die 3.5 to 10 times as often
+  per level as qw on Lair:1–4. More games die in the Lair than come out (33 to 15 with `lair=1`, 56 to 47 with `calm`), and
+  each death there costs about 3–3.5 Dungeon levels the reference would have reached. Lair:5 (`lair=2`) kills 11 of the
+  18 that reach it; qw loses 17 of 85 there.
+- **Finding it.** Without `calm`, 63 of 399 games find the entrance (a level left half explored after a rage hides it);
+  with `calm=1`, 119 of 400.
+- **What kills us there** (`lairdeaths.py`, the 89 deaths in the Lair of `lair=1` and `lair=1 calm=1`): cane toads (10),
+  komodo dragons (10), yaks (6), death yaks (6), elephants (4), black mambas (4), boulder beetles, blink frogs and
+  basilisks (3 each); XL 11.2 and AC 17.7 at death. 72 of the 89 fatal fights had three or more hostiles in view at
+  once; 21 began within 30 turns of arriving on the level (a pack at the stairs); 30 began raging or exhausted; at their
+  start the character had full HP (median), a teleport scroll in 39 and a healing potion in 46.
+- **Who survives it.** Coming out against dying there, by XL on entering (all four `lair=1` arms with and without
+  `calm`): XL 9 or under 10 / 18, XL 10 23 / 49, XL 11 25 / 21, XL 12 or more 4 / 1; by AC: under 15 7 / 22, 15–18
+  31 / 39, 19–22 18 / 23, 23 or more 6 / 5. XL matters more than AC in these counts.
+
+**No fresh test was played.** No configuration was ahead of the defaults, and the one level with them (`lair=1
+calm=1`) is behind `calm=1` alone, which itself failed its fresh test. Seeds 691800–692399 are unspent.
+
+**No default was changed.**
+
+**What would most improve the Lair route next** (inferred from the counts above; none tried):
+- **Enter later.** Survival rises with XL on entering (XL 11 or more: 29 out, 22 dead; XL 10 or under: 33 out, 67 dead).
+  A gate such as "XL 11 or more" (qw enters at a median 11) would skip most of the deaths, at the cost of fewer
+  entries; it needs the bot to keep going down and come back up for the Lair later, which the route can do (it already
+  climbs back), or to wait for a later entrance level.
+- **Leave a pack at the stairs.** A fifth of the Lair deaths began within 30 turns of arriving, most against three or
+  more. On arrival with three or more hostiles in view, going straight back up (as qw's stair-dancing does) would
+  avoid the herds of yaks and the frog packs; the rules today rage first.
+- **Stop at Lair:3.** Lair:4 adds little against its deaths, and Lair:5 is a loss.
+- **The detour does make the later Dungeon safe.** Whatever brings more characters out of the Lair turns into depth:
+  each that comes out gains about a level on the same dungeon.
+
+**Summary of the section.**
+- Measured:
+  - the keys and messages of the route in the real game, and the whole route on one seed; that webtiles counts map
+    squares per visit (the fault fixed);
+  - that play with the switch off is the same game, choice for choice, on 27 block A dungeons;
+  - every tuning mean, interval and count above, and the split by what the route did; that every game was on its seed;
+  - Lair deaths per level, XL, AC and HP max on entering and coming out, D:7–12 deaths per visit before and after;
+  - the tests: `uv run pytest -q` 539 passed, 5 deselected; `uv run ruff check` clean. The server's disk stayed at 52%.
+- Inferred:
+  - that the detour loses because our characters go in too weak and die there, not because the Lair gives too little
+    (those who come out gain);
+  - that a later entry, or a step back up from a pack on arrival, would turn it around.
+- Not done: any gate on XL or AC; a Lair-only `calm`; leaving packs at the stairs; changing any default.
+- Runs: `runs/brain/v6m/A-off`, `A-off0`, `A-off2` (switches-off checks), `smoke-lair1` (smoke run),
+  `{A,C}-{l1,lc,l2}` (tuning); `C-lair1` and a cut-off `A-lair1` (before the fix; not used).
+- Scripts in the job's `brain-v6m/` scratch directory: `probe1.py` (the scan and its squares, the `G` menu), `probe2.py`
+  (whole games as `laddertest`), `p2show.py`, `lairstats.py` (what the route did, deaths per visit), `split.py` (the
+  difference by what the route did), `ddepth.py` (the Dungeon-only depth), `lairdeaths.py` (what kills us in the Lair),
+  `scans.py`, `diverge.py`, `tailgame.py`, `jobs-*.txt`; copies of `arms.py`, `seeds.py`, `verify.py`, `same.py`,
+  `mindex.py`, `refresh.sh` and `chain.sh` (now with `MAXSTEPS` and `MAXTURNS`) from `brain-v6l/`.
+
 ## What carried over from s1-battle, and what couldn't
 
 | s1-battle | here |
