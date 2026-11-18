@@ -1,0 +1,9 @@
+{
+ "format": "dcss-trained-brain-ensemble",
+ "note": "v8: today's games (rounds 0-1) + the older clean corpus (v7's, 3.09M rows): the s12 recipe at training seeds 0-2, outputs averaged",
+ "members": [
+  "v8-mix-s0.json",
+  "v8-mix-s1.json",
+  "v8-mix-s2.json"
+ ]
+}

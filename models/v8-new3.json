@@ -1,0 +1,9 @@
+{
+ "format": "dcss-trained-brain-ensemble",
+ "note": "v8: today's default rules (recover=1 retreat=2 teleport=3 unseen=2 kit=2), rounds 0-1, 2,600 games: the s12 recipe at training seeds 0-2, outputs averaged",
+ "members": [
+  "v8-new-s0.json",
+  "v8-new-s1.json",
+  "v8-new-s2.json"
+ ]
+}

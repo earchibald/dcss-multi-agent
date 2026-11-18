@@ -4589,6 +4589,225 @@ configurations are behind `calm=1` alone. Seeds 691800–692399 are unspent.
   copies of `arms.py`, `seeds.py`, `verify.py`, `same.py`, `split.py`, `lairstats.py`, `lairdeaths.py`, `diverge.py`,
   `tailgame.py`, `mindex.py`, `refresh.sh` and `chain.sh` from `brain-v6m/`.
 
+#### A model retrained on today's rules: `v8-new3` and `v8-mix3` (2026-11-17, evening)
+
+The rules of thumb have moved a long way since the last models were trained (`teleport=3`, `unseen=2` and `kit=2` are
+defaults now; block A's mean depth went from 6.29 to 7.84). This section asks whether the old models still add anything
+on top of today's rules, and whether a model trained on games of today's rules does. **Result: no. The old models are
+level with today's rules at their best margins (`v6-clean3` 0.6: +0.01 [−0.11, +0.14]; `v7-clean3` 0.25: +0.15 [−0.15,
++0.45]). Two new ensembles, trained on 2,598 games of today's rules alone (`v8-new3`) and merged with v7's clean corpus
+(`v8-mix3`), are behind or level at every margin tried. The one configuration that met the tuning rule narrowly,
+`v8-mix3` at `margin=0.6` (+0.03 [−0.02, +0.07] on A + C), was pre-registered and fails on 600 fresh dungeons: +0.01
+[−0.04, +0.07]. At margins where it acts often, the new model goes for the stairs instead of resting out a rage or
+wielding (`rest → descend`, `wield → descend`) and loses; where it is held back, it hardly acts at all, and what it
+does most is fight on instead of reading the teleport scroll `teleport=3` would read. `teleport=3` took the one thing
+the models used to add. No default changed; `models/brain.json` is unchanged. Seeds 691800–692399 are now spent.**
+
+**Pre-registered (written at 20:05, after the tuning runs on A and C and before any game on seeds 691800–692399).**
+Configuration: this working tree's code (no default changed), the default style (`recover=1 retreat=2 teleport=3
+unseen=2 kit=2`) with `--style margin=0.6`, playing `models/v8-mix3.json` (the `s12` recipe at training seeds 0–2 on
+today's 2,598 training games merged with v7's clean corpus, outputs averaged), no random choices, 9 workers. Baseline:
+the same code with no model and the default style (today's rules alone). Dungeons: seeds 691800–692399 (600, never used
+before), played as three blocks of 200 (691800, 692000, 692200), each block by both arms one run after the other, the
+arm that goes first alternating from block to block (the model first on 691800 and 692200, the rules first on 692000).
+Analysis: paired by dungeon over games both finished (not hung, crashed or an error) and neither stale nor off its seed
+(stale: its first step is after turn 1 or a "Welcome back"; off its seed: no morgue on that custom seed with the game's
+turn count, or a protocol without its seed's greeting; `verify.py`), 95% bootstrap over dungeons, 10,000 resamples
+(`brain-v8/arms.py`); analysed once, after all 1,200 games are played, with no early stopping. **Pass: the interval's
+lower end is above zero.** Reported alongside, outside the pass rule: each block's difference, mean depth, deaths by
+depth band, the override rate, which rules action each override replaced, and what followed (`overrides2.py`). Chosen
+because it is the only configuration tuned here whose pooled interval on A + C is mostly above zero with both blocks
+positive (+0.03 [−0.02, +0.07]; A +0.04, C +0.02; tables below); it qualifies narrowly, on 46 overrides in 21 of 399
+games. `models/brain.json` is not replaced and no default is changed whatever the result.
+
+**Method, for every table below.** This tree, epsilon 0, 9 workers, the default style but for `margin`. Each arm against
+`v6k/{A,C}-ref` (today's defaults, no model), paired by dungeon over games both finished and neither stale nor off its
+seed (`arms.py`; `verify.py` three ways: protocol greeting, first step, morgue; every game of every run here passed, and
+540052 hung in every C run as in the reference); 95% bootstrap over dungeons, 10,000 resamples. A and C are tuning
+blocks: description only. **The reference still replays**: 500100–500108 with no `--style` (`v8/A-chk`) are identical
+to `v6k/A-ref`, 9 of 9 (same deepest level, final turn and end, same choices step by step, 486 to 1,474 a game;
+`same.py`).
+
+**Task 1: the old models on today's rules** (11:24–13:51; arm order A-v6 0.6, C-v6 0.6, C-v6 0.4, A-v6 0.4, A-v7 0.25,
+C-v7 0.25, C-v7 0.4, A-v7 0.4). `v6-clean3`'s best margin was 0.6, `v7-clean3`'s 0.25; 0.4 is the neighbour for both.
+
+| arm | A: mean depth | C: mean depth | − ref, A | − ref, C | **− ref, pooled** (dungeons) | deeper / same / shallower | leaves the rules |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| reference (`v6k/*-ref`) | 7.84 | 7.51 | | | | | |
+| `v6-clean3`, `margin=0.6` | 8.03 | 7.35 | +0.18 [+0.01, +0.38] | −0.17 [−0.34, −0.02] | **+0.01 [−0.11, +0.14]** (399) | 23 / 352 / 24 | 0.08% |
+| `v6-clean3`, `margin=0.4` | 7.96 | 7.47 | +0.12 [−0.17, +0.40] | −0.05 [−0.38, +0.30] | **+0.04 [−0.19, +0.26]** (399) | 83 / 240 / 76 | 1.13% |
+| `v7-clean3`, `margin=0.25` | 7.76 | 7.90 | −0.08 [−0.49, +0.34] | +0.39 [−0.05, +0.81] | **+0.15 [−0.15, +0.45]** (399) | 96 / 221 / 82 | 2.25% |
+| `v7-clean3`, `margin=0.4` | 7.58 | 7.54 | −0.27 [−0.48, −0.06] | +0.03 [−0.19, +0.26] | **−0.12 [−0.27, +0.04]** (399) | 31 / 320 / 48 | 0.19% |
+
+- **`v6-clean3` at 0.6 no longer gains.** Its commonest override is still `fight → read_teleport` (78 on A + C), but
+  `teleport=3` now reads at the outmatched moments, so the model's remaining reads come at median 72% HP with 2 hostiles
+  in view (against 52% HP and 3 hostiles under the old rules). Games whose first override was such a read: 55, −0.16
+  each [−0.84, +0.51]. Its other habit at the top of the dungeon, `explore → descend` on D:12–14 (97), is level.
+- **At 0.4 `v6-clean3` dives again** (`explore → descend` 1,634, `rest → descend` 935, `fight → descend` 664), and the
+  rage-tired arrivals double (12–14% of arrivals against 6–7%); it comes out level only because the dives are split
+  about evenly into better and worse games.
+- **`v7-clean3` at 0.25** mostly skips the rules' rage (`berserk → fight` 6,401 times in 165 games) and overrides
+  `teleport=3`'s read (`read_teleport → fight` 217, `read_teleport → descend` 131). It is level on A and ahead on C,
+  wide either way. At 0.4 it keeps fighting where `teleport=3` would read (`read_teleport → fight` 156 in 38 games;
+  the 26 games whose first override was this lost 0.69 each).
+
+**Task 2: the training games** (training seeds 150000–152599, `runs/brain/v8/train/`). The recipe of the clean retrain
+that made `v6-clean3` ("New default rules, and a model retrained on clean games"), with today's default rules:
+
+| round | seeds | games | who plays | random choices | rows | mean depth, turns |
+| --- | --- | --- | --- | --- | --- | --- |
+| 0 | 150000–151999 | 2,000 (1,998 kept) | today's default rules, no model | `--epsilon 0.2` | 1,408,295 (193,731 random) | 5.6–6.0 a block, about 3,100 turns |
+| 1 | 152000–152599 | 600 (600 kept) | `v8-r03` (round 0's `s12` ensemble, seeds 0–2) at the default margin 0.25 | `--epsilon 0.2` | 260,164 | 5.0–5.5, about 1,800 turns; the model leaves the rules at 8.6% of choices, mostly `quaff_unknown → descend` and `explore → descend` |
+| **`corpus-new`** | | **2,598** (2,538 deaths) | | | **1,668,459** (334,524 held out by dungeon) | every row with live sight fields |
+| **`corpus-mix`** | | 8,788 games and forks | `corpus-new` + v7's clean corpus (`runs/brain/v6b/corpus-clean2.npz`, 3,090,859 rows; `merge.py`, as `v6-mix` was made) | | **4,759,318** (915,765 held out) | |
+
+- **Reused unchanged**: two rounds, 2,000 games of the rules then 600 of the round-0 ensemble at the default margin,
+  `--epsilon 0.2` in both, no forks (the clean retrain had none), the corpus from those games alone, `train3.py` (the
+  `s12` recipe: `train.py`'s defaults, hidden 64, 20 epochs, the epoch that does best on held-out games kept) at training
+  seeds 0–2 averaged, and for the second variant a merge with the older clean corpus.
+- **Changed**: 9 workers (12 asked then, 10 played); the older clean corpus merged is v7's (rounds 0–2 with forks, the
+  largest clean one), not the version 5 corpus `v6-mix` used, since the brief's "older clean corpus" is that one; and
+  only games that pass every seed check enter the corpus (`roots.py`: ended as died, end_game or limit; the protocol
+  greets the game's own custom seed with no "Welcome back"; first step at turn 0 or 1; a morgue on that seed with the
+  game's turn count). Two round-0 games were left out by it (one hung, one with no end). The 742 teleport forks of
+  `runs/brain/v6c` are not in either corpus.
+- **The reboot.** The machine rebooted at about 14:36, during round 0. `r0-3` (150600–150799) had played all 200 games
+  but wrote no `results.json`; 196 of them (150600–150795) ended properly and are kept, read from their step logs.
+  150796 was cut off and 150797 and 150799 left no morgue, so 150796–150799 were replayed as `r0-3b` (4 games) and r0-3's
+  copies left out. `r0-4`–`r0-8` had played nothing (the server was gone) and were re-run into their empty directories;
+  nothing was deleted. The first games after the restart cleared the accounts' saves themselves (selfplay's start-of-run
+  `_clear_save`): no game in any later run said "Welcome back" or was restarted by the guard.
+- **No evaluation seed is in either corpus**: `corpus.build`'s assertion, and the 2,598 kept game directories run from
+  150000 to 152599 (`roots.py` asserts each is under 500000).
+- Machine time: round 0 about 2 hours (10–13 minutes a block of 200), round 1 21 minutes, training 9 minutes (`v8-new3`)
+  and 25 minutes (`v8-mix3`). Every member kept epoch 2 or 3 of 20; parity 1–2e-6.
+
+**Offline**, on `corpus-new`'s held-out games (334,524 rows; true value mean 3.53, 3.5% die within 30 turns; `offline.py`;
+columns as in the clean retrain's table):
+
+| model | R² died_soon | AUC died_soon | R² depth_end | danger AUC | value: mean pred − true | slope | true value in the lowest / highest fifth |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `v6-clean3` | 0.313 | 0.914 | 0.083 | 0.820 | −0.92 | 1.19 | 1.57 / 5.08 |
+| `v7-clean3` | 0.326 | 0.915 | 0.144 | 0.822 | −0.62 | 1.12 | 1.54 / 5.02 |
+| `v8-r03` (round 0 only) | 0.319 | 0.916 | **0.185** | 0.818 | −0.05 | 1.00 | 1.57 / 5.01 |
+| `v8-new` seeds 0 / 1 / 2 | 0.300 / 0.306 / 0.300 | 0.895 / 0.891 / 0.894 | 0.176 / 0.174 / 0.165 | 0.816 / 0.810 / 0.814 | −0.12 / −0.17 / −0.18 | 0.97 / 1.00 / 0.97 | |
+| **`v8-new3`** | 0.324 | 0.909 | 0.179 | 0.820 | −0.16 | 1.02 | 1.55 / 4.94 |
+| `v8-mix` seeds 0 / 1 / 2 | 0.317 / 0.337 / 0.332 | 0.914 / 0.913 / 0.906 | 0.158 / 0.172 / 0.176 | 0.827 / 0.823 / 0.825 | −0.48 / −0.36 / −0.32 | 1.08 / 1.07 / 1.06 | |
+| **`v8-mix3`** | **0.343** | **0.921** | 0.174 | **0.830** | −0.39 | 1.10 | 1.54 / 5.04 |
+
+- The old models under-predict today's games by 0.6–0.9 depths (the rules got better than the games they learned from)
+  and rank the depth still to come poorly (R² 0.08 and 0.14). The new ones are calibrated and rank depth about twice as
+  well; `v8-mix3` predicts death best. None of that turned into better choices in games (below). Fork regret was not
+  measured: the new games have no forks (`v8-mix`'s training log shows v7's 160 held-out fork moments: regret 1.71–1.93
+  against 1.67 for choosing at random).
+
+**Task 4: tuning on A and C** (17:03–19:55; arm order A: new 0.4, 0.6, 0.8, mix 0.4, 0.6, 0.8; C the reverse).
+
+| arm | A: mean depth | C: mean depth | − ref, A | − ref, C | **− ref, pooled** (dungeons) | deeper / same / shallower | leaves the rules (games touched) |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| reference | 7.84 | 7.51 | | | | | |
+| `v8-new3`, `margin=0.4` | 7.35 | 7.36 | −0.49 [−0.85, −0.14] | −0.16 [−0.54, +0.22] | **−0.33 [−0.59, −0.07]** (399) | 86 / 197 / 116 | 1.54% (275) |
+| `v8-new3`, `margin=0.6` | 7.74 | 7.52 | −0.11 [−0.29, +0.06] | +0.01 [−0.21, +0.18] | **−0.05 [−0.19, +0.07]** (399) | 22 / 358 / 19 | 0.30% (53) |
+| `v8-new3`, `margin=0.8` | 7.84 | 7.57 | +0.00 [−0.04, +0.05] | +0.06 [−0.01, +0.14] | **+0.03 [−0.01, +0.08]** (399) | 6 / 388 / 5 | 0.11% (17) |
+| `v8-mix3`, `margin=0.4` | 7.87 | 7.54 | +0.03 [−0.18, +0.23] | +0.03 [−0.12, +0.18] | **+0.03 [−0.10, +0.16]** (399) | 26 / 352 / 21 | 0.13% (82) |
+| `v8-mix3`, `margin=0.6` | 7.88 | 7.53 | +0.04 [−0.03, +0.12] | +0.02 [−0.02, +0.06] | **+0.03 [−0.02, +0.07]** (399) | 7 / 388 / 4 | 0.01% (21) |
+| `v8-mix3`, `margin=0.8` | 7.84 | 7.51 | +0.00 [+0.00, +0.00] | −0.01 [−0.07, +0.06] | **−0.00 [−0.03, +0.03]** (399) | 1 / 396 / 2 | 0.00% (2) |
+
+**What the new models override, and what follows** (`overrides2.py`, A + C pooled, paired games only). "Died within 30
+turns" is the share of overrides followed by the character's death within 30 game turns. For the second half: before a
+game's first override it is the reference's game (the same seed and the same choices; 0 to 3 of the games with no
+override differ, from the replay noise found before), so the paired difference of a game is what its first override
+began; "reference died" is whether the reference game died within 30 turns of the same turn.
+
+| arm | commonest overrides (count, games, per game, median depth, median HP) | games by first override: games, mean paired difference [95%], sum |
+| --- | --- | --- |
+| `v8-new3` 0.4 | `rest → descend` 2,898 (212 games, 13.7 a game, D:6, full HP, 9% died within 30 turns); `wield → descend` 874 (38, 23.0, D:4); `wear → descend` 354 (17, D:4); `explore → descend` 290 (53, D:11); `fight → descend` 232 (40, D:10); `quaff_heal → descend` 98 and `→ fight` 67 (at 42% HP) | `rest → descend` 165, −0.62 [−1.08, −0.16], −102 (arm died within 30 turns 15, reference 1); `wield → descend` 20, −0.70, −14; `quaff_heal → fight` 12, −1.75, −21; none 124, +0.00 |
+| `v8-new3` 0.6 | `wield → descend` 999 (28 games, 35.7 a game, D:5); `read_teleport → fight` 27 (9, D:7, 7 hostiles); `read_teleport → descend` 19; `quaff_heal → fight` 16 (6, 39% HP, 31% died within 30 turns) | `wield → descend` 26, −0.15 [−1.38, +1.00]; `read_teleport → fight` 8, +0.12; `quaff_heal → fight` 4, −6.50 (3 died within 30 turns, the reference 0); none 346, −0.00 |
+| `v8-new3` 0.8 | `wield → descend` 396 (11 games, 36 a game, D:3); 15 others | `wield → descend` 11, +0.45 [−0.73, +1.91]; none 382, +0.00 |
+| `v8-mix3` 0.4 | `wield → descend` 285 (8 games, 35.6 a game); `read_teleport → fight` 61 (18, D:8, 82% HP, 4 hostiles, none died within 30 turns); `quaff_heal → fight` 34 (13, 44% HP); `read_teleport → descend` 20; `flee_up → read_teleport` 17 (16, 32% HP, 53% died within 30 turns) | `read_teleport → fight` 16, +0.75 [−0.31, +1.81]; `flee_up → read_teleport` 10, −0.30; `quaff_heal → fight` 9, +0.78; `read_teleport → descend` 6, +1.33; `wield → descend` 6, −1.50; none 317, −0.00 |
+| `v8-mix3` 0.6 | `read_teleport → fight` 28 (7 games, D:9, 87% HP, 4 hostiles); `flee_up → read_teleport` 5 (13% HP); 13 others | `read_teleport → fight` 7, +0.29 [−1.57, +2.43]; `flee_up → read_teleport` 4, +0.50; 10 other games +5 in all; none 378, +0.01 (+2: 1 deeper, 1 shallower with no override) |
+| `v8-mix3` 0.8 | 5 overrides in 2 games | one game −4, one 0 |
+
+- **`rest → descend` is the new model's big habit at 0.4**: at full HP with nothing in view, about D:6, it skips the
+  rest the rules take (`recover=1`: resting out a rage and exhaustion before the stairs) and goes down. Arrivals while
+  raging or spent rise from 6–7% to 17–19%. The 165 games where it was the first override lose 0.62 each; the arm died
+  within 30 turns of that first override in 15 of them, the reference at the same turn in 1. Measured; that the
+  arrivals spent are why is inferred, as for the champion `iter2` earlier ("New default rules ...").
+- **`wield → descend` repeats**: the rules offer `wield` at every choice until they get to wield, so a model that
+  prefers the stairs there overrides it 20–36 times in a row, the way `v6-mix3` did. It appears at all three margins of
+  `v8-new3`. Level to negative.
+- **What the held-back models do is fight on where `teleport=3` reads** (`read_teleport → fight`, at median 4–7
+  hostiles and 67–87% HP; `teleport=3` reads when the hostiles' HP left is at least 1.5 times the character's), and read
+  when the rules would go up the stairs at very low HP (`flee_up → read_teleport`, median 13–32% HP, followed by a
+  death within 30 turns half the time or more, about as often as the reference died there). Both are a handful of games
+  and level.
+- **So the new data did not give the model a habit of its own that pays.** The old models' gain was `fight →
+  read_teleport` when spent and outmatched; that is now a rule, and what is left for a model is either the stairs bias
+  (at low margins) or a few disagreements with the rule (at high ones). That a better-calibrated model still dives at
+  0.4 fits the earlier finding: the estimate of one action against another, not prediction, is the weak part; no fork
+  rows compare `rest` with `descend` from the same state.
+
+**Task 5: result on 691800–692399: fails.** `v8-mix3` at `margin=0.6` is **+0.01 [−0.04, +0.07]** against the rules
+alone, 599 of 600 dungeons paired (691890 hung in both arms). Every game on its seed three ways.
+Analysed once, after all 1,200 games (20:01–21:24).
+
+| fresh block | arm (order played) | finished (hung) | mean depth | XL | turns | died on D:1–3 / 4–6 / 7+ |
+| --- | --- | --- | --- | --- | --- | --- |
+| G1 (691800–) | `v8-mix3` 0.6 (1st) | 199 (1) | 7.64 | 7.69 | 4432 | 29 / 46 / 113 |
+| | rules alone (2nd) | 199 (1) | 7.55 | 7.65 | 4389 | 30 / 46 / 112 |
+| G2 (692000–) | rules alone (1st) | 200 (0) | 7.39 | 7.58 | 4197 | 31 / 52 / 109 |
+| | `v8-mix3` 0.6 (2nd) | 200 (0) | 7.33 | 7.55 | 4149 | 31 / 53 / 109 |
+| G3 (692200–) | `v8-mix3` 0.6 (1st) | 200 (0) | 7.09 | 7.33 | 3914 | 33 / 56 / 98 |
+| | rules alone (2nd) | 200 (0) | 7.08 | 7.30 | 3902 | 33 / 57 / 97 |
+
+| `v8-mix3` 0.6 − rules alone | first arm played | dungeons | difference | 95% interval | deeper / same / shallower |
+| --- | --- | --- | --- | --- | --- |
+| G1 (691800–691999) | the model | 199 | +0.09 | [−0.01, +0.23] | 4 / 194 / 1 |
+| G2 (692000–692199) | the rules | 200 | −0.07 | [−0.17, +0.01] | 1 / 195 / 4 |
+| G3 (692200–692399) | the model | 200 | +0.01 | [−0.01, +0.05] | 2 / 197 / 1 |
+| **G1–G3 (the pre-registered test)** | | 599 | **+0.01** | **[−0.04, +0.07]** | 7 / 586 / 6 |
+
+- **Fails the pre-registered rule**: the lower end is −0.04.
+- **What it overrode** (57 of 540,096 choices, in 25 games): `read_teleport → fight` 21 (5 games, D:7, 69% HP, 6
+  hostiles), `wield → descend` 13 (1 game), `flee_up → read_teleport` 9 (9 games, 32% HP; death within 30 turns in 7 of
+  them, and in the reference at the same turn in 6), `fight → read_teleport` 4, `descend → read_teleport` 3. By first
+  override: the 25 games with one sum to −10 (2 deeper, 4 shallower: `descend → read_teleport` −6, `read_teleport →
+  descend` −3, `read_teleport → fight` −2); the 574 games with none sum to +17 (4 deeper, 2 shallower). **So the small
+  plus is the replay noise in games where the model never acted, and the model's own choices summed slightly below
+  zero.** Measured; that the 6 differing no-override games are replay noise is inferred from their having no override
+  (1 game in 100 here, about the rate found before).
+
+**Summary of the section.**
+- Measured:
+  - the reference replays step for step (9 of 9);
+  - the old models on today's rules: level at their best margins (`v6-clean3` 0.6 +0.01 [−0.11, +0.14], `v7-clean3`
+    0.25 +0.15 [−0.15, +0.45]), behind at 0.4 for `v7-clean3` (−0.12 [−0.27, +0.04]);
+  - 2,598 training games of today's rules (1.67M rows), and 4.76M rows with v7's clean corpus; the offline table;
+  - the tuning table: `v8-new3` −0.33 / −0.05 / +0.03 and `v8-mix3` +0.03 / +0.03 / −0.00 at margins 0.4 / 0.6 / 0.8;
+  - what each arm overrides and the paired difference by first override;
+  - the fresh test: fails, +0.01 [−0.04, +0.07];
+  - every game used was on its seed; the server's disk stayed at 52%; the tests: `uv run pytest -q` 544 passed, 5
+    deselected; `uv run ruff check` clean.
+- Inferred:
+  - that `teleport=3` is why the old models no longer gain (their remaining reads come at higher HP and fewer hostiles,
+    and those games are level);
+  - that `rest → descend` loses because it undoes `recover` (more arrivals raging or spent, more deaths soon after);
+  - that the new model's estimate of one action against another, not its prediction, is what keeps it from helping.
+- Not done: forks on the new games (the recipe had none); a round played by `v8-new3` itself; `v8-new3` or `v8-mix3` with
+  a guard that stops repeated overrides of the same rules action.
+- **Seeds spent**: training 150000–152599 (2,600 games played, 150796–150799 twice: once cut off by the reboot);
+  evaluation 691800–692399 (the fresh test); evaluation seeds replayed: A and C only (and 500100–500108 for the replay
+  check).
+- **Files**: models `models/v8-new-s{0,1,2}.json`, `models/v8-mix-s{0,1,2}.json` (each with its `.parity.json`) and the
+  manifests `models/v8-new3.json`, `models/v8-mix3.json`; the round-0 ensemble `v8-r0-s{0,1,2}`, `v8-r03.json` in the job's
+  `brain-v8/models/`. Runs: `runs/brain/v8/A-chk`, `{A,C}-v6-m{0.6,0.4}`, `{A,C}-v7-m{0.25,0.4}` (task 1),
+  `train/r0-{0..9}`, `train/r0-3b`, `train/r1-{0,1,2}` (training), `{A,C}-{new,mix}-m{0.4,0.6,0.8}` (tuning),
+  `G{1,2,3}-{mix,rules}` (fresh). Corpora `runs/brain/v8/corpus-new.npz` and `corpus-mix.npz`. Scripts in the job's
+  `brain-v8/` scratch directory: new `master.sh`, `master2.sh` (after the reboot), `tune.sh`, `build.py`, `roots.py`,
+  `chk_r03.py`, `overrides2.py`, the `jobs-*.txt` files; copies of `chain.sh`, `arms.py`, `verify.py`, `seeds.py`,
+  `same.py`, `refresh.sh`, `mindex.py` (from `brain-v6n/`), `train3.py`, `offline.py`, `overrides.py`, `attrib2.py` (from
+  `brain-v6b/`) and `merge.py` (from `brain-v5i/`).
+
 ## What carried over from s1-battle, and what couldn't
 
 | s1-battle | here |
@@ -4853,6 +5072,7 @@ have sight fields and 24,346 (3.0%) are marked missing. Evaluation dungeons and 
 | `models/v5-*.json` | version 5 experiments, each with its parity file; `v5-ens5`, `v5-forks3`, `v5-pairs3` are ensemble manifests |
 | `models/v6-*.json` | trained on clean games (2026-11-15): `v6-clean3` (clean corpus only) and `v6-mix3` (clean + version 5 corpus) are manifests of three seeds each; `v6-clean3` at `margin=0.6` passed a fresh test |
 | `models/v7-*.json` | `v7-clean3`: the `s12` recipe at three seeds on the enlarged clean corpus (rounds 0–2 with forks, 2026-11-15, afternoon); not ahead of `v6-clean3` at `margin=0.6` on the tuning blocks |
+| `models/v8-*.json` | trained on games of today's default rules (2026-11-17, evening): `v8-new3` (2,598 games, rounds 0–1) and `v8-mix3` (the same + v7's clean corpus), manifests of three seeds each; neither ahead of the rules, `v8-mix3` at `margin=0.6` failed a fresh test (+0.01 [−0.04, +0.07]) |
 | `models/v2/` | the first three candidates, from before the equipment actions; today's code refuses to load them |
 
 ## What it found on the way
